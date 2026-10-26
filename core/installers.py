@@ -277,8 +277,8 @@ def _remove_precreated_target(target_dir):
     safe_rmtree(target_dir, ignore_errors=True)
     return True
 
-def install_vanilla(mc_version, mc_dir, *, status_cb=(lambda _s: None), progress_cb=None, phase_cb=None, log_cb=(lambda _s: None), cancel=(lambda: False)):
-    engine = RepairEngine(mc_version, mc_dir, status=status_cb, progress=progress_cb or (lambda _p: None), phase=phase_cb, log=log_cb, cancel=cancel)
+def install_vanilla(mc_version, mc_dir, *, status_cb=(lambda _s: None), progress_cb=None, phase_cb=None, log_cb=(lambda _s: None), cancel=(lambda: False), fast=True):
+    engine = RepairEngine(mc_version, mc_dir, status=status_cb, progress=progress_cb or (lambda _p: None), phase=phase_cb, log=log_cb, cancel=cancel, fast=fast)
     result = engine.repair()
     if result.failed:
         raise DownloadError('原版文件下载不完整：' + '、'.join(result.failed_items[:5]))
@@ -640,7 +640,7 @@ def _install_fabric_with_installer(mc_version, loader_version, mc_dir, custom_na
         if key:
             emit(key, percent)
 
-    engine = RepairEngine(custom_name, mc_dir, status=status_cb, progress=ProgressMapper(55, 45, progress_cb), phase=final_phase, log=log_cb, cancel=cancel)
+    engine = RepairEngine(custom_name, mc_dir, status=status_cb, progress=ProgressMapper(55, 45, progress_cb), phase=final_phase, log=log_cb, cancel=cancel, fast=True)
     result = engine.repair()
     if result.failed:
         raise DownloadError('Fabric 依赖下载不完整：' + '、'.join(result.failed_items[:5]))
@@ -738,7 +738,7 @@ def install_fabric(mc_version, loader_version, mc_dir, custom_name, *, method='a
                 if key:
                     emit(key, percent)
 
-            engine = RepairEngine(custom_name, mc_dir, status=status_cb, progress=ProgressMapper(25, 75, progress_cb), phase=final_phase, log=log_cb, cancel=cancel)
+            engine = RepairEngine(custom_name, mc_dir, status=status_cb, progress=ProgressMapper(25, 75, progress_cb), phase=final_phase, log=log_cb, cancel=cancel, fast=True)
             result = engine.repair()
             if result.failed:
                 raise DownloadError('Fabric 依赖下载不完整：' + '、'.join(result.failed_items[:5]))
@@ -801,7 +801,7 @@ def install_quilt(mc_version, loader_version, mc_dir, custom_name, *, method='au
     emit('loader_file', 100)
     emit('loader_install', 100)
     status_cb('正在补全 Quilt 依赖库...')
-    engine = RepairEngine(custom_name, mc_dir, status=status_cb, progress=ProgressMapper(25, 75, progress_cb), phase=emit, log=log_cb, cancel=cancel)
+    engine = RepairEngine(custom_name, mc_dir, status=status_cb, progress=ProgressMapper(25, 75, progress_cb), phase=emit, log=log_cb, cancel=cancel, fast=True)
     result = engine.repair()
     if result.failed:
         raise DownloadError('Quilt 依赖下载不完整：' + '、'.join(result.failed_items[:5]))
@@ -1027,7 +1027,7 @@ def install_forge(mc_version, forge_version, mc_dir, custom_name, *, method='aut
         if key:
             emit(key, percent)
 
-    engine = RepairEngine(custom_name, mc_dir, status=status_cb, progress=ProgressMapper(60, 40, progress_cb), phase=final_phase, log=log_cb, cancel=cancel)
+    engine = RepairEngine(custom_name, mc_dir, status=status_cb, progress=ProgressMapper(60, 40, progress_cb), phase=final_phase, log=log_cb, cancel=cancel, fast=True)
     result = engine.repair()
     if result.failed:
         raise DownloadError('Forge 依赖下载不完整：' + '、'.join(result.failed_items[:5]))
@@ -1240,7 +1240,7 @@ def install_neoforge(mc_version, neoforge_version, mc_dir, custom_name, *, metho
         if key:
             emit(key, percent)
 
-    engine = RepairEngine(custom_name, mc_dir, status=status_cb, progress=ProgressMapper(60, 40, progress_cb), phase=final_phase, log=log_cb, cancel=cancel)
+    engine = RepairEngine(custom_name, mc_dir, status=status_cb, progress=ProgressMapper(60, 40, progress_cb), phase=final_phase, log=log_cb, cancel=cancel, fast=True)
     result = engine.repair()
     if result.failed:
         raise DownloadError('NeoForge 依赖下载不完整：' + '、'.join(result.failed_items[:5]))

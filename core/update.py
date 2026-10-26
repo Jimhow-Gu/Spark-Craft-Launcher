@@ -36,7 +36,7 @@ def is_newer(latest_tag, current=CURRENT_VERSION):
 
 
 def fetch_latest_release(timeout=12):
-    http = HttpClient(timeout=timeout, retries=1)
+    http = HttpClient(timeout=timeout, retries=1, verify=False)
     data = http.get_json(
         API_LATEST,
         headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'SparkCraftLauncher-Updater'},
@@ -115,7 +115,7 @@ class UpdateDownloadWorker(QThread):
         sha256 = digest[7:].strip() if digest.lower().startswith('sha256:') else None
         self.status.emit(f'正在下载 {self.info.get("tag") or "新版本"}...')
         try:
-            http = HttpClient(timeout=30, retries=2)
+            http = HttpClient(timeout=30, retries=2, verify=False)
             http.download(
                 url, dest,
                 sha256=sha256,

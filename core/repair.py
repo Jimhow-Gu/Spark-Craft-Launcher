@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import shutil
+import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -52,6 +53,7 @@ class RepairEngine:
         self.missing_only = bool(missing_only)
         self.status = status or (lambda _s: None)
         self.progress = progress or (lambda _p: None)
+        self._progress_last = 0.0
         self.phase = phase or (lambda _k, _p: None)
         self.log = log or (lambda _s: None)
         self.cancel = cancel or (lambda: False)
@@ -452,7 +454,7 @@ class RepairEngine:
                 category_done[category] = category_done.get(category, 0) + 1
                 self.phase(category, category_done[category] * 100 / max(1, category_totals.get(category, 1)))
                 completed += 1
-                self.progress(min(99, int(completed * 100 / total)))
+                self._emit_progress(min(99, int(completed * 100 / total)))
                 if completed % 25 == 0:
                     self.status(f'校验进度 {completed}/{len(tasks)}，已修复 {self.result.fixed} 个')
         if cancelled or self.cancel():
@@ -464,8 +466,15 @@ class RepairEngine:
         for index_data, virtual_dir in self._virtual_assets:
             self._extract_virtual_assets(index_data, virtual_dir)
         self._extract_natives(chain, libraries)
-        self.progress(100)
+        self._emit_progress(100, force=True)
         return self.result
+
+    def _emit_progress(self, value, force=False):
+        now = time.monotonic()
+        if not force and now - self._progress_last < 0.08:
+            return
+        self._progress_last = now
+        self.progress(value)
 
     def _ensure_forge_runtime(self, chain, libraries):
         '''Forge 1.17+ 还需要 installer 生成的 universal/client 两个 jar。'''
