@@ -1,0 +1,977 @@
+from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QListWidget, QListWidgetItem, QLabel, QMessageBox, QApplication, QSizeGrip, QGraphicsColorizeEffect, QPushButton, QGraphicsOpacityEffect, QFrame)
+from PySide6.QtCore import (Qt, QPropertyAnimation, QEasingCurve, QTimer, QSize, QEvent)
+from PySide6.QtGui import QFont, QColor, QCursor, QPixmap
+import os
+from pathlib import Path
+from core.app_font import ui_font
+from core.background import get_settings
+from core.music import BackgroundMusicPlayer
+from ui.pages import (HomePage, VersionPage, AccountPage, SettingsPage, GameSettingsPage)
+from ui.pages.about_page import AboutPage
+from ui.pages.download_manager_page import DownloadManagerPage
+from ui.widgets.account_card import AccountCard
+from ui.widgets.download_status_bar import DownloadStatusBar
+from ui.widgets.painted_icons import painted_icon, set_button_icon
+from ui.widgets.title_bar import WindowTitleBar
+from ui.widgets.no_wheel import WheelGuard
+from ui.widgets.background_widget import BackgroundWidget
+from ui.widgets.window_border import WindowBorderOverlay
+from ui.widgets.side_panel import SidePanel
+from ui.theme import ThemeManager
+from core.download_manager import DownloadManager
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setWindowState(Qt.WindowNoState)
+        screen = QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen is not None else None
+        width = 1500
+        if available is not None:
+            width = min(width, int(available.width() * 0.86), int(available.height() * 0.86 * 16 / 9))
+        width = max(960, width // 16 * 16)
+        height = width * 9 // 16
+        self.setFixedSize(width, height)
+        self.setWindowTitle('Spark Craft Launcher')
+        self.download_manager = DownloadManager.instance()
+        self.music_player = BackgroundMusicPlayer.instance()
+        self._media_backgrounded = False
+        self._update_checker = None
+        self._update_dialog = None
+        self._video_resume_pending = False
+        self._music_resume_pending = False
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+        self.central = BackgroundWidget()
+        self.central.setAcceptDrops(True)
+        self.setAcceptDrops(True)
+        self.setCentralWidget(self.central)
+        self.border_overlay = WindowBorderOverlay(self)
+        self.root_layout = QVBoxLayout(self.central)
+        self.root_layout.setContentsMargins(0, 0, 0, 0)
+        self.root_layout.setSpacing(0)
+        self.title_bar = WindowTitleBar(self)
+        self.root_layout.addWidget(self.title_bar)
+        self.body = QWidget()
+        self.body.setStyleSheet('background:transparent; border:none;')
+        self.main_layout = QHBoxLayout(self.body)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
+        self.root_layout.addWidget(self.body, 1)
+        self.size_grip = QSizeGrip(self.central)
+        self.size_grip.setFixedSize(16, 16)
+        self.size_grip.setStyleSheet('background:transparent;')
+        self.size_grip.hide()
+        self.left_panel = SidePanel()
+        self.left_panel.setFixedWidth(210)
+        self.left_panel.setStyleSheet('background: transparent;')
+        left_layout = QVBoxLayout(self.left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
+        self.brand_label = QLabel('Spark Craft Launcher')
+        self.brand_label.setFont(ui_font(16, QFont.DemiBold))
+        self.brand_label.setStyleSheet('color: #88DDDD; padding: 10px 16px 2px 16px; background: transparent;')
+        self.brand_label.setWordWrap(True)
+        left_layout.addWidget(self.brand_label)
+        self.account_header = QLabel('账户')
+        self.account_header.setStyleSheet('color:#b9b9b9; font-size:12px; padding:2px 16px 2px 16px; border-bottom:1px solid rgba(255,255,255,0.18); background:transparent;')
+        left_layout.addWidget(self.account_header)
+        self.account_card = AccountCard()
+        self.account_card.clicked.connect((lambda: self._switch_page(2)))
+        self._avatar_fail_toast_shown = False
+        self.account_card.avatar_failed.connect(self._on_avatar_failed)
+        left_layout.addWidget(self.account_card)
+        self.nav_list = QListWidget()
+        self.nav_list.setSpacing(0)
+        self.nav_list.setIconSize(QSize(18, 18))
+        self.nav_list.setViewportMargins(6, 1, 6, 1)
+        self.nav_list.setStyleSheet('\n        QListWidget{background: transparent; border:none; outline:none;}\n        QListWidget::item{padding:3px 10px; border-radius:7px; font-size:11pt;\n                          background:transparent; border:none;}\n        QListWidget::item:hover{background:rgba(255,255,255,0.11);}\n        QListWidget::item:selected{background:rgba(0,120,212,0.90); color:white;}\n        QListWidget::item:disabled{background:transparent; border:none;\n                                   border-bottom:1px solid rgba(255,255,255,0.14);\n                                   padding:4px 8px 2px 8px; font-size:8pt;\n                                   color:rgba(255,255,255,0.45);}\n        ')
+        self._add_nav_item('启动', 0, None, 'play')
+        self._add_nav_header('游戏版本')
+        self._add_nav_item('下载', 1, 'available', 'download')
+        self._add_nav_header('社区资源')
+        self._add_nav_item('模组', 1, 'mod', 'components')
+        self._add_nav_item('整合包', 1, 'modpack', 'package')
+        self._add_nav_item('数据包', 1, 'datapack', 'database')
+        self._add_nav_item('资源包', 1, 'resourcepack', 'palette')
+        self._add_nav_item('光影包', 1, 'shader', 'sun')
+        self._add_nav_header('通用')
+        self._add_nav_item('设置', 3, None, 'gear')
+        self._add_nav_item('关于', 4, None, 'info')
+        left_layout.addWidget(self.nav_list, 1)
+        media_row = QWidget()
+        media_layout = QHBoxLayout(media_row)
+        media_layout.setContentsMargins(10, 0, 10, 2)
+        media_layout.setSpacing(6)
+        media_btn_style = 'QPushButton { background:rgba(255,255,255,0.07); border:1px solid rgba(255,255,255,0.13); border-radius:6px; }QPushButton:hover { background:rgba(255,255,255,0.15); }QPushButton:disabled { background:rgba(255,255,255,0.03); border-color:rgba(255,255,255,0.06); }'
+        self.video_toggle_btn = QPushButton()
+        self.video_toggle_btn.setFixedSize(30, 28)
+        self.video_toggle_btn.setIconSize(QSize(16, 16))
+        self.video_toggle_btn.setStyleSheet(media_btn_style)
+        self.video_toggle_btn.setToolTip('播放/暂停背景视频')
+        self.video_toggle_btn.clicked.connect(self._toggle_background_video)
+        self.music_toggle_btn = QPushButton()
+        self.music_toggle_btn.setFixedSize(30, 28)
+        self.music_toggle_btn.setIconSize(QSize(16, 16))
+        self.music_toggle_btn.setStyleSheet(media_btn_style)
+        self.music_toggle_btn.setToolTip('播放/暂停背景音乐')
+        self.music_toggle_btn.clicked.connect(self._toggle_background_music)
+        media_layout.addWidget(self.video_toggle_btn)
+        media_layout.addWidget(self.music_toggle_btn)
+        media_layout.addStretch(1)
+        self.media_row = media_row
+        left_layout.addWidget(media_row)
+        self.central.video_state_changed.connect((lambda _playing: self._update_media_buttons()))
+        self.music_player.state_changed.connect(self._update_media_buttons)
+        QTimer.singleShot(0, self._update_media_buttons)
+        self.status_label = QLabel('开发中内容，不代表最终品质！')
+        self.status_label.setStyleSheet('color: #aaa; font-size: 12px; padding: 0 0 4px 14px; background: transparent;')
+        self.status_label.setAlignment(Qt.AlignLeft | Qt.AlignBottom)
+        left_layout.addWidget(self.status_label)
+        self.page_stack = QStackedWidget()
+        self.page_stack.setFrameShape(QFrame.NoFrame)
+        self.page_stack.setStyleSheet('QStackedWidget { border: none; background: transparent; }')
+        self.download_bar = DownloadStatusBar()
+        self.download_bar.clicked.connect(self.show_download_manager_page)
+        self.download_manager.changed.connect(self._refresh_download_bar)
+        self.right_panel = QWidget()
+        self.right_panel.setStyleSheet('background:transparent; border:none;')
+        self.right_layout = QVBoxLayout(self.right_panel)
+        self.right_layout.setContentsMargins(0, 0, 0, 0)
+        self.right_layout.setSpacing(0)
+        self.right_layout.addWidget(self.page_stack, 1)
+        self.right_layout.addWidget(self.download_bar)
+        self.main_layout.addWidget(self.left_panel)
+        self.main_layout.addWidget(self.right_panel, 1)
+        self._download_return_widget = None
+        self.game_settings_page = None
+        self._wheel_guard = WheelGuard(self)
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self._wheel_guard)
+        self.init_all_pages()
+        self.nav_list.currentItemChanged.connect(self._on_page_changed)
+        self.nav_list.itemClicked.connect(self._on_nav_clicked)
+        self._fade_anim = None
+        self.start_fade_anim()
+
+    def _add_nav_header(self, text):
+        item = QListWidgetItem(text)
+        item.setFlags(Qt.NoItemFlags)
+        item.setForeground(QColor(135, 135, 135))
+        font = item.font()
+        font.setPointSize(8)
+        item.setFont(font)
+        item.setSizeHint(QSize(0, 18))
+        self.nav_list.addItem(item)
+
+    def _add_nav_item(self, text, page_index, section, icon_name=None):
+        item = QListWidgetItem(text)
+        item.setData(Qt.UserRole, (page_index, section))
+        if icon_name:
+            item.setIcon(painted_icon(icon_name, 18, '#9aa3af'))
+        self.nav_list.addItem(item)
+
+    def _on_nav_clicked(self, item):
+        self._on_page_changed(item)
+
+    def _select_nav(self, page_index, section=None):
+        if page_index == 2:
+            self.nav_list.blockSignals(True)
+            self.nav_list.setCurrentRow(-1)
+            self.nav_list.clearSelection()
+            self.nav_list.blockSignals(False)
+            return
+        for i in range(self.nav_list.count()):
+            item = self.nav_list.item(i)
+            data = item.data(Qt.UserRole)
+            if data == (page_index, section):
+                self.nav_list.setCurrentItem(item)
+                break
+        else:
+            for i in range(self.nav_list.count()):
+                item = self.nav_list.item(i)
+                data = item.data(Qt.UserRole)
+                if data and data[0] == page_index:
+                    self.nav_list.setCurrentItem(item)
+                    break
+
+    def show_download_section(self, section):
+        self._select_nav(1, section)
+        self.page_stack.setCurrentIndex(1)
+        self.version_page.show_section(section)
+
+    def _apply_title(self, title=None):
+        if title is None:
+            try:
+                title = self.settings_page.config.get('global_window_title', 'Spark Craft Launcher')
+            except Exception:
+                title = 'Spark Craft Launcher'
+        title = str(title or 'Spark Craft Launcher').strip() or 'Spark Craft Launcher'
+        try:
+            color = self.settings_page.config.get('global_title_color', '#88DDDD') or '#88DDDD'
+        except Exception:
+            color = '#88DDDD'
+        self.setWindowTitle('Spark Craft Launcher')
+        try:
+            mode = self.settings_page.config.get('title_bar_mode', 'text') or 'text'
+            image = self.settings_page.config.get('global_title_image', '') or ''
+        except Exception:
+            mode = 'text'
+            image = ''
+        try:
+            if mode == 'none':
+                self.brand_label.hide()
+                return
+            if mode == 'image':
+                pixmap = QPixmap(image) if image else QPixmap()
+                if not pixmap.isNull():
+                    self.brand_label.setText('')
+                    self.brand_label.setPixmap(
+                        pixmap.scaled(
+                            178, 42, Qt.KeepAspectRatio, Qt.SmoothTransformation
+                        )
+                    )
+                    self.brand_label.setStyleSheet(
+                        'padding: 8px 16px 2px 16px; background: transparent;'
+                    )
+                    self.brand_label.show()
+                    return
+            brand_text = 'Spark Craft Launcher' if mode == 'default' else title
+            self.brand_label.setPixmap(QPixmap())
+            self.brand_label.setText(brand_text)
+            self.brand_label.setStyleSheet(f'color: {color}; padding: 10px 16px 2px 16px; background: transparent;')
+            self.brand_label.show()
+            self.title_bar.set_title(title, color)
+        except Exception:
+            pass
+
+    def init_all_pages(self):
+        self.home_page = HomePage(self)
+        self.version_page = VersionPage(self)
+        self.account_page = AccountPage(self)
+        self.settings_page = SettingsPage(self)
+        self.version_page.version_installed.connect(self.home_page.refresh_versions)
+        self.version_page.version_selected.connect(self._on_version_selected)
+        self.version_page.game_dir_changed.connect(self._on_game_dir_changed)
+        self.home_page.request_switch_page.connect(self._switch_page)
+        self.home_page.request_offline_login.connect((lambda: self._switch_page(2)))
+        self.home_page.open_game_settings.connect(self.open_game_settings)
+        self.home_page.game_dir_changed.connect(self._on_home_game_dir_changed)
+        self.page_stack.addWidget(self.home_page)
+        self.page_stack.addWidget(self.version_page)
+        self.page_stack.addWidget(self.account_page)
+        self.page_stack.addWidget(self.settings_page)
+        self.about_page = AboutPage()
+        self.about_page.check_update.connect((lambda: self._check_updates(manual=True)))
+        self.page_stack.addWidget(self.about_page)
+        self.download_manager_page = DownloadManagerPage(self)
+        self.download_manager_page.back_requested.connect(self.close_download_manager_page)
+        self.page_stack.addWidget(self.download_manager_page)
+        self._page_animation = None
+        self._page_fade_overlay = None
+        self.page_stack.currentChanged.connect(self._animate_page_change)
+        try:
+            self.settings_page.background_changed.connect(self._refresh_background)
+            self.settings_page.background_refresh.connect((lambda: self._refresh_background(force=True)))
+            self.settings_page.title_changed.connect(self._apply_title)
+            self.settings_page.settings_changed.connect(self._on_settings_changed)
+            self.settings_page.video_music_changed.connect(self._on_video_music_changed)
+            self.settings_page.video_volume_changed.connect(self.central.set_video_volume)
+            try:
+                self.central.set_video_volume(
+                    int(self.settings_page.config.get('background_video_volume', 70) or 70)
+                )
+            except Exception:
+                pass
+        except Exception:
+            pass
+        try:
+            self.account_page.account_changed.connect(self.refresh_account_card)
+            self.account_page.account_changed.connect(
+                (lambda: self.home_page.refresh_versions())
+            )
+        except Exception:
+            pass
+        self.refresh_account_card()
+        self.central.reload()
+        self._apply_ui_depth()
+        self._apply_title()
+        self._select_nav(0)
+        self.theme_manager = ThemeManager(self)
+        try:
+            self.settings_page.theme_changed.connect(self._on_theme_changed)
+        except Exception:
+            pass
+        try:
+            self.theme_manager.apply(
+                self.settings_page.config.get('theme', 'system'),
+                animate=False,
+            )
+        except Exception:
+            pass
+        try:
+            video_music = bool(
+                self.settings_page.config.get('background_video_audio', False)
+            )
+            self.central.set_video_audio_enabled(video_music)
+            if video_music:
+                self.music_player.pause(remember=False)
+        except Exception:
+            pass
+        QTimer.singleShot(0, self._update_media_buttons)
+
+    def _on_theme_changed(self, theme):
+        try:
+            self.theme_manager.apply(theme, QCursor.pos(), animate=True)
+        except Exception:
+            pass
+        try:
+            self.border_overlay.update()
+        except Exception:
+            pass
+
+    def _refresh_background(self, force: bool=False):
+        self.central.reload(force)
+        self._apply_ui_depth()
+        QTimer.singleShot(0, self._update_media_buttons)
+
+    def _update_media_buttons(self):
+        if not hasattr(self, 'video_toggle_btn'):
+            return
+        try:
+            video_available = self.central.video_available()
+            video_playing = self.central.video_playing()
+        except Exception:
+            video_available, video_playing = False, False
+        self.video_toggle_btn.setVisible(video_available)
+        self.video_toggle_btn.setEnabled(video_available)
+        set_button_icon(self.video_toggle_btn, 'pause' if video_playing else 'play', 16, '#e6edf3')
+        self.video_toggle_btn.setToolTip('暂停背景视频' if video_playing else '播放背景视频')
+        try:
+            music_playing = self.music_player.is_playing()
+            music_muted = self.music_player.is_muted()
+            try:
+                has_music = bool(self.music_player.has_tracks())
+            except AttributeError:
+                has_music = bool(self.music_player.current_name())
+        except Exception:
+            music_playing, music_muted, has_music = False, False, False
+        audible = music_playing and not music_muted
+        self.music_toggle_btn.setVisible(has_music)
+        self.music_toggle_btn.setEnabled(has_music)
+        set_button_icon(
+            self.music_toggle_btn,
+            'stop' if audible else 'music',
+            16,
+            '#e6edf3',
+        )
+        self.music_toggle_btn.setToolTip('停止背景音乐' if audible else '播放背景音乐')
+        if hasattr(self, 'media_row'):
+            self.media_row.setVisible(video_available or has_music)
+
+    def _toggle_background_video(self):
+        self.central.toggle_video()
+        self._update_media_buttons()
+
+    def _toggle_background_music(self):
+        if self.music_player.is_playing() and not self.music_player.is_muted():
+            self.music_player.pause()
+            self._update_media_buttons()
+            return
+        try:
+            if (
+                self.central.video_audio_enabled()
+                or self.settings_page.bg_video_music_check.isChecked()
+            ):
+                self.settings_page.set_video_music_checked(False)
+                self.central.set_video_audio_enabled(False)
+        except Exception:
+            pass
+        self.music_player.set_muted(False)
+        self.music_player.play()
+        try:
+            self.central.pause_video()
+        except Exception:
+            pass
+        self._update_media_buttons()
+
+    def _on_video_music_changed(self, enabled: bool):
+        try:
+            self.central.set_video_audio_enabled(bool(enabled))
+            if enabled:
+                self.music_player.pause(remember=False)
+                self.central.play_video()
+        except Exception:
+            pass
+        self._update_media_buttons()
+
+    def _pause_background_media(self):
+        '''启动器进入后台时按设置暂停视频/音乐，记录原本正在播放的状态。'''
+
+        if self._media_backgrounded:
+            return
+        self._media_backgrounded = True
+        try:
+            from core.config import ConfigManager
+            config = ConfigManager()
+            pause_music = bool(config.get('background_music_pause_on_background', True))
+        except Exception:
+            pause_music = True
+        pause_video = bool(get_settings().get('pause_video_on_background', True))
+        self._video_resume_pending = self.central.video_playing() if pause_video else False
+        if self._video_resume_pending:
+            self.central.pause_video()
+        try:
+            self._music_resume_pending = self.music_player.is_playing() if pause_music else False
+            if self._music_resume_pending:
+                self.music_player.pause(remember=False)
+        except Exception:
+            self._music_resume_pending = False
+        self._update_media_buttons()
+
+    def _resume_background_media(self):
+        '''切回前台时恢复之前正在播放的视频和音乐。'''
+
+        if not self._media_backgrounded or self.isMinimized():
+            return
+        self._media_backgrounded = False
+        if self._video_resume_pending and not self._music_resume_pending:
+            self.central.play_video()
+        if self._music_resume_pending and not self.central.video_audio_enabled():
+            try:
+                self.music_player.play(remember=False)
+            except Exception:
+                pass
+        self._video_resume_pending = False
+        self._music_resume_pending = False
+        self._update_media_buttons()
+
+    @staticmethod
+    def _modpack_paths_from_mime(mime):
+        if mime is None or not mime.hasUrls():
+            return []
+        paths = []
+        for url in mime.urls():
+            if not url.isLocalFile():
+                continue
+            path = Path(url.toLocalFile())
+            if path.is_file() and path.suffix.lower() in ('.mrpack', '.zip'):
+                paths.append(str(path))
+        return paths
+
+    def _import_dropped_modpack(self, path):
+        try:
+            self.show_download_section('modpack')
+            self.version_page._start_modpack_import(path, '')
+        except Exception as exc:
+            QMessageBox.warning(self, '导入整合包失败', str(exc))
+
+    def eventFilter(self, obj, event):
+        if event.type() in (QEvent.DragEnter, QEvent.DragMove):
+            if self._modpack_paths_from_mime(event.mimeData()):
+                event.acceptProposedAction()
+                return True
+        elif event.type() == QEvent.Drop:
+            paths = self._modpack_paths_from_mime(event.mimeData())
+            if paths:
+                event.acceptProposedAction()
+                self._import_dropped_modpack(paths[0])
+                return True
+        if event.type() == QEvent.ApplicationDeactivate:
+            self._pause_background_media()
+        elif event.type() == QEvent.ApplicationActivate:
+            self._resume_background_media()
+        return super().eventFilter(obj, event)
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.WindowStateChange:
+            if self.isMinimized():
+                self._pause_background_media()
+            elif QApplication.applicationState() == Qt.ApplicationActive:
+                self._resume_background_media()
+        super().changeEvent(event)
+
+    def _apply_ui_depth(self):
+        '''GUI 深度只压暗界面控件，不改变最底层背景图片。'''
+
+        try:
+            depth = max(0, min(100, int(get_settings().get('ui_depth', 0))))
+        except Exception:
+            depth = 0
+        if depth <= 0:
+            self.body.setGraphicsEffect(None)
+            return
+        effect = QGraphicsColorizeEffect(self.body)
+        effect.setColor(QColor('#000000'))
+        effect.setStrength(min(0.6, depth / 100.0 * 0.6))
+        self.body.setGraphicsEffect(effect)
+
+    def _on_avatar_failed(self):
+        '''头像加载失败：启动后延迟几秒再提示，避免打断进入流程。'''
+
+        if self._avatar_fail_toast_shown:
+            return
+        self._avatar_fail_toast_shown = True
+
+        def notify():
+            try:
+                from ui.widgets.toast import show_toast
+                show_toast('头像加载失败，请检查网络连接', 'error', self)
+            except Exception:
+                pass
+
+        QTimer.singleShot(3000, notify)
+
+    def refresh_account_card(self):
+        if not hasattr(self, 'account_page'):
+            return
+        config = self.account_page.config
+        login_type = config.get('login_type', 'offline')
+        name = ''
+        mode = ''
+        urls = []
+        skin_path = None
+        head_path = None
+        if login_type == 'microsoft':
+            account = config.get('microsoft_account') or {}
+            name = account.get('name') or ''
+            mode = '正版账号'
+            if name:
+                try:
+                    from core.skin import microsoft_skin_cache_path
+                    cached = microsoft_skin_cache_path(account.get('uuid', ''), name)
+                    if cached.is_file():
+                        skin_path = str(cached)
+                except Exception:
+                    skin_path = None
+                if not skin_path:
+                    try:
+                        from core.skin import avatar_urls_for_account
+                        urls = avatar_urls_for_account(account)
+                    except Exception:
+                        urls = [account.get('skin_url') or '', account.get('avatar_url') or '']
+                        urls = [url for url in urls if url]
+        elif login_type == 'thirdparty':
+            account = config.get('thirdparty_account') or {}
+            name = account.get('name') or ''
+            mode = '第三方登录'
+            try:
+                from core.skin import thirdparty_skin_cache_path
+                cached = thirdparty_skin_cache_path(account.get('uuid', ''), name)
+                if cached.is_file():
+                    skin_path = str(cached)
+            except Exception:
+                skin_path = None
+            if not skin_path:
+                try:
+                    from core.skin import avatar_urls_for_account
+                    urls = avatar_urls_for_account(account)
+                except Exception:
+                    avatar_url = account.get('avatar_url') or ''
+                    if avatar_url:
+                        urls.append(avatar_url)
+        else:
+            name = config.get('player_name', '') or ''
+            mode = '离线登录' if name else ''
+            head_path = None
+            if name:
+                try:
+                    from core.skin import SkinManager
+                    preview = SkinManager().preview_path()
+                    if preview and preview.is_file():
+                        skin_path = str(preview)
+                except Exception:
+                    skin_path = None
+                if not skin_path:
+                    urls = [f'https://mc-heads.net/avatar/{name}/96', f'https://minotar.net/helm/{name}/96.png']
+            else:
+                steve_head = Path(__file__).resolve().parent / 'imgs' / 'steve_head.png'
+                if steve_head.is_file():
+                    head_path = str(steve_head)
+                else:
+                    urls = ['https://mc-heads.net/avatar/MHF_Steve/96', 'https://minotar.net/helm/MHF_Steve/96.png']
+        avatar_cache = None
+        try:
+            if login_type in ('microsoft', 'thirdparty'):
+                from core.paths import scl_dir
+                key = str(account.get('uuid') or name or 'unknown')
+                avatar_cache = scl_dir() / 'icon_cache' / f'{login_type}_avatar_{key}.png'
+        except Exception:
+            avatar_cache = None
+        self.account_card.set_account(
+            name or '未登录', mode, urls, skin_path, head_path, avatar_cache
+        )
+
+    def _on_version_selected(self, version_id):
+        self.home_page.refresh_versions()
+        self._select_nav(0)
+        self.page_stack.setCurrentWidget(self.home_page)
+
+    def _on_home_game_dir_changed(self, path):
+        try:
+            self.version_page.sync_game_dir()
+        except Exception:
+            pass
+
+    def _on_settings_changed(self):
+        '''全局设置里切换了游戏目录等：同步首页与版本页的版本列表。'''
+
+        try:
+            mc_dir = self.settings_page.config.get_mc_dir()
+        except Exception:
+            return
+
+        def sync():
+            try:
+                self.home_page.reload_game_dir(mc_dir)
+            except Exception:
+                pass
+            try:
+                self.version_page.sync_game_dir()
+            except Exception:
+                pass
+
+        # 延后执行，避免在设置页下拉框事件处理中重建列表
+        QTimer.singleShot(0, sync)
+
+    def _on_game_dir_changed(self, path):
+        try:
+            self.home_page.reload_game_dir(path)
+        except Exception:
+            pass
+        try:
+            if hasattr(self.settings_page, '_refresh_dir_list'):
+                self.settings_page._refresh_dir_list()
+            return
+        except Exception:
+            pass
+
+    def open_game_settings(self, version_id):
+        if self.game_settings_page:
+            self.page_stack.removeWidget(self.game_settings_page)
+            self.game_settings_page.deleteLater()
+            self.game_settings_page = None
+        from ui.pages.game_settings_page import GameSettingsPage
+        self.game_settings_page = GameSettingsPage(version_id, self)
+        self.game_settings_page.back_requested.connect(self.close_game_settings)
+        self.game_settings_page.version_meta_changed.connect(
+            (lambda _vid: self.home_page.refresh_versions())
+        )
+        self.game_settings_page.global_settings_requested.connect(
+            self._open_global_settings_from_version
+        )
+        self.page_stack.addWidget(self.game_settings_page)
+        self.page_stack.setCurrentWidget(self.game_settings_page)
+
+    def _open_global_settings_from_version(self):
+        self.close_game_settings()
+        self._switch_page(3)
+
+    def close_game_settings(self):
+        if self.game_settings_page:
+            try:
+                self.game_settings_page.shutdown()
+            except Exception:
+                pass
+            self.page_stack.removeWidget(self.game_settings_page)
+            self.game_settings_page.deleteLater()
+            self.game_settings_page = None
+            try:
+                self.version_page._load_installed_versions()
+            except Exception:
+                pass
+            try:
+                self.home_page.refresh_versions()
+            except Exception:
+                pass
+            self._select_nav(0)
+            self.page_stack.setCurrentWidget(self.home_page)
+
+    def _refresh_download_bar(self):
+        self.download_bar.set_snapshot(self.download_manager.snapshot())
+
+    def show_download_manager_page(self):
+        if not hasattr(self, 'download_manager_page'):
+            return
+        current = self.page_stack.currentWidget()
+        if current is self.download_manager_page:
+            return
+        self._download_return_widget = current
+        self.page_stack.setCurrentWidget(self.download_manager_page)
+
+    def close_download_manager_page(self):
+        target = self._download_return_widget
+        self._download_return_widget = None
+        if target is not None and self.page_stack.indexOf(target) >= 0:
+            self.page_stack.setCurrentWidget(target)
+            return
+        self._select_nav(0)
+        self.page_stack.setCurrentWidget(self.home_page)
+
+    def _on_page_changed(self, current, previous=None):
+        if current is None:
+            return
+        data = current.data(Qt.UserRole)
+        if not data:
+            return
+        page_index, section = data
+        self.page_stack.setCurrentIndex(page_index)
+        if page_index == 0:
+            self.home_page.refresh_versions()
+            return
+        if page_index == 1 and section:
+            self.version_page.show_section(section)
+
+    def _animate_page_change(self, index: int):
+        '''页面切换时用暗色遮罩淡出，避免页面半透明时透出背景视频。'''
+
+        if not self.isVisible():
+            return
+        if self.page_stack.widget(index) is None:
+            return
+        if self._page_animation is not None:
+            try:
+                self._page_animation.stop()
+            except RuntimeError:
+                pass
+        if self._page_fade_overlay is not None:
+            try:
+                self._page_fade_overlay.deleteLater()
+            except RuntimeError:
+                pass
+            self._page_fade_overlay = None
+        overlay = QWidget(self.page_stack)
+        overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        overlay.setAttribute(Qt.WA_StyledBackground, True)
+        overlay.setStyleSheet('background: rgba(15,17,23,225);')
+        overlay.setGeometry(self.page_stack.rect())
+        overlay.show()
+        overlay.raise_()
+        effect = QGraphicsOpacityEffect(overlay)
+        overlay.setGraphicsEffect(effect)
+        anim = QPropertyAnimation(effect, b'opacity', overlay)
+        anim.setDuration(180)
+        anim.setStartValue(1.0)
+        anim.setEndValue(0.0)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        def finish():
+            if self._page_fade_overlay is overlay:
+                self._page_fade_overlay = None
+            try:
+                overlay.deleteLater()
+            except RuntimeError:
+                pass
+
+        anim.finished.connect(finish)
+        self._page_animation = anim
+        self._page_fade_overlay = overlay
+        anim.start()
+
+    def _switch_page(self, index):
+        if index == 1:
+            self.show_download_section('available')
+            return
+        self._select_nav(index)
+        self.page_stack.setCurrentIndex(index)
+        if index == 2:
+            try:
+                login_type = self.account_page.config.get('login_type', 'offline')
+                if login_type == 'offline':
+                    self.account_page.focus_offline_name()
+                return
+            except Exception:
+                pass
+
+    def start_fade_anim(self):
+        self.setWindowOpacity(0)
+        self._fade_anim = QPropertyAnimation(self, b'windowOpacity')
+        self._fade_anim.setDuration(600)
+        self._fade_anim.setStartValue(0)
+        self._fade_anim.setEndValue(1)
+        self._fade_anim.setEasingCurve(QEasingCurve.OutCubic)
+        def anim_finish():
+            self.raise_()
+            self.activateWindow()
+            if self._fade_anim:
+                self._fade_anim.deleteLater()
+                self._fade_anim = None
+
+        self._fade_anim.finished.connect(anim_finish)
+        self._fade_anim.start()
+        QTimer.singleShot(2000, self.force_restore)
+        QTimer.singleShot(1500, self._on_startup_update_notice)
+
+    def force_restore(self):
+        if self.windowState() & Qt.WindowMinimized:
+            self.setWindowState(Qt.WindowNoState)
+        self.raise_()
+        self.activateWindow()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        try:
+            self.size_grip.move(max(0, self.central.width() - 18), max(0, self.central.height() - 18))
+            self.size_grip.raise_()
+        except Exception:
+            pass
+        try:
+            self.title_bar.setFixedWidth(self.central.width())
+        except Exception:
+            pass
+        try:
+            self.border_overlay.setGeometry(self.central.rect())
+            self.border_overlay.raise_()
+        except Exception:
+            pass
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if getattr(self, '_fade_in_done', False):
+            return
+        self._fade_in_done = True
+        try:
+            self.border_overlay.setGeometry(self.central.rect())
+            self.border_overlay.raise_()
+        except Exception:
+            pass
+        try:
+            self.setWindowOpacity(0.0)
+            animation = QPropertyAnimation(self, b'windowOpacity', self)
+            animation.setDuration(520)
+            animation.setStartValue(0.0)
+            animation.setEndValue(1.0)
+            animation.setEasingCurve(QEasingCurve.OutCubic)
+            animation.finished.connect(lambda: self.setWindowOpacity(1.0))
+            self._fade_in_animation = animation
+            animation.start()
+        except Exception:
+            self.setWindowOpacity(1.0)
+
+    def _on_startup_update_notice(self):
+        try:
+            from core.update import consume_updated_marker
+            version = consume_updated_marker()
+        except Exception:
+            version = ''
+        if version:
+            from ui.widgets.toast import show_toast
+            show_toast(f'已成功更新到: {version}', 'success', self, 5000)
+        QTimer.singleShot(1000, (lambda: self._check_updates(manual=False)))
+
+    def _check_updates(self, manual=False):
+        from core.update import CheckUpdateWorker
+        if self._update_checker is not None and self._update_checker.isRunning():
+            return
+        if self._update_dialog is not None and self._update_dialog.isVisible():
+            return
+        if manual and hasattr(self.about_page, 'check_update_btn'):
+            self.about_page.check_update_btn.setEnabled(False)
+            self.about_page.check_update_btn.setText('检查中...')
+        worker = CheckUpdateWorker(manual=manual, parent=self)
+        self._update_checker = worker
+        worker.done.connect(self._on_update_checked)
+        worker.finished.connect((lambda w=worker: self._on_update_checker_finished(w)))
+        worker.start()
+
+    def _on_update_checker_finished(self, worker):
+        if self._update_checker is worker:
+            self._update_checker = None
+        worker.deleteLater()
+
+    def _on_update_checked(self, info, error, manual):
+        if hasattr(self.about_page, 'check_update_btn'):
+            self.about_page.check_update_btn.setEnabled(True)
+            self.about_page.check_update_btn.setText('检查更新')
+        if error:
+            if manual:
+                QMessageBox.warning(self, '检查更新失败', '无法获取最新版本信息：' + chr(10) + str(error))
+            return
+        from core.update import CURRENT_VERSION, is_newer
+        from ui.widgets.update_dialog import UpdateDialog
+        if not info:
+            if manual:
+                QMessageBox.information(self, '检查更新', '暂无可用 Release。')
+            return
+        if not is_newer(info.get('tag') or info.get('version'), CURRENT_VERSION):
+            if manual:
+                QMessageBox.information(self, '检查更新', f'当前已经是最新版本：V{CURRENT_VERSION}（正式版）')
+            return
+        dialog = UpdateDialog(self, info)
+        self._update_dialog = dialog
+        try:
+            accepted = dialog.exec() == dialog.Accepted
+        finally:
+            self._update_dialog = None
+        if not accepted or not dialog.asset_path:
+            return
+        try:
+            from core.update import prepare_update
+            prepare_update(dialog.asset_path, info.get('version') or info.get('tag') or '')
+        except Exception as exc:
+            QMessageBox.critical(self, '更新失败', str(exc))
+            return
+        self._quit_for_update()
+
+    def _quit_for_update(self):
+        try:
+            self._closing = True
+            from core.single_instance import release_single_instance
+            release_single_instance()
+        except Exception:
+            pass
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+        QTimer.singleShot(350, (lambda: os._exit(0)))
+
+    def closeEvent(self, event):
+        if getattr(self, '_closing', False):
+            super().closeEvent(event)
+            return
+        try:
+            active = []
+            if self.version_page and self.version_page.has_active_tasks():
+                active.append('资源/版本下载或整合包导入')
+            repair_active = False
+            if self.game_settings_page:
+                repair_active = self.game_settings_page.has_active_repair()
+            if not repair_active:
+                from ui.pages.game_settings_page import has_active_repairs
+                repair_active = has_active_repairs()
+            if repair_active:
+                active.append('游戏文件修复')
+            if active:
+                reply = QMessageBox.question(self, '确定退出？', '以下任务尚未完成：\n- ' + '\n- '.join(active) + '\n\n确定要退出启动器吗？', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                if reply != QMessageBox.Yes:
+                    event.ignore()
+                    return
+            self._closing = True
+            from core.single_instance import release_single_instance
+            release_single_instance()
+            if self.version_page:
+                self.version_page.shutdown()
+            if self.home_page:
+                self.home_page.shutdown()
+            if self.account_page:
+                self.account_page.shutdown()
+            if self.settings_page:
+                self.settings_page.shutdown()
+            if self.game_settings_page:
+                self.game_settings_page.close()
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
+            # 个别下载线程可能在网络超时中无法立即退出；兜底保证进程和单实例锁被释放
+            import threading
+            timer = threading.Timer(2.5, lambda: os._exit(0))
+            timer.daemon = True
+            timer.start()
+        except Exception:
+            pass
+        super().closeEvent(event)
+
+
