@@ -167,14 +167,20 @@ def prepare_update(asset_path, version):
     marker = update_dir / 'pending_update.json'
     marker.write_text(json.dumps({'version': str(version), 'time': time.time()}, ensure_ascii=False), encoding='utf-8')
     script = update_dir / 'apply_update.ps1'
-    script_text = (
-        'param([int]$WaitPid,[string]$NewExe,[string]$Target,[string]$WorkDir)\n'
-        'Wait-Process -Id $WaitPid -ErrorAction SilentlyContinue\n'
-        'Start-Sleep -Milliseconds 600\n'
-        'Copy-Item -LiteralPath $NewExe -Destination $Target -Force\n'
-        'Start-Process -FilePath $Target -WorkingDirectory $WorkDir\n'
-        'Remove-Item -LiteralPath $NewExe -Force -ErrorAction SilentlyContinue\n'
-    )
+    script_text = chr(10).join([
+        'param([int]$WaitPid,[string]$NewExe,[string]$Target,[string]$WorkDir)',
+        'Wait-Process -Id $WaitPid -ErrorAction SilentlyContinue',
+        'Start-Sleep -Milliseconds 600',
+        '$copied = $false',
+        'for ($i = 0; $i -lt 30; $i++) {',
+        '    try { Copy-Item -LiteralPath $NewExe -Destination $Target -Force -ErrorAction Stop; $copied = $true; break }',
+        '    catch { Start-Sleep -Milliseconds 500 }',
+        '}',
+        'if ($copied) {',
+        '    Start-Process -FilePath $Target -WorkingDirectory $WorkDir',
+        '    Remove-Item -LiteralPath $NewExe -Force -ErrorAction SilentlyContinue',
+        '}',
+    ]) + chr(10)
     script.write_text(script_text, encoding='utf-8-sig')
     subprocess.Popen(
         ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script),
