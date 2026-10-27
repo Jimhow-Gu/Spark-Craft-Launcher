@@ -701,20 +701,12 @@ class VersionManager:
             ]
         except OSError:
             old_jars = []
-        candidates = [download_url]
-        if 'cdn.modrinth.com/' in download_url:
-            suffix = download_url.split('cdn.modrinth.com/', 1)[1]
-            candidates.extend([
-                f'https://cdn-raw.modrinth.com/{suffix}',
-                f'https://mod.mcimirror.top/{suffix}',
-            ])
-        source = str(self.config.get('file_download_source', 'auto') or 'auto').lower()
-        if source != 'official':
-            candidates = [candidates[2], candidates[1], candidates[0]] if len(candidates) >= 3 else candidates
-            if 'cdn.modrinth.com/' in download_url and source != 'official':
-                # 镜像优先时依旧保留官方地址作为兜底
-                candidates = list(dict.fromkeys(candidates))
-        http = HttpClient(timeout=120, retries=3)
+        try:
+            from core.mods import download_candidates
+            candidates = download_candidates(download_url)
+        except Exception:
+            candidates = [download_url]
+        http = HttpClient(timeout=30, retries=1, verify=False)
         try:
             for url in dict.fromkeys(candidates):
                 if cancel():

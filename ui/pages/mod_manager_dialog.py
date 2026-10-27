@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QL
 from core.app_font import ui_font
 from core.launch import LaunchManager
 from core.net import HttpClient, hash_file
+from core.mods import download_candidates
+from core.mod_translations import bilingual_html, bilingual_plain, translation_db
 from ui.widgets.back_button import BackButton
 from ui.widgets.loading_overlay import LoadingOverlay
 
@@ -68,6 +70,16 @@ def _extract_icon(zf, icon_name):
         return zf.read(name)
     except Exception:
         return b''
+
+def _finish_mod_info(info, filename):
+    try:
+        from core.mod_translations import translate_mod
+        info['translated_name'] = translate_mod(
+            info.get('modid', ''), info.get('name', ''), filename
+        )
+    except Exception:
+        info['translated_name'] = ''
+    return info
 
 def scan_mod_file(path):
     disabled = path.name.lower().endswith('.disabled')
@@ -127,10 +139,10 @@ def scan_mod_file(path):
                 elif any(('mods.toml' in n.lower() for n in names)):
                     info['loader'] = 'Forge'
             info['version'] = _clean_mod_version(info.get('version', ''), zf, base_name)
-            return info
-        return info
+            return _finish_mod_info(info, path.name)
+        return _finish_mod_info(info, path.name)
     except Exception:
-        return info
+        return _finish_mod_info(info, path.name)
 
 class ModScanWorker(QThread):
     done = Signal(list)
@@ -145,6 +157,7 @@ class ModScanWorker(QThread):
         self._cancelled = True
 
     def run(self):
+        translation_db.ensure_loaded(wait=3)
         result = []
         try:
             files = []
@@ -256,17 +269,10 @@ class ModUpdateDownloadWorker(QThread):
 
     @staticmethod
     def _download_urls(url):
-        urls = []
-        if 'cdn.modrinth.com/' in url:
-            path = url.split('cdn.modrinth.com/', 1)[1]
-            urls.append(f'https://mod.mcimirror.top/{path}')
-            urls.append(f'https://cdn-raw.modrinth.com/{path}')
-        if url and url not in urls:
-            urls.append(url)
-        return urls
+        return download_candidates(url)
 
     def run(self):
-        http = HttpClient(timeout=120, retries=3)
+        http = HttpClient(timeout=60, retries=1, verify=False)
         updated = 0
         errors = []
         try:
@@ -329,10 +335,18 @@ class ModRowWidget(QWidget):
         layout.addWidget(self.icon_label)
         text = QVBoxLayout()
         text.setSpacing(2)
-        title = QLabel(f'{info.get("name") or info.get("filename")}    {info.get("version", "")}')
-        title.setStyleSheet('color:#f0f0f0; font-size:13px; font-weight:600;')
+        title = QLabel()
+        title.setTextFormat(Qt.RichText)
+        title.setText(
+            bilingual_html(info.get('translated_name'), info.get('name') or info.get('filename'), 13, 11)
+            + (f'<span style="font-size:11px;color:#8d939e;">    {info.get("version", "")}</span>' if info.get('version') else '')
+        )
+        title.setStyleSheet('background:transparent;')
         title.setWordWrap(True)
-        title.setToolTip(f'{info.get("name") or info.get("filename")}\n{info.get("filename", "")}\n{info.get("description", "")}')
+        title.setToolTip(
+            f'{bilingual_plain(info.get("translated_name"), info.get("name") or info.get("filename"))}\n'
+            f'{info.get("filename", "")}\n{info.get("description", "")}'
+        )
         text.addWidget(title)
         tags = info.get('loader') or 'Mod'
         desc = info.get('description') or ''
@@ -730,7 +744,7 @@ class ModManagerPage(QWidget):
                 mods = [m for m in mods if not m.get('enabled', True)]
             query = self.search_input.text().strip().lower() if hasattr(self, 'search_input') else ''
             if query:
-                mods = [m for m in mods if query in str(m.get('name', '')).lower() or query in str(m.get('filename', '')).lower() if query in str(m.get('description', '')).lower() or query in str(m.get('modid', '')).lower()]
+                mods = [m for m in mods if query in str(m.get('name', '')).lower() or query in str(m.get('translated_name', '')).lower() or query in str(m.get('filename', '')).lower() or query in str(m.get('description', '')).lower() or query in str(m.get('modid', '')).lower()]
             if not mods:
                 empty_text = {'update': '没有可更新的 Mod', 'disabled': '没有已禁用的 Mod'}.get(self._filter, '没有匹配的 Mod')
                 item = QListWidgetItem(empty_text)

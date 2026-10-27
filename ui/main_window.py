@@ -999,6 +999,10 @@ class MainWindow(QMainWindow):
             self._closing = True
             from core.single_instance import release_single_instance
             release_single_instance()
+            import threading
+            timer = threading.Timer(1.0, lambda: os._exit(0))
+            timer.daemon = True
+            timer.start()
             if self.version_page:
                 self.version_page.shutdown()
             if self.home_page:
@@ -1012,11 +1016,6 @@ class MainWindow(QMainWindow):
             app = QApplication.instance()
             if app is not None:
                 app.quit()
-            # 个别下载线程可能在网络超时中无法立即退出；兜底保证进程和单实例锁被释放
-            import threading
-            timer = threading.Timer(2.5, lambda: os._exit(0))
-            timer.daemon = True
-            timer.start()
         except Exception:
             pass
         super().closeEvent(event)

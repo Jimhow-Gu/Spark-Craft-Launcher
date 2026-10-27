@@ -210,6 +210,11 @@ def main():
     app.setApplicationDisplayName("Spark Craft Launcher")
     from core.update import CURRENT_VERSION
     app.setApplicationVersion(CURRENT_VERSION)
+    try:
+        from core.mod_translations import translation_db
+        translation_db.start_background_load()
+    except Exception:
+        pass
     app_icon = QIcon()
     ico_path = resource_path("ui/imgs/sparkler.ico")
     png_path = resource_path("ui/imgs/sparkler.png")

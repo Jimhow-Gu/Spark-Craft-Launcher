@@ -1582,32 +1582,32 @@ class VersionPage(QWidget):
         if self._modpack_worker and self._modpack_worker.isRunning():
             try:
                 self._modpack_worker.cancel()
-                if not self._modpack_worker.wait(2000):
+                if not self._modpack_worker.wait(600):
                     self._modpack_worker.terminate()
-                    self._modpack_worker.wait(500)
+                    self._modpack_worker.wait(150)
             except RuntimeError:
                 pass
         if self._load_worker and self._load_worker.isRunning():
             try:
                 self._load_worker.cancel()
-                if not self._load_worker.wait(1200):
+                if not self._load_worker.wait(300):
                     self._load_worker.terminate()
-                    self._load_worker.wait(300)
+                    self._load_worker.wait(100)
             except RuntimeError:
                 pass
         validation_worker = self._validation_worker
         if validation_worker and validation_worker.isRunning():
             try:
                 validation_worker.terminate()
-                validation_worker.wait(500)
+                validation_worker.wait(200)
             except RuntimeError:
                 pass
             self._validation_worker = None
         for worker in list(_DETACHED_LOADERS):
             try:
-                if worker.isRunning() and not worker.wait(800):
+                if worker.isRunning() and not worker.wait(200):
                     worker.terminate()
-                    worker.wait(300)
+                    worker.wait(100)
             except RuntimeError:
                 continue
         _DETACHED_LOADERS.clear()
@@ -1620,16 +1620,16 @@ class VersionPage(QWidget):
                 if not worker.isRunning():
                     continue
                 worker.cancel()
-                if not worker.wait(2000):
+                if not worker.wait(400):
                     worker.terminate()
-                    worker.wait(500)
+                    worker.wait(100)
             except RuntimeError:
                 continue
         probe = self._install_probe
         if probe is not None and probe.isRunning():
             try:
                 probe.terminate()
-                probe.wait(300)
+                probe.wait(100)
             except RuntimeError:
                 pass
         self._install_probe = None

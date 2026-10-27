@@ -25,7 +25,8 @@ from ui.widgets.smooth_progress import SmoothProgressBar
 from ui.widgets.painted_icons import painted_icon, set_button_icon
 from core.config import ConfigManager
 from core.launch import LaunchManager
-from core.mods import (LOADER_RELEVANT_TYPES, LOADERS, PROJECT_TYPES, SORTS, ModFile, ModProject, SearchResult, SourceUnavailable, _natural_key, cached_mc_versions as fetch_cached_mc_versions, fetch_mc_versions, get_source)
+from core.mods import (LOADER_RELEVANT_TYPES, LOADERS, PROJECT_TYPES, SORTS, ModFile, ModProject, SearchResult, SourceUnavailable, _natural_key, cached_mc_versions as fetch_cached_mc_versions, download_candidates, fetch_mc_versions, get_source)
+from core.mod_translations import bilingual_html, bilingual_plain, translation_db
 from core.net import (DownloadError, HttpClient, sanitize_filename, unique_path, is_network_error_text, network_available)
 from core.paths import scl_dir
 from ui.widgets.toast import notify_network_failure
@@ -153,9 +154,9 @@ def _shutdown_all_workers():
                 pass
     for worker in workers:
         try:
-            if worker.isRunning() and not worker.wait(1500):
+            if worker.isRunning() and not worker.wait(300):
                 worker.terminate()
-                worker.wait(500)
+                worker.wait(100)
         except RuntimeError:
             continue
     _ACTIVE_WORKERS.clear()
@@ -194,6 +195,7 @@ class SearchWorker(QThread):
         try:
             if self._cancelled:
                 return
+            translation_db.ensure_loaded(wait=3)
             source = get_source(self.source_name)
             result = source.search(self.query, self.project_type, mc_version=self.mc_version, loader=self.loader, category=self.category, sort=self.sort, offset=self.offset, limit=self.limit)
             if not self._cancelled:
@@ -252,9 +254,10 @@ class DownloadWorker(QThread):
     status = Signal(str)
     done = Signal(str)
     error = Signal(str)
-    def __init__(self, url, dest, sha1='', size=0):
+    def __init__(self, url, dest, sha1='', size=0, urls=None):
         super().__init__()
         self.url = url
+        self.urls = list(urls) if urls else download_candidates(url)
         self.dest = Path(dest)
         self.sha1 = sha1
         self.size = size
@@ -264,21 +267,31 @@ class DownloadWorker(QThread):
         self._cancelled = True
 
     def run(self):
+        http = HttpClient(timeout=15, retries=1, verify=False)
+        last_error = None
         try:
-            http = HttpClient(timeout=30)
-            self.status.emit(f'正在下载 {self.dest.name}...')
-            def progress(done, total):
-                self.progress.emit(int(done), int(total))
-
-            http.download(self.url, self.dest, sha1=self.sha1 or None, size=self.size or None, progress=progress, cancel=(lambda: self._cancelled))
-            if self._cancelled:
-                return
-            self.done.emit(str(self.dest))
-        except Exception as exc:
-            if not self._cancelled:
-                self.error.emit(f'下载失败：{exc}')
-                return
-            return
+            for url in self.urls:
+                if self._cancelled:
+                    return
+                label = 'Modrinth 加速节点' if 'cdn.modrinth.com' in url or 'cdn-raw.modrinth.com' in url else '下载源'
+                self.status.emit(f'正在通过{label}下载 {self.dest.name}...')
+                def progress(done, total):
+                    self.progress.emit(int(done), int(total))
+                try:
+                    http.download(url, self.dest, sha1=self.sha1 or None, size=self.size or None, progress=progress, cancel=(lambda: self._cancelled))
+                    if self._cancelled:
+                        return
+                    self.done.emit(str(self.dest))
+                    return
+                except Exception as exc:
+                    last_error = exc
+                    if self._cancelled:
+                        return
+                    continue
+        finally:
+            http.close()
+        if not self._cancelled:
+            self.error.emit(f'下载失败：{last_error or "所有下载源均不可用"}')
 
 
 class VersionsWorker(QThread):
@@ -439,9 +452,10 @@ class ProjectCard(QFrame):
         layout.addWidget(self.icon_label)
         text_box = QVBoxLayout()
         text_box.setSpacing(3)
-        title = QLabel(project.title)
-        title.setFont(ui_font(12, QFont.DemiBold))
-        title.setStyleSheet('color: #f0f0f0; background: transparent;')
+        title = QLabel()
+        title.setTextFormat(Qt.RichText)
+        title.setText(bilingual_html(project.translated_title, project.title, 12, 10))
+        title.setStyleSheet('background: transparent;')
         text_box.addWidget(title)
         desc = QLabel(project.description or '暂无描述')
         desc.setWordWrap(True)
@@ -628,7 +642,7 @@ class CollapsibleSection(QWidget):
 
 class FileRow(QWidget):
     clicked = Signal(object)
-    def __init__(self, mod_file, current_mc='', project_title='', parent=None):
+    def __init__(self, mod_file, current_mc='', project_title='', project_translated='', parent=None):
         super().__init__(parent)
         self.mod_file = mod_file
         self._selected = False
@@ -642,18 +656,23 @@ class FileRow(QWidget):
             pass
         if style == 'title_filename':
             main_title = mod_file.filename
-            detail_title = project_title or mod_file.display_name or ''
+            detail_title = bilingual_plain(project_translated, project_title) or mod_file.display_name or ''
         else:
-            main_title = mod_file.display_name or project_title or mod_file.filename
+            main_title = None
             detail_title = mod_file.filename
         box = QVBoxLayout()
         box.setSpacing(1)
-        self.title = QLabel(main_title)
-        self.title.setStyleSheet('color: #f0f0f0; font-size: 13px; background: transparent;')
+        self.title = QLabel()
+        self.title.setTextFormat(Qt.RichText)
+        self.title.setStyleSheet('background: transparent;')
         self.title.setWordWrap(True)
+        if main_title is not None:
+            self.title.setText(f'<span style="font-size:13px;color:#f0f0f0;">{main_title}</span>')
+        else:
+            self.title.setText(bilingual_html(project_translated, project_title or mod_file.display_name, 13, 11))
         box.addWidget(self.title)
         versions = ', '.join(mod_file.game_versions[:6])
-        meta = f'{detail_title}  ·  {mod_file.release_type}  ·  {versions or "版本未知"}'
+        meta = f'{mod_file.display_name or detail_title}  ·  {detail_title}  ·  {mod_file.release_type}  ·  {versions or "版本未知"}'
         if mod_file.date:
             meta += f'  ·  {mod_file.date}'
         if mod_file.size:
@@ -738,8 +757,10 @@ class DependencyCard(QFrame):
         layout.addWidget(self.icon)
         text = QVBoxLayout()
         text.setSpacing(1)
-        title = QLabel(project.title)
-        title.setStyleSheet('color:#f0f0f0; font-size:13px; font-weight:600; background:transparent;')
+        title = QLabel()
+        title.setTextFormat(Qt.RichText)
+        title.setText(bilingual_html(project.translated_title, project.title, 13, 11))
+        title.setStyleSheet('background:transparent;')
         text.addWidget(title)
         sub = QLabel(project.source)
         sub.setStyleSheet('color:rgba(255,255,255,0.45); font-size:11px; background:transparent;')
@@ -805,7 +826,7 @@ class ProjectFilesDialog(QDialog):
             self.setAttribute(Qt.WA_StyledBackground, True)
             self.setStyleSheet('QDialog#ProjectFilesPage { background: transparent; color: #f0f0f0; }')
         else:
-            self.setWindowTitle(f'选择版本 - {project.title}')
+            self.setWindowTitle(f'选择版本 - {bilingual_plain(project.translated_title, project.title)}')
             self.setWindowIcon(QIcon())
             self.setMinimumSize(820, 640)
             self.setStyleSheet('background-color: #1e1e1e; color: #f0f0f0;')
@@ -817,8 +838,9 @@ class ProjectFilesDialog(QDialog):
             back_btn = BackButton()
             back_btn.clicked.connect(self.reject)
             title_row.addWidget(back_btn)
-        title = QLabel(project.title)
-        title.setFont(ui_font(16, QFont.DemiBold))
+        title = QLabel()
+        title.setTextFormat(Qt.RichText)
+        title.setText(bilingual_html(project.translated_title, project.title, 16, 12))
         title_row.addWidget(title)
         title_row.addStretch(1)
         layout.addLayout(title_row)
@@ -862,7 +884,7 @@ class ProjectFilesDialog(QDialog):
         self.world_combo = None
         if project_type == 'datapack':
             world_row = QHBoxLayout()
-            world_row.addWidget(QLabel('安装到存档'))
+            world_row.addWidget(QLabel('存档'))
             self.world_combo = QComboBox()
             self.world_combo.setStyleSheet(self._combo_style())
             saves_dir = self.game_dir / 'saves'
@@ -875,11 +897,6 @@ class ProjectFilesDialog(QDialog):
                 self.world_combo.setEnabled(False)
             world_row.addWidget(self.world_combo, 1)
             layout.addLayout(world_row)
-        self.dest_label = QLabel()
-        self.dest_label.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 12px;')
-        self.dest_label.setWordWrap(True)
-        layout.addWidget(self.dest_label)
-        self._update_dest_label()
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
         self.download_btn = QPushButton('下一步')
@@ -996,7 +1013,7 @@ class ProjectFilesDialog(QDialog):
             highlighted = bool(self.mc_version and key == self.mc_version)
             section = CollapsibleSection(f'Minecraft {key}', f'{len(group_files)} 个文件' + (' · 当前游戏版本' if highlighted else ''), highlighted=highlighted, expanded=highlighted or key == keys[0] and (not self.mc_version or not compatible))
             for mod_file in group_files:
-                row = FileRow(mod_file, self.mc_version, self.project.title)
+                row = FileRow(mod_file, self.mc_version, self.project.title, self.project.translated_title)
                 row.clicked.connect(self._select_row)
                 section.add_widget(row)
                 self._file_rows.append(row)
@@ -1012,7 +1029,6 @@ class ProjectFilesDialog(QDialog):
         else:
             self.status_label.setText(f'共 {len(files)} 个文件，请选择要安装的版本')
         self.status_label.setStyleSheet('color: rgba(255,255,255,0.55); font-size: 12px;')
-        self._update_dest_label()
 
     def _on_error(self, message):
         text = str(message)
@@ -1145,7 +1161,6 @@ class ProjectFilesDialog(QDialog):
             self._selected_row.set_selected(False)
         self._selected_row = row
         row.set_selected(True)
-        self._update_dest_label()
         self._show_dependencies(row.mod_file)
 
     def selected_file(self):
@@ -1157,22 +1172,6 @@ class ProjectFilesDialog(QDialog):
             return ''
         return self.world_combo.currentData() or ''
 
-    def _update_dest_label(self):
-        if self.project_type == 'modpack':
-            dest = PROJECT_TEMP / 'modpacks'
-        elif self.project_type == 'datapack':
-            world = self.selected_world()
-            dest = self.game_dir / 'saves' / world / 'datapacks'
-            if not world:
-                dest = self.game_dir / 'saves' / '<存档>' / 'datapacks'
-        elif self.project_type == 'resourcepack':
-            dest = self.game_dir / 'resourcepacks'
-        elif self.project_type == 'shader':
-            dest = self.game_dir / 'shaderpacks'
-        else:
-            dest = self.game_dir / 'mods'
-        self.dest_label.setText(f'默认安装到：{dest}')
-
     def cleanup(self):
         if self._cleaned:
             return
@@ -1182,8 +1181,13 @@ class ProjectFilesDialog(QDialog):
         except Exception:
             pass
         if self._worker is not None:
+            worker = self._worker
+            self._worker = None
             try:
-                self._worker.cancel()
+                worker.cancel()
+                if not worker.wait(300):
+                    worker.terminate()
+                    worker.wait(100)
             except Exception:
                 pass
         try:
@@ -1192,8 +1196,9 @@ class ProjectFilesDialog(QDialog):
             pass
         for worker in list(self._dep_workers):
             try:
-                if worker.isRunning() and not worker.wait(1000):
-                    _orphan_worker(worker)
+                if worker.isRunning() and not worker.wait(250):
+                    worker.terminate()
+                    worker.wait(100)
             except RuntimeError:
                 continue
         self._dep_workers.clear()
@@ -1251,14 +1256,6 @@ class ModBrowserPage(QWidget):
         title.setStyleSheet('color: #f0f0f0;')
         top.addWidget(title)
         top.addStretch(1)
-        if self.project_type != 'modpack':
-            top.addWidget(QLabel('安装到'))
-            self.target_combo = QComboBox()
-            self.target_combo.setMinimumWidth(190)
-            self.target_combo.setStyleSheet(self._combo_style())
-            top.addWidget(self.target_combo)
-        if self.project_type == 'modpack':
-            self.target_combo = None
         refresh_btn = QPushButton('刷新')
         refresh_btn.setStyleSheet(self._secondary_style())
         refresh_btn.clicked.connect(self.search)
@@ -1384,7 +1381,6 @@ class ModBrowserPage(QWidget):
         return 'QPushButton { background:#3a3a3a; color:white; border:none; border-radius:6px; padding:6px 12px; } QPushButton:hover { background:#4a4a4a; }'
 
     def activate(self):
-        self._refresh_target_combo()
         if not self._versions_loaded:
             worker = VersionsWorker()
             worker.done.connect(self._on_versions)
@@ -1398,28 +1394,6 @@ class ModBrowserPage(QWidget):
             pix = card.icon_label.pixmap()
             if card.icon_url and (pix is None or pix.isNull()):
                 self.icon_loader.request(card.icon_url)
-
-    def _refresh_target_combo(self):
-        if self.target_combo is None:
-            return
-        current = self.target_combo.currentData()
-        self.target_combo.blockSignals(True)
-        self.target_combo.clear()
-        self.target_combo.addItem('全局游戏目录', '')
-        try:
-            modded = self.version_mgr.get_modded_versions()
-            for vid in modded:
-                self.target_combo.addItem(vid, vid)
-        except Exception:
-            pass
-        idx = self.target_combo.findData(current) if current is not None else -1
-        if idx >= 0:
-            self.target_combo.setCurrentIndex(idx)
-        elif self.target_combo.count() > 1:
-            self.target_combo.setCurrentIndex(1)
-        else:
-            self.target_combo.setCurrentIndex(0)
-        self.target_combo.blockSignals(False)
 
     def _on_versions(self, versions):
         self._versions_loaded = bool(versions)
@@ -1597,12 +1571,12 @@ class ModBrowserPage(QWidget):
             item = getattr(card, '_list_item', None)
             if item is None:
                 continue
-            title = card.project.title.lower()
+            title = f'{card.project.title} {card.project.translated_title} {card.project.slug}'.lower()
             if not text:
                 item.setHidden(False)
                 shown += 1
             elif mode == 'startswith':
-                visible = title.startswith(text)
+                visible = title.startswith(text) or card.project.translated_title.lower().startswith(text)
                 item.setHidden(not visible)
                 shown += int(visible)
             else:
@@ -1652,22 +1626,20 @@ class ModBrowserPage(QWidget):
         if project.website_url:
             QDesktopServices.openUrl(QUrl(project.website_url))
             return
-        QMessageBox.information(self, project.title, f'{project.description}\n\n来源: {project.source}\n下载量: {project.downloads:,}')
+        QMessageBox.information(self, bilingual_plain(project.translated_title, project.title), f'{project.description}\n\n来源: {project.source}\n下载量: {project.downloads:,}')
 
     def _target_game_dir(self):
         base = Path(self.config.get_mc_dir())
-        if self.target_combo is not None:
-            vid = self.target_combo.currentData() or ''
-            if vid:
+        vid = str(self.config.get('selected_version', '') or '').strip()
+        if vid:
+            try:
                 return self.launch_mgr.get_game_dir(vid)
+            except Exception:
+                pass
         return base
 
     def _target_mc_version_from_instance(self):
-        vid = ''
-        if self.target_combo is not None:
-            vid = self.target_combo.currentData() or ''
-        if not vid:
-            vid = str(self.config.get('selected_version', '') or '')
+        vid = str(self.config.get('selected_version', '') or '').strip()
         if not vid:
             return ''
         try:
@@ -1677,8 +1649,7 @@ class ModBrowserPage(QWidget):
                 if candidate:
                     match = re.search('(\\d+\\.\\d+(?:\\.\\d+)?)', str(candidate))
                     if match:
-                        match.group(1)
-                        return
+                        return match.group(1)
             return ''
         except Exception:
             return ''
@@ -1722,7 +1693,7 @@ class ModBrowserPage(QWidget):
         original = sanitize_filename(mod_file.filename, 'download.jar')
         stem = Path(original).stem
         suffix = Path(original).suffix or '.jar'
-        title = sanitize_filename(project.title or stem, stem)
+        title = sanitize_filename(project.translated_title or project.title or stem, stem)
         if fmt == 'bracket_title':
             name = f'[{title}] {stem}{suffix}'
         elif fmt == 'bracket_title_cn':
@@ -1793,9 +1764,10 @@ class ModBrowserPage(QWidget):
             dest = PROJECT_TEMP / 'modpacks' / sanitize_filename(mod_file.filename, 'modpack.mrpack')
             self._pending_download = 'modpack', project.title
         else:
-            if self.project_type == 'datapack' and not world:
-                dest_dir = None
-            elif self.project_type == 'datapack':
+            if self.project_type == 'datapack':
+                if not world:
+                    QMessageBox.warning(self, '无法安装', '请先在游戏内创建世界，再安装数据包')
+                    return
                 dest_dir = game_dir / 'saves' / world / 'datapacks'
             elif self.project_type == 'resourcepack':
                 dest_dir = game_dir / 'resourcepacks'
@@ -1803,24 +1775,10 @@ class ModBrowserPage(QWidget):
                 dest_dir = game_dir / 'shaderpacks'
             else:
                 dest_dir = game_dir / 'mods'
-            dialog = DarkQuestionDialog(self, '选择安装位置', f'是否安装到当前游戏目录？\n当前目标：{dest_dir if dest_dir else "请选择自定义目录"}', actions=[('自定义安装位置', 'custom', False), ('安装到当前游戏', 'current', True), ('取消', 'cancel', False)])
-            dialog.exec()
-            clicked = dialog.choice
-            if clicked == 'custom':
-                start_dir = str(dest_dir) if dest_dir else str(game_dir)
-                chosen = QFileDialog.getExistingDirectory(self, '选择 Mod 安装目录', start_dir)
-                if not chosen:
-                    return
-                dest_dir = Path(chosen)
-            elif clicked == 'current':
-                if dest_dir is None:
-                    QMessageBox.warning(self, '无法安装', '请先在游戏内创建世界，再安装数据包')
-                    return
-            else:
-                return
             dest_dir.mkdir(parents=True, exist_ok=True)
             dest = unique_path(dest_dir, self._formatted_filename(project, mod_file))
             self._pending_download = 'file', str(dest)
+        self._download_expected_size = int(mod_file.size or 0)
         worker = DownloadWorker(mod_file.download_url, dest, mod_file.sha1, mod_file.size)
         worker.status.connect(self.status_label.setText)
         worker.progress.connect(self._on_download_progress)
@@ -1833,6 +1791,8 @@ class ModBrowserPage(QWidget):
         _track_worker(worker)
 
     def _on_download_progress(self, done, total):
+        if total <= 0:
+            total = int(getattr(self, '_download_expected_size', 0) or 0)
         if total > 0:
             self.download_bar.setRange(0, 100)
             self.download_bar.set_animated_value(min(100, int(done * 100 / total)))
@@ -1903,8 +1863,9 @@ class ModBrowserPage(QWidget):
                     pass
         for worker in list(self._workers):
             try:
-                if not worker.wait(2000):
-                    _orphan_worker(worker)
+                if not worker.wait(400):
+                    worker.terminate()
+                    worker.wait(100)
             except RuntimeError:
                 continue
         self._workers.clear()

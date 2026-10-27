@@ -38,6 +38,7 @@ class ModProject:
     slug: 'str'
     title: 'str'
     description: 'str'
+    translated_title: 'str' = ''
     icon_url: 'str' = ''
     author: 'str' = ''
     downloads: 'int' = 0
@@ -46,8 +47,18 @@ class ModProject:
     versions: 'List[str]' = field(default_factory=list)
     website_url: 'str' = ''
     project_type: 'str' = 'mod'
+    def __post_init__(self):
+        if not self.translated_title:
+            try:
+                from core.mod_translations import translate_project
+                self.translated_title = translate_project(self) or ''
+            except Exception:
+                self.translated_title = ''
+    @property
+    def display_title(self):
+        return self.translated_title or self.title
     def search_text(self):
-        return f'{self.title} {self.slug} {self.author}'.lower()
+        return f'{self.title} {self.translated_title} {self.slug} {self.author}'.lower()
 
 
 @dataclass
@@ -66,6 +77,27 @@ class ModFile:
     sha1: 'str' = ''
     sha512: 'str' = ''
     dependencies: 'List[dict]' = field(default_factory=list)
+
+def download_candidates(url):
+    '''社区资源下载候选源；优先使用可直连的 Modrinth CDN 节点。'''
+
+    url = str(url or '').strip()
+    if not url:
+        return []
+    candidates = []
+    if 'cdn.modrinth.com/' in url:
+        path = url.split('cdn.modrinth.com/', 1)[1]
+        candidates.extend([f'https://cdn.modrinth.com/{path}', f'https://cdn-raw.modrinth.com/{path}', f'https://mod.mcimirror.top/{path}'])
+    elif 'cdn-raw.modrinth.com/' in url:
+        path = url.split('cdn-raw.modrinth.com/', 1)[1]
+        candidates.extend([f'https://cdn-raw.modrinth.com/{path}', f'https://cdn.modrinth.com/{path}', f'https://mod.mcimirror.top/{path}'])
+    if 'edge.forgecdn.net' in url:
+        candidates.extend([url.replace('edge.forgecdn.net', 'mediafilez.forgecdn.net'), url])
+    elif 'mediafilez.forgecdn.net' in url:
+        candidates.append(url)
+    if url not in candidates:
+        candidates.append(url)
+    return list(dict.fromkeys(candidates))
 
 @dataclass
 class SearchResult:
@@ -388,7 +420,7 @@ class CurseForgeSource(BaseSource):
             website = (row.get('links') or {}).get('websiteUrl') or ''
             if not website and slug:
                 website = f'https://www.curseforge.com/minecraft/{CF_SECTION_URL.get(project_type, "mc-mods")}/{slug}'
-            projects.append(ModProject(source=self.name, project_id=str(row.get('id', '')), slug=slug, title=row.get('name') or slug, description=(row.get('summary') or '').strip(), icon_url=logo.get('thumbnailUrl') or logo.get('url') or '', author=authors[0].get('name', '') if authors and isinstance(authors[0], dict) else '', downloads=int(row.get('downloadCount') or 0), updated=_fmt_date(row.get('dateModified') or ''), categories=[category_label({}.get('name', '')) for c in categories if isinstance(c, dict) if not c], versions=[{}.get('displayName', '') for f in files[:8] if isinstance(f, dict) if not f], website_url=website, project_type=project_type))
+            projects.append(ModProject(source=self.name, project_id=str(row.get('id', '')), slug=slug, title=row.get('name') or slug, description=(row.get('summary') or '').strip(), icon_url=logo.get('thumbnailUrl') or logo.get('url') or '', author=authors[0].get('name', '') if authors and isinstance(authors[0], dict) else '', downloads=int(row.get('downloadCount') or 0), updated=_fmt_date(row.get('dateModified') or ''), categories=[category_label(c.get('name', '')) for c in categories if isinstance(c, dict)], versions=[f.get('displayName', '') for f in files[:8] if isinstance(f, dict) and f.get('displayName')], website_url=website, project_type=project_type))
         total = int(pagination.get('totalCount') or len(projects))
         return SearchResult(projects, total, offset, limit)
 
@@ -534,7 +566,7 @@ class CurseForgeSource(BaseSource):
         if not website:
             if slug:
                 website = f'https://www.curseforge.com/minecraft/mc-mods/{slug}'
-        return ModProject(source=self.name, project_id=str(row.get('id', project_id)), slug=slug, title=row.get('name') or slug, description=(row.get('summary') or '').strip(), icon_url=logo.get('thumbnailUrl') or logo.get('url') or '', author=authors[0].get('name', '') if authors and isinstance(authors[0], dict) else '', downloads=int(row.get('downloadCount') or 0), updated=_fmt_date(row.get('dateModified') or ''), categories=[category_label({}.get('name', '')) for c in categories if isinstance(c, dict) if not c], versions=[{}.get('displayName', '') for f in files[:8] if isinstance(f, dict) if not f], website_url=website, project_type='mod')
+        return ModProject(source=self.name, project_id=str(row.get('id', project_id)), slug=slug, title=row.get('name') or slug, description=(row.get('summary') or '').strip(), icon_url=logo.get('thumbnailUrl') or logo.get('url') or '', author=authors[0].get('name', '') if authors and isinstance(authors[0], dict) else '', downloads=int(row.get('downloadCount') or 0), updated=_fmt_date(row.get('dateModified') or ''), categories=[category_label(c.get('name', '')) for c in categories if isinstance(c, dict)], versions=[f.get('displayName', '') for f in files[:8] if isinstance(f, dict) and f.get('displayName')], website_url=website, project_type='mod')
 
     @staticmethod
     def _cdn_url(file_id, filename):

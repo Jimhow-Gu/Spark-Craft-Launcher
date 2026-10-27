@@ -22,6 +22,54 @@ USER_AGENT = 'PMGL-Launcher/1.1 (Minecraft Launcher)'
 _NETWORK_STATE_LOCK = threading.Lock()
 _NETWORK_STATE = (0.0, True)
 
+# 部分网络环境下 Modrinth 的 Fastly 域名会被解析到不可达节点。
+# 保留官方域名的 TLS SNI/Host，仅把 IPv4 连接地址回退到可用的 Fastly 任播节点。
+_DNS_PINS = {
+    'cdn.modrinth.com': ('151.101.1.242', '151.101.129.242', '199.232.161.242'),
+    'cdn-raw.modrinth.com': ('151.101.1.242', '151.101.129.242', '199.232.161.242'),
+}
+
+
+def _install_dns_pins():
+    if getattr(socket, '_scl_dns_pins_installed', False):
+        return
+    original = socket.getaddrinfo
+
+    def getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        key = str(host or '').lower().rstrip('.')
+        pins = _DNS_PINS.get(key)
+        if pins:
+            try:
+                port_number = int(port)
+            except (TypeError, ValueError):
+                try:
+                    port_number = socket.getservbyname(str(port), 'tcp')
+                except OSError:
+                    port_number = 443
+            pinned = [
+                (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', (ip, port_number))
+                for ip in pins
+            ]
+            try:
+                resolved = original(host, port, socket.AF_INET, type or socket.SOCK_STREAM, proto or socket.IPPROTO_TCP, flags)
+            except OSError:
+                resolved = []
+            seen = {item[4][0] for item in pinned}
+            for item in resolved:
+                address = item[4][0]
+                if address not in seen:
+                    pinned.append(item)
+                    seen.add(address)
+            return pinned
+        return original(host, port, family, type, proto, flags)
+
+    socket.getaddrinfo = getaddrinfo
+    socket._scl_dns_pins_installed = True
+
+
+_install_dns_pins()
+
+
 def is_network_error_text(text):
     '''判断错误文本是否属于网络连接类问题。'''
 
