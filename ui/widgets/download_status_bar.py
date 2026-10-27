@@ -1,7 +1,8 @@
 '''所有页面底部可见的下载进度条。'''
 
 from PySide6.QtCore import (QEasingCurve, QPropertyAnimation, Qt, Signal)
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QProgressBar)
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel)
+from ui.widgets.smooth_progress import RoundedProgressBar
 
 class DownloadStatusBar(QFrame):
     clicked = Signal()
@@ -19,7 +20,7 @@ class DownloadStatusBar(QFrame):
         self.title_label = QLabel('')
         self.title_label.setMinimumWidth(150)
         layout.addWidget(self.title_label)
-        self.progress = QProgressBar()
+        self.progress = RoundedProgressBar()
         self.progress.setRange(0, 1000)
         self.progress.setTextVisible(False)
         self.progress.setFixedHeight(8)

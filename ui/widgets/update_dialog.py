@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout)
+from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout)
 
 from core.update import UpdateDownloadWorker
+from ui.widgets.smooth_progress import RoundedProgressBar
 
 
 class UpdateDialog(QDialog):
@@ -47,7 +48,7 @@ class UpdateDialog(QDialog):
         self.status_label.setWordWrap(True)
         self.status_label.setStyleSheet('color:rgba(255,255,255,0.62); font-size:12px;')
         layout.addWidget(self.status_label)
-        self.progress = QProgressBar()
+        self.progress = RoundedProgressBar()
         self.progress.setRange(0, 1000)
         self.progress.setTextVisible(False)
         self.progress.setFixedHeight(12)
@@ -74,6 +75,7 @@ class UpdateDialog(QDialog):
             return
         self.download_btn.setEnabled(False)
         self.later_btn.setText('取消')
+        self.status_label.setText('正在连接中国大陆加速线路...')
         self.progress.show()
         self.progress.setValue(0)
         worker = UpdateDownloadWorker(self.info, self)

@@ -47,9 +47,10 @@ class _ToastProgress(QWidget):
 class Toast(QFrame):
     '''单个通知条，滑入后在进度条耗尽时沿原路滑出。'''
 
-    def __init__(self, parent, text, level='info', manager=None):
+    def __init__(self, parent, text, level='info', manager=None, on_click=None):
         super().__init__(parent)
         self._manager = manager
+        self._on_click = on_click if callable(on_click) else None
         self._level = level if level in _LEVEL_STYLE else 'info'
         palette = QApplication.palette()
         light = palette.color(QPalette.Window).lightness() > 128
@@ -63,6 +64,9 @@ class Toast(QFrame):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setFocusPolicy(Qt.NoFocus)
+        if self._on_click is not None:
+            self.setCursor(Qt.PointingHandCursor)
+            self.setToolTip(str(text or '').strip() + '\n点击执行操作')
         self.setStyleSheet(f'QFrame#ToastCard {{ background:{style["background"]}; border:1px solid {style["border"]}; border-radius:11px; }} QLabel {{ background:transparent; }}')
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 3)
@@ -195,6 +199,16 @@ class Toast(QFrame):
         if self._dismissing:
             self.finish_now()
 
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._on_click is not None and not self._dismissing:
+            action = self._on_click
+            self._on_click = None
+            self.dismiss()
+            QTimer.singleShot(0, action)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
     def enterEvent(self, event):
         self._hovered = True
         if not self._dismissing:
@@ -215,7 +229,7 @@ class Toast(QFrame):
 
 class ToastManager(QObject):
     _instance = None
-    _queue_request = Signal(str, str, object, object)
+    _queue_request = Signal(str, str, object, object, object)
     def __init__(self):
         super().__init__()
         self._toasts = []
@@ -227,8 +241,8 @@ class ToastManager(QObject):
             cls._instance = ToastManager()
         return cls._instance
 
-    def _show_from_gui_thread(self, text, level, parent, duration):
-        self.show(text, level, parent, duration)
+    def _show_from_gui_thread(self, text, level, parent, duration, on_click):
+        self.show(text, level, parent, duration, on_click)
 
     @staticmethod
     def _window_for(parent):
@@ -246,16 +260,16 @@ class ToastManager(QObject):
             if isinstance(widget, QMainWindow) and widget.isVisible():
                 return widget
 
-    def show(self, text, level='info', parent=None, duration=None):
+    def show(self, text, level='info', parent=None, duration=None, on_click=None):
         app = QApplication.instance()
         if app is not None and QThread.currentThread() is not app.thread():
-            self._queue_request.emit(str(text or ''), str(level or 'info'), parent, duration)
+            self._queue_request.emit(str(text or ''), str(level or 'info'), parent, duration, on_click)
             return True
         window = self._window_for(parent)
         if window is not None:
             if not str(text or '').strip():
                 return False
-        toast = Toast(window, text, level, self)
+        toast = Toast(window, text, level, self, on_click)
         if duration is not None:
             toast._progress_anim.setDuration(max(1200, int(duration)))
         active = [t for t in self._toasts if t.parentWidget() is window if not t._closed]
@@ -298,10 +312,10 @@ class ToastManager(QObject):
         self._toasts.clear()
 
 
-def show_toast(text, level='info', parent=None, duration=None):
+def show_toast(text, level='info', parent=None, duration=None, on_click=None):
     '''在主窗口底部显示通知条；没有可用窗口时返回 False。'''
 
-    return ToastManager.instance().show(text, level, parent, duration)
+    return ToastManager.instance().show(text, level, parent, duration, on_click)
 
 def notify_network_failure(parent=None, action='下载文件', guidance=''):
     '''统一网络失败提示：先提示失败，再给出 VPN/加速器建议。'''

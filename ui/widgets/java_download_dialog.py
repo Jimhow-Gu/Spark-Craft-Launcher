@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout)
+from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout)
 
 from core.java_download import JavaDownloadWorker
+from ui.widgets.smooth_progress import RoundedProgressBar
 
 
 class JavaDownloadDialog(QDialog):
@@ -35,7 +36,7 @@ class JavaDownloadDialog(QDialog):
         self.status_label.setWordWrap(True)
         self.status_label.setStyleSheet('color:rgba(255,255,255,0.62);')
         layout.addWidget(self.status_label)
-        self.progress = QProgressBar()
+        self.progress = RoundedProgressBar()
         self.progress.setRange(0, 1000)
         self.progress.setTextVisible(False)
         self.progress.setFixedHeight(12)

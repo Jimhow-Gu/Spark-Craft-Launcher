@@ -1,9 +1,28 @@
 '''带平滑填充动画的进度条。'''
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation
-from PySide6.QtWidgets import QProgressBar
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QRectF
+from PySide6.QtGui import QPainter, QPainterPath
+from PySide6.QtWidgets import QProgressBar, QStyle, QStyleOptionProgressBar
 
-class SmoothProgressBar(QProgressBar):
+
+class RoundedProgressBar(QProgressBar):
+    '''始终按圆角裁剪轨道和填充，避免首次 0% 绘制成直角矩形。'''
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        rect = QRectF(self.rect())
+        radius = min(6.0, max(2.0, rect.height() / 2.0))
+        path = QPainterPath()
+        path.addRoundedRect(rect, radius, radius)
+        painter.setClipPath(path)
+        option = QStyleOptionProgressBar()
+        self.initStyleOption(option)
+        self.style().drawControl(QStyle.CE_ProgressBar, option, painter, self)
+        painter.end()
+
+
+class SmoothProgressBar(RoundedProgressBar):
     '''数值变化时从左往右平滑推进，而不是瞬间跳变。'''
 
     def __init__(self, parent=None, duration: int=260):
@@ -39,5 +58,8 @@ class SmoothProgressBar(QProgressBar):
 
         self._anim.stop()
         super().setValue(self.minimum())
+
+
+__all__ = ['RoundedProgressBar', 'SmoothProgressBar']
 
 

@@ -17,10 +17,31 @@ from PySide6.QtCore import QThread, Signal
 from core.net import DownloadCancelled, DownloadError, HttpClient
 from core.paths import safe_rmtree, scl_dir
 
-CURRENT_VERSION = '1.0.2'
-VERSION_DISPLAY = 'V1.0.2（正式版）'
+CURRENT_VERSION = '1.0.3'
+VERSION_DISPLAY = 'V1.0.3（正式版）'
 REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
+API_ACCELERATED = f'https://gh-proxy.com/{API_LATEST}'
+# 中国大陆可用的 GitHub 下载加速线路，按实测速度排序；最后始终回退官方源。
+DOWNLOAD_ACCELERATORS = (
+    'https://ghfast.top/',
+    'https://gh-proxy.com/',
+    'https://ghproxy.cc/',
+    'https://ghproxy.net/',
+)
+
+
+def _download_urls(url):
+    '''生成 GitHub 加速下载候选地址，保留官方源作为最后回退。'''
+
+    url = str(url or '').strip()
+    if not url:
+        return []
+    if not url.startswith(('https://github.com/', 'http://github.com/', 'https://objects.githubusercontent.com/')):
+        return [url]
+    candidates = [prefix + url for prefix in DOWNLOAD_ACCELERATORS]
+    candidates.append(url)
+    return list(dict.fromkeys(candidates))
 
 
 def _version_tuple(text):
@@ -36,12 +57,25 @@ def is_newer(latest_tag, current=CURRENT_VERSION):
 
 
 def fetch_latest_release(timeout=12):
+    '''读取最新 Release；直连失败时使用国内可访问的代理接口。'''
+
     http = HttpClient(timeout=timeout, retries=1, verify=False)
-    data = http.get_json(
-        API_LATEST,
-        headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'Spark-Craft-Launcher-Updater'},
-    )
+    data = None
+    last_error = None
+    for api_url in (API_LATEST, API_ACCELERATED):
+        try:
+            data = http.get_json(
+                api_url,
+                headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'Spark-Craft-Launcher-Updater'},
+            )
+            if isinstance(data, dict):
+                break
+        except Exception as exc:
+            data = None
+            last_error = exc
     if not isinstance(data, dict):
+        if last_error:
+            raise last_error
         return None
     assets = data.get('assets') or []
     chosen = None
@@ -113,23 +147,39 @@ class UpdateDownloadWorker(QThread):
         dest = update_dir / re.sub(r'[^A-Za-z0-9._-]', '_', name)
         digest = str(self.info.get('asset_digest') or '')
         sha256 = digest[7:].strip() if digest.lower().startswith('sha256:') else None
-        self.status.emit(f'正在下载 {self.info.get("tag") or "新版本"}...')
+        urls = _download_urls(url)
+        last_error = None
+        http = HttpClient(timeout=25, retries=1, verify=False)
         try:
-            http = HttpClient(timeout=30, retries=2, verify=False)
-            http.download(
-                url, dest,
-                sha256=sha256,
-                size=int(self.info.get('asset_size') or 0) or None,
-                progress=(lambda done, total: self.progress.emit(int(done), int(total))),
-                cancel=(lambda: self._cancelled),
-            )
-        except DownloadCancelled:
-            self.failed.emit('更新下载已取消')
-            return
-        except Exception as exc:
-            self.failed.emit(f'更新下载失败：{exc}')
-            return
-        self.done.emit(str(dest))
+            for index, candidate in enumerate(urls):
+                if self._cancelled:
+                    self.failed.emit('更新下载已取消')
+                    return
+                if index == 0:
+                    self.status.emit('正在通过中国大陆加速线路下载更新...')
+                elif index < len(urls) - 1:
+                    self.status.emit(f'加速线路 {index} 不可用，正在切换线路...')
+                else:
+                    self.status.emit('加速线路暂不可用，正在从 GitHub 官方源下载...')
+                try:
+                    http.download(
+                        candidate, dest,
+                        sha256=sha256,
+                        size=int(self.info.get('asset_size') or 0) or None,
+                        progress=(lambda done, total: self.progress.emit(int(done), int(total))),
+                        cancel=(lambda: self._cancelled),
+                    )
+                    self.done.emit(str(dest))
+                    return
+                except DownloadCancelled:
+                    self.failed.emit('更新下载已取消')
+                    return
+                except Exception as exc:
+                    last_error = exc
+                    continue
+        finally:
+            http.close()
+        self.failed.emit(f'更新下载失败：{last_error or "所有线路均不可用"}')
 
 
 def _extract_exe(asset_path):
