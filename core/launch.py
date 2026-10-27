@@ -965,12 +965,23 @@ class LaunchManager:
                 command.extend(get_arguments_string(merged, mc_dir, options, classpath))
             else:
                 command.extend(get_arguments(arguments.get('game') or [], merged, mc_dir, options, classpath))
-            if '--lang' not in command:
+            try:
+                force_chinese = bool(self.config.get('auto_set_chinese', True))
+            except Exception:
+                force_chinese = True
+            if force_chinese:
+                lang_fixed = False
                 for i, arg in enumerate(command):
-                    if arg == '--username' and i + 1 < len(command):
-                        command.insert(i + 2, '--lang')
-                        command.insert(i + 3, 'zh_cn')
+                    if arg == '--lang' and i + 1 < len(command):
+                        command[i + 1] = 'zh_CN'
+                        lang_fixed = True
                         break
+                if not lang_fixed:
+                    for i, arg in enumerate(command):
+                        if arg == '--username' and i + 1 < len(command):
+                            command.insert(i + 2, '--lang')
+                            command.insert(i + 3, 'zh_CN')
+                            break
             if self.is_version_isolated(final_id):
                 self._migrate_legacy_isolated_dir(final_id)
                 isolated_dir = Path(mc_dir) / 'versions' / final_id

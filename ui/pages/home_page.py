@@ -1359,20 +1359,20 @@ class HomePage(QWidget):
                 info['pid'] = proc.pid
         except Exception:
             pass
-        # 进程启动不等于游戏窗口已出现；保持按钮为进度状态，等 window_ready 再恢复
-        self.action_btn.set_working('游戏启动中...', 1.0, animate=False, show_percent=False, starting=True)
-        self.status_label.setText(f'{info["nickname"]} 进程已启动，正在等待游戏窗口...')
+        # 进程已成功启动即视为启动成功：恢复按钮，允许继续启动其他版本
+        if self._starting_worker is worker:
+            self._starting_worker = None
+        self.action_btn.set_idle('启动游戏')
+        self.status_label.setText(f'{info["nickname"]} 已启动')
         self._append_log(f'{info["nickname"]} 进程已启动', worker)
+        from ui.widgets.toast import show_toast
+        show_toast(f'{info["nickname"]} 启动成功', 'success', self)
         try:
             set_process_priority(info.get('pid'), str(self.config.get('game_process_priority', 'normal') or 'normal'))
         except Exception:
             pass
         self._add_running_row(worker)
-        # 游戏窗口真正出现后再隐藏/最小化启动器，并允许启动其他版本
-        QTimer.singleShot(300, (lambda w=worker: self._poll_game_window(w)))
-        # 非 Windows 或窗口检测异常时的兜底，避免按钮永久停在“游戏启动中”
-        delay = 90000 if sys.platform == 'win32' else 4000
-        QTimer.singleShot(delay, (lambda w=worker: self._on_game_window_ready(w)))
+        self._apply_launcher_visibility()
 
     def _on_game_window_ready(self, worker):
         if self._starting_worker is not worker:
