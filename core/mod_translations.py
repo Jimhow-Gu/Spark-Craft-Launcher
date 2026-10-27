@@ -84,8 +84,12 @@ def english_only(value, fallback=''):
     text = str(value or '').strip()
     if not text:
         return str(fallback or '').strip()
+    if not _CJK_RE.search(text):
+        return text
+    outside = re.sub(r'[（(][^（）()]*[）)]', '', text)
+    outside_words = re.findall(r'[A-Za-z]{2,}', outside)
     parenthesized = re.findall(r'[（(]([^（）()]*[A-Za-z][^（）()]*)[）)]', text)
-    if parenthesized:
+    if parenthesized and not outside_words:
         candidate = ' '.join(part.strip() for part in parenthesized if part.strip())
     else:
         candidate = re.sub(r'[\u3400-\u9fff]+', ' ', text)

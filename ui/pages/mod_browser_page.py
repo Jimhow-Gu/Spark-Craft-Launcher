@@ -424,7 +424,7 @@ class IconLoader(QObject):
             if reply.error() == QNetworkReply.NoError:
                 data = reply.readAll()
                 pix = QPixmap()
-                if pix.loadFromData(data) and not pix.isNull():
+                if pix.loadFromData(data) and not pix.isNull() and url:
                     scaled = pix.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                     self._cache[url] = scaled
                     while len(self._cache) > self._cache_limit:
@@ -448,7 +448,7 @@ class IconLoader(QObject):
     def _fetch_fallback(self, url):
         data = b''
         try:
-            http = HttpClient(timeout=20, retries=1, verify=False)
+            http = HttpClient(timeout=20, retries=2, verify=False)
             try:
                 response = http.get(url)
                 if response.status_code < 400:
