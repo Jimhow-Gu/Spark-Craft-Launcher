@@ -508,7 +508,7 @@ class ProjectCard(QFrame):
         self.setObjectName('ProjectCard')
         self.setStyleSheet('\n            QFrame#ProjectCard {\n                background: rgba(18,20,26,0.58);\n                border: 1px solid rgba(255,255,255,0.18);\n                border-radius: 10px;\n            }\n            QFrame#ProjectCard:hover {\n                background: rgba(28,30,38,0.72);\n                border: 1px solid rgba(122,160,255,0.45);\n            }\n        ')
         self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(92)
+        self.setMinimumHeight(96)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(12)
@@ -520,23 +520,26 @@ class ProjectCard(QFrame):
         layout.addWidget(self.icon_label)
         text_box = QVBoxLayout()
         text_box.setSpacing(3)
-        title = QLabel()
-        title.setTextFormat(Qt.RichText)
-        title.setText(bilingual_html(project.translated_title, project.english_title, 12, 10))
-        title.setStyleSheet('background: transparent;')
-        text_box.addWidget(title)
-        desc = QLabel(project.description or '暂无描述')
-        desc.setWordWrap(True)
-        desc.setMaximumHeight(38)
-        desc.setStyleSheet('color: rgba(255,255,255,0.62); font-size: 12px; background: transparent;')
-        text_box.addWidget(desc)
+        self.title_label = QLabel()
+        self.title_label.setTextFormat(Qt.RichText)
+        self.title_label.setText(bilingual_html(project.translated_title, project.english_title, 12, 10))
+        self.title_label.setStyleSheet('background: transparent;')
+        text_box.addWidget(self.title_label)
+        self.desc_label = QLabel(project.description or '暂无描述')
+        self.desc_label.setWordWrap(True)
+        self.desc_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.desc_label.setMaximumHeight(90)
+        self.desc_label.setToolTip(project.description or '暂无描述')
+        self.desc_label.setStyleSheet('color: rgba(255,255,255,0.62); font-size: 12px; background: transparent;')
+        text_box.addWidget(self.desc_label)
         cats = ' / '.join(project.categories[:4]) if project.categories else PROJECT_TYPES.get(project.project_type, '')
         meta = f'{project.source}  ·  下载 {project.downloads:,}  ·  更新 {project.updated}'
         if cats:
             meta += f'  ·  {cats}'
-        meta_label = QLabel(meta)
-        meta_label.setStyleSheet('color: rgba(255,255,255,0.42); font-size: 11px; background: transparent;')
-        text_box.addWidget(meta_label)
+        self.meta_label = QLabel(meta)
+        self.meta_label.setStyleSheet('color: rgba(255,255,255,0.42); font-size: 11px; background: transparent;')
+        self.meta_label.setWordWrap(True)
+        text_box.addWidget(self.meta_label)
         layout.addLayout(text_box, 1)
         actions = QVBoxLayout()
         actions.setSpacing(6)
@@ -552,6 +555,19 @@ class ProjectCard(QFrame):
         actions.addWidget(open_btn)
         actions.addStretch(1)
         layout.addLayout(actions)
+
+    def preferred_height(self, width):
+        '''按描述实际行数计算卡片高度，避免文字被上下截断。'''
+
+        text_width = max(220, int(width) - 188)
+        fm = self.desc_label.fontMetrics()
+        desc_rect = fm.boundingRect(0, 0, text_width, 240, Qt.TextWordWrap, self.desc_label.text() or '')
+        desc_height = min(90, max(16, desc_rect.height()))
+        title_height = max(16, self.title_label.sizeHint().height())
+        meta_fm = self.meta_label.fontMetrics()
+        meta_rect = meta_fm.boundingRect(0, 0, text_width, 60, Qt.TextWordWrap, self.meta_label.text() or '')
+        meta_height = min(32, max(14, meta_rect.height()))
+        return max(96, 20 + title_height + 3 + desc_height + 3 + meta_height)
 
     def set_icon(self, pix):
         if pix is None or pix.isNull():
@@ -1667,7 +1683,8 @@ class ModBrowserPage(QWidget):
             card.clicked.connect(self._download_project)
             card.download_clicked.connect(self._download_project)
             item = QListWidgetItem()
-            item.setSizeHint(QSize(100, 96))
+            width = max(360, self.results_list.viewport().width() - 8)
+            item.setSizeHint(QSize(100, max(96, card.preferred_height(width))))
             self.results_list.addItem(item)
             self.results_list.setItemWidget(item, card)
             card._list_item = item
