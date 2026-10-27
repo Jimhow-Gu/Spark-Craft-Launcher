@@ -177,7 +177,7 @@ class HttpClient:
     def __init__(self, timeout=20, retries=3, user_agent=USER_AGENT, verify=True):
         self.timeout = timeout
         self.retries = retries
-        self._verify = certifi.where() if verify else False
+        self._verify_certs = certifi.where() if verify else False
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': user_agent, 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.5', 'Connection': 'keep-alive'})
         retry = Retry(total=retries, connect=retries, read=retries, backoff_factor=0.8, status_forcelist=(429, 500, 502, 503, 504), allowed_methods=frozenset(['GET', 'HEAD']), raise_on_status=False)
@@ -207,7 +207,7 @@ class HttpClient:
                     params=params,
                     headers=headers,
                     timeout=timeout or self.timeout,
-                    verify=self._verify,
+                    verify=self._verify_certs,
                     allow_redirects=allow_redirects,
                 )
                 if resp.status_code >= 400:
@@ -281,7 +281,7 @@ class HttpClient:
             if extra_headers:
                 request_headers.update(extra_headers)
             try:
-                resp = self.session.get(url, headers=request_headers or None, stream=True, timeout=(8, 12) if slow_fallback else self.timeout, verify=self._verify, allow_redirects=True)
+                resp = self.session.get(url, headers=request_headers or None, stream=True, timeout=(8, 12) if slow_fallback else self.timeout, verify=self._verify_certs, allow_redirects=True)
                 if resp.status_code == 416 and tmp.exists():
                     tmp.unlink(missing_ok=True)
                     continue
