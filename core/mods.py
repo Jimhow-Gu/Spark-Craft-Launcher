@@ -55,6 +55,14 @@ class ModProject:
             except Exception:
                 self.translated_title = ''
     @property
+    def english_title(self):
+        try:
+            from core.mod_translations import english_only
+            fallback = self.slug.replace('-', ' ').strip() if self.slug else str(self.project_id or '')
+            return english_only(self.title, fallback)
+        except Exception:
+            return self.title
+    @property
     def display_title(self):
         return self.translated_title or self.title
     def search_text(self):

@@ -15,7 +15,7 @@ from core.app_font import ui_font
 from core.launch import LaunchManager
 from core.net import HttpClient, hash_file
 from core.mods import download_candidates
-from core.mod_translations import bilingual_html, bilingual_plain, translation_db
+from core.mod_translations import bilingual_html, bilingual_plain, chinese_only, english_only, translation_db
 from ui.widgets.back_button import BackButton
 from ui.widgets.loading_overlay import LoadingOverlay
 
@@ -73,12 +73,15 @@ def _extract_icon(zf, icon_name):
 
 def _finish_mod_info(info, filename):
     try:
-        from core.mod_translations import translate_mod
+        from core.mod_translations import english_only, translate_mod
         info['translated_name'] = translate_mod(
             info.get('modid', ''), info.get('name', ''), filename
         )
+        fallback = Path(str(filename or '')).stem
+        info['english_name'] = english_only(info.get('name', ''), fallback)
     except Exception:
         info['translated_name'] = ''
+        info['english_name'] = Path(str(filename or '')).stem
     return info
 
 def scan_mod_file(path):
@@ -337,14 +340,16 @@ class ModRowWidget(QWidget):
         text.setSpacing(2)
         title = QLabel()
         title.setTextFormat(Qt.RichText)
+        primary = info.get('translated_name') or chinese_only(info.get('name') or '', '')
+        secondary = info.get('english_name') or english_only(info.get('name') or info.get('filename'), '')
         title.setText(
-            bilingual_html(info.get('translated_name'), info.get('name') or info.get('filename'), 13, 11)
+            bilingual_html(primary, secondary, 13, 11)
             + (f'<span style="font-size:11px;color:#8d939e;">    {info.get("version", "")}</span>' if info.get('version') else '')
         )
         title.setStyleSheet('background:transparent;')
         title.setWordWrap(True)
         title.setToolTip(
-            f'{bilingual_plain(info.get("translated_name"), info.get("name") or info.get("filename"))}\n'
+            f'{bilingual_plain(primary, secondary)}\n'
             f'{info.get("filename", "")}\n{info.get("description", "")}'
         )
         text.addWidget(title)
@@ -744,7 +749,7 @@ class ModManagerPage(QWidget):
                 mods = [m for m in mods if not m.get('enabled', True)]
             query = self.search_input.text().strip().lower() if hasattr(self, 'search_input') else ''
             if query:
-                mods = [m for m in mods if query in str(m.get('name', '')).lower() or query in str(m.get('translated_name', '')).lower() or query in str(m.get('filename', '')).lower() or query in str(m.get('description', '')).lower() or query in str(m.get('modid', '')).lower()]
+                mods = [m for m in mods if query in str(m.get('name', '')).lower() or query in str(m.get('translated_name', '')).lower() or query in str(m.get('english_name', '')).lower() or query in str(m.get('filename', '')).lower() or query in str(m.get('description', '')).lower() or query in str(m.get('modid', '')).lower()]
             if not mods:
                 empty_text = {'update': '没有可更新的 Mod', 'disabled': '没有已禁用的 Mod'}.get(self._filter, '没有匹配的 Mod')
                 item = QListWidgetItem(empty_text)

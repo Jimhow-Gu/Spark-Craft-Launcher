@@ -75,6 +75,40 @@ def _norm(value):
     return re.sub(r'\s+', ' ', str(value or '').strip()).casefold()
 
 
+_CJK_RE = re.compile(r'[\u3400-\u9fff]')
+
+
+def english_only(value, fallback=''):
+    '''从可能混有中文的标题中提取纯英文名。'''
+
+    text = str(value or '').strip()
+    if not text:
+        return str(fallback or '').strip()
+    parenthesized = re.findall(r'[（(]([^（）()]*[A-Za-z][^（）()]*)[）)]', text)
+    if parenthesized:
+        candidate = ' '.join(part.strip() for part in parenthesized if part.strip())
+    else:
+        candidate = re.sub(r'[\u3400-\u9fff]+', ' ', text)
+    candidate = re.sub(r'[【】（）()\[\]｜|]+', ' ', candidate)
+    candidate = re.sub(r'\s+', ' ', candidate).strip(' -_:：,，')
+    if candidate and re.search(r'[A-Za-z]', candidate) and not _CJK_RE.search(candidate):
+        return candidate
+    return str(fallback or '').strip()
+
+
+def chinese_only(value, fallback=''):
+    '''从混排标题中取出中文主标题。'''
+
+    text = str(value or '').strip()
+    if not text:
+        return str(fallback or '').strip()
+    head = re.split(r'[（(]', text, maxsplit=1)[0].strip(' -_:：,，')
+    if _CJK_RE.search(head):
+        return head
+    chinese = ' '.join(re.findall(r'[\u3400-\u9fff]+', text)).strip()
+    return chinese or str(fallback or text).strip()
+
+
 def _norm_slug(value):
     return str(value or '').strip().casefold()
 
@@ -141,7 +175,20 @@ class TranslationDB:
         self._modid = {}
         self._mod_name = {}
         self._modpack_name = {}
+        self._zh_entries = {}
         self._apply_builtin()
+
+    def _remember_zh(self, table, project_type, zh, en, slug):
+        zh = str(zh or '').strip()
+        en = str(en or '').strip()
+        if not zh or not en:
+            return
+        key = _norm(zh)
+        if not key:
+            return
+        current = table.get(key)
+        if current is None or (not current[2] and slug):
+            table[key] = (project_type, zh, en, slug or '')
 
     def _apply_builtin(self):
         for slug, (zh, en) in BUILTIN.items():
@@ -150,6 +197,7 @@ class TranslationDB:
                 self._mod_slug[_norm_slug(slug)] = entry
                 self._mod_name[_norm(en)] = entry
                 self._modid[_norm_slug(slug)] = entry
+                self._remember_zh(self._zh_entries, 'mod', zh, en, slug)
 
     @property
     def cache_path(self):
@@ -221,6 +269,7 @@ class TranslationDB:
         modid = dict(self._modid)
         mod_name = dict(self._mod_name)
         modpack_name = dict(self._modpack_name)
+        zh_entries = dict(self._zh_entries)
         for row in mod_rows:
             if not isinstance(row, (list, tuple)) or len(row) < 5:
                 continue
@@ -228,9 +277,11 @@ class TranslationDB:
             entry = _clean_entry(zh, en)
             if not entry:
                 continue
-            for slug in (slug_cf, slug_mr):
-                if slug:
-                    mod_slug[_norm_slug(slug)] = entry
+            slug = slug_mr or slug_cf
+            self._remember_zh(zh_entries, 'mod', zh, en, slug)
+            for slug_value in (slug_cf, slug_mr):
+                if slug_value:
+                    mod_slug[_norm_slug(slug_value)] = entry
             mod_name[_norm(en)] = entry
             for token in re.split(r'[;|,]', str(ids or '')):
                 token = _norm_slug(token)
@@ -243,9 +294,11 @@ class TranslationDB:
             entry = _clean_entry(zh, en)
             if not entry:
                 continue
-            for slug in (slug_cf, slug_mr):
-                if slug:
-                    modpack_slug[_norm_slug(slug)] = entry
+            slug = slug_mr or slug_cf
+            self._remember_zh(zh_entries, 'modpack', zh, en, slug)
+            for slug_value in (slug_cf, slug_mr):
+                if slug_value:
+                    modpack_slug[_norm_slug(slug_value)] = entry
             modpack_name[_norm(en)] = entry
         with self._lock:
             self._mod_slug = mod_slug
@@ -253,6 +306,40 @@ class TranslationDB:
             self._modid = modid
             self._mod_name = mod_name
             self._modpack_name = modpack_name
+            self._zh_entries = zh_entries
+
+    def search_hints(self, query, project_type='mod', limit=8):
+        '''把中文搜索词转换成对应的英文资源名。'''
+
+        query = _norm(query)
+        if not query or not re.search(r'[\u3400-\u9fff]', query):
+            return []
+        results = []
+        for key, value in self._zh_entries.items():
+            entry_type, zh, en, slug = value
+            if query == key:
+                score = 0
+            elif key.startswith(query):
+                score = 1
+            elif query in key:
+                score = 2
+            else:
+                continue
+            if project_type == 'modpack' and entry_type != 'modpack':
+                score += 4
+            results.append((score, len(key), zh, en, slug))
+        results.sort(key=lambda item: (item[0], item[1]))
+        output = []
+        seen = set()
+        for _score, _length, zh, en, slug in results:
+            key = en.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            output.append({'zh': zh, 'en': en, 'slug': slug or ''})
+            if len(output) >= max(1, int(limit)):
+                break
+        return output
 
     def translate_project(self, project):
         ptype = str(getattr(project, 'project_type', 'mod') or 'mod').lower()
@@ -304,10 +391,13 @@ def translate_mod(modid='', name='', filename=''):
 def bilingual_html(zh, en, primary_size=13, secondary_size=11,
                    primary_color='#f0f0f0', secondary_color='#8d939e'):
     zh = str(zh or '').strip()
-    en = str(en or '').strip()
+    en = english_only(en, '')
+    if not zh:
+        zh = chinese_only(en, '')
+    if not en:
+        return f'<span style="font-size:{primary_size}px;color:{primary_color};">{html.escape(zh)}</span>' if zh else ''
     if not zh or _norm(zh) == _norm(en):
-        text = en or zh
-        return f'<span style="font-size:{primary_size}px;color:{primary_color};">{html.escape(text)}</span>'
+        return f'<span style="font-size:{primary_size}px;color:{primary_color};">{html.escape(en)}</span>'
     return (
         f'<span style="font-size:{primary_size}px;color:{primary_color};font-weight:600;">{html.escape(zh)}</span>'
         f'<span style="font-size:{secondary_size}px;color:{secondary_color};"> | {html.escape(en)}</span>'
@@ -316,13 +406,17 @@ def bilingual_html(zh, en, primary_size=13, secondary_size=11,
 
 def bilingual_plain(zh, en):
     zh = str(zh or '').strip()
-    en = str(en or '').strip()
+    en = english_only(en, '')
+    if not zh:
+        zh = chinese_only(en, '')
+    if not en:
+        return zh
     if not zh or _norm(zh) == _norm(en):
-        return en or zh
+        return en
     return f'{zh} | {en}'
 
 
 __all__ = [
     'TranslationDB', 'translation_db', 'translate_project', 'translate_mod',
-    'bilingual_html', 'bilingual_plain',
+    'bilingual_html', 'bilingual_plain', 'english_only', 'chinese_only',
 ]

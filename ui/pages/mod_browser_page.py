@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import threading
 import time
 import weakref
 from collections import OrderedDict, deque
@@ -196,8 +197,21 @@ class SearchWorker(QThread):
             if self._cancelled:
                 return
             translation_db.ensure_loaded(wait=3)
+            search_query = self.query
+            hints = []
+            if re.search(r'[\u3400-\u9fff]', str(self.query or '')):
+                hints = translation_db.search_hints(self.query, self.project_type, 6)
+                if hints:
+                    search_query = hints[0]['en']
             source = get_source(self.source_name)
-            result = source.search(self.query, self.project_type, mc_version=self.mc_version, loader=self.loader, category=self.category, sort=self.sort, offset=self.offset, limit=self.limit)
+            result = source.search(search_query, self.project_type, mc_version=self.mc_version, loader=self.loader, category=self.category, sort=self.sort, offset=self.offset, limit=self.limit)
+            if not result.projects and hints and self.offset == 0:
+                for hint in hints[1:4]:
+                    if self._cancelled:
+                        return
+                    result = source.search(hint['en'], self.project_type, mc_version=self.mc_version, loader=self.loader, category=self.category, sort=self.sort, offset=self.offset, limit=self.limit)
+                    if result.projects:
+                        break
             if not self._cancelled:
                 self.done.emit(self.generation, result)
             return
@@ -331,9 +345,14 @@ class CategoriesWorker(QThread):
 
 class IconLoader(QObject):
     ready = Signal(str, QPixmap)
+    _fallback_ready = Signal(str, bytes)
+    _fallback_failed = Signal(str)
     def __init__(self, parent=None):
         super().__init__(parent)
         self._manager = QNetworkAccessManager(self)
+        self._fallback_ready.connect(self._on_fallback_ready)
+        self._fallback_failed.connect(self._on_fallback_failed)
+        self._fallback_active = set()
         try:
             cache_dir = scl_dir() / 'icon_cache'
             cache_dir.mkdir(parents=True, exist_ok=True)
@@ -400,21 +419,70 @@ class IconLoader(QObject):
         url = self._replies.pop(reply, None)
         if url:
             self._active.discard(url)
+        ok = False
         try:
             if reply.error() == QNetworkReply.NoError:
                 data = reply.readAll()
                 pix = QPixmap()
-                if pix.loadFromData(data):
-                    if not pix.isNull():
-                        scaled = pix.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                        self._cache[url] = scaled
-                        while len(self._cache) > self._cache_limit:
-                            self._cache.popitem(last=False)
-                        self.ready.emit(url, scaled)
+                if pix.loadFromData(data) and not pix.isNull():
+                    scaled = pix.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    self._cache[url] = scaled
+                    while len(self._cache) > self._cache_limit:
+                        self._cache.popitem(last=False)
+                    self.ready.emit(url, scaled)
+                    ok = True
+            if not ok and self._enabled and url:
+                self._start_fallback(url)
         except RuntimeError:
             pass
-        reply.deleteLater()
-        self._process()
+        finally:
+            reply.deleteLater()
+            self._process()
+
+    def _start_fallback(self, url):
+        if not url or not self._enabled or url in self._fallback_active:
+            return
+        self._fallback_active.add(url)
+        threading.Thread(target=self._fetch_fallback, args=(url,), daemon=True).start()
+
+    def _fetch_fallback(self, url):
+        data = b''
+        try:
+            http = HttpClient(timeout=20, retries=1, verify=False)
+            try:
+                response = http.get(url)
+                if response.status_code < 400:
+                    data = response.content or b''
+            finally:
+                http.close()
+        except Exception:
+            data = b''
+        if data:
+            try:
+                self._fallback_ready.emit(url, data)
+            except RuntimeError:
+                pass
+        else:
+            try:
+                self._fallback_failed.emit(url)
+            except RuntimeError:
+                pass
+
+    def _on_fallback_ready(self, url, data):
+        self._fallback_active.discard(url)
+        if not self._enabled:
+            return
+        pix = QPixmap()
+        if not pix.loadFromData(data) or pix.isNull():
+            return
+        scaled = pix.scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self._cache[url] = scaled
+        while len(self._cache) > self._cache_limit:
+            self._cache.popitem(last=False)
+        self.ready.emit(url, scaled)
+
+    def _on_fallback_failed(self, url):
+        self._fallback_active.discard(url)
 
     def stop(self):
         self._enabled = False
@@ -454,7 +522,7 @@ class ProjectCard(QFrame):
         text_box.setSpacing(3)
         title = QLabel()
         title.setTextFormat(Qt.RichText)
-        title.setText(bilingual_html(project.translated_title, project.title, 12, 10))
+        title.setText(bilingual_html(project.translated_title, project.english_title, 12, 10))
         title.setStyleSheet('background: transparent;')
         text_box.addWidget(title)
         desc = QLabel(project.description or '暂无描述')
@@ -759,7 +827,7 @@ class DependencyCard(QFrame):
         text.setSpacing(1)
         title = QLabel()
         title.setTextFormat(Qt.RichText)
-        title.setText(bilingual_html(project.translated_title, project.title, 13, 11))
+        title.setText(bilingual_html(project.translated_title, project.english_title, 13, 11))
         title.setStyleSheet('background:transparent;')
         text.addWidget(title)
         sub = QLabel(project.source)
@@ -826,7 +894,7 @@ class ProjectFilesDialog(QDialog):
             self.setAttribute(Qt.WA_StyledBackground, True)
             self.setStyleSheet('QDialog#ProjectFilesPage { background: transparent; color: #f0f0f0; }')
         else:
-            self.setWindowTitle(f'选择版本 - {bilingual_plain(project.translated_title, project.title)}')
+            self.setWindowTitle(f'选择版本 - {bilingual_plain(project.translated_title, project.english_title)}')
             self.setWindowIcon(QIcon())
             self.setMinimumSize(820, 640)
             self.setStyleSheet('background-color: #1e1e1e; color: #f0f0f0;')
@@ -840,7 +908,7 @@ class ProjectFilesDialog(QDialog):
             title_row.addWidget(back_btn)
         title = QLabel()
         title.setTextFormat(Qt.RichText)
-        title.setText(bilingual_html(project.translated_title, project.title, 16, 12))
+        title.setText(bilingual_html(project.translated_title, project.english_title, 16, 12))
         title_row.addWidget(title)
         title_row.addStretch(1)
         layout.addLayout(title_row)
@@ -1013,7 +1081,7 @@ class ProjectFilesDialog(QDialog):
             highlighted = bool(self.mc_version and key == self.mc_version)
             section = CollapsibleSection(f'Minecraft {key}', f'{len(group_files)} 个文件' + (' · 当前游戏版本' if highlighted else ''), highlighted=highlighted, expanded=highlighted or key == keys[0] and (not self.mc_version or not compatible))
             for mod_file in group_files:
-                row = FileRow(mod_file, self.mc_version, self.project.title, self.project.translated_title)
+                row = FileRow(mod_file, self.mc_version, self.project.english_title, self.project.translated_title)
                 row.clicked.connect(self._select_row)
                 section.add_widget(row)
                 self._file_rows.append(row)
@@ -1571,7 +1639,7 @@ class ModBrowserPage(QWidget):
             item = getattr(card, '_list_item', None)
             if item is None:
                 continue
-            title = f'{card.project.title} {card.project.translated_title} {card.project.slug}'.lower()
+            title = f'{card.project.title} {card.project.english_title} {card.project.translated_title} {card.project.slug}'.lower()
             if not text:
                 item.setHidden(False)
                 shown += 1
@@ -1626,7 +1694,7 @@ class ModBrowserPage(QWidget):
         if project.website_url:
             QDesktopServices.openUrl(QUrl(project.website_url))
             return
-        QMessageBox.information(self, bilingual_plain(project.translated_title, project.title), f'{project.description}\n\n来源: {project.source}\n下载量: {project.downloads:,}')
+        QMessageBox.information(self, bilingual_plain(project.translated_title, project.english_title), f'{project.description}\n\n来源: {project.source}\n下载量: {project.downloads:,}')
 
     def _target_game_dir(self):
         base = Path(self.config.get_mc_dir())
@@ -1693,7 +1761,7 @@ class ModBrowserPage(QWidget):
         original = sanitize_filename(mod_file.filename, 'download.jar')
         stem = Path(original).stem
         suffix = Path(original).suffix or '.jar'
-        title = sanitize_filename(project.translated_title or project.title or stem, stem)
+        title = sanitize_filename(project.translated_title or project.english_title or stem, stem)
         if fmt == 'bracket_title':
             name = f'[{title}] {stem}{suffix}'
         elif fmt == 'bracket_title_cn':
