@@ -11,6 +11,8 @@ class DownloadStatusBar(QFrame):
         self.setCursor(Qt.PointingHandCursor)
         self._height_anim = None
         self._progress_anim = None
+        self._progress_target = -1
+        self._failed_view = None
         self._target_height = 34
         self._hiding = False
         self.setStyleSheet('\n            QFrame { background:rgba(20,22,28,0.92); border-top:1px solid rgba(255,255,255,0.12);\n                     border-bottom-right-radius:14px; }\n            QLabel { color:rgba(255,255,255,0.82); font-size:12px; background:transparent; }\n            QProgressBar { background:rgba(255,255,255,0.12); border:none;\n                           border-radius:4px; height:8px; text-align:center; }\n            QProgressBar::chunk { background:#0078d4; border-radius:4px; }\n        ')
@@ -25,6 +27,9 @@ class DownloadStatusBar(QFrame):
         self.progress.setTextVisible(False)
         self.progress.setFixedHeight(8)
         layout.addWidget(self.progress, 1)
+        self._progress_anim = QPropertyAnimation(self.progress, b'value', self)
+        self._progress_anim.setDuration(160)
+        self._progress_anim.setEasingCurve(QEasingCurve.OutCubic)
         self.percent_label = QLabel('0%')
         self.percent_label.setFixedWidth(56)
         self.percent_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -80,14 +85,16 @@ class DownloadStatusBar(QFrame):
 
     def _animate_progress(self, value: int):
         target = max(0, min(1000, int(value)))
-        if self._progress_anim is not None:
-            self._progress_anim.stop()
-        anim = QPropertyAnimation(self.progress, b'value', self)
-        anim.setDuration(220)
+        if target == self._progress_target:
+            return
+        self._progress_target = target
+        anim = self._progress_anim
+        if anim is None:
+            self.progress.setValue(target)
+            return
+        anim.stop()
         anim.setStartValue(self.progress.value())
         anim.setEndValue(target)
-        anim.setEasingCurve(QEasingCurve.OutCubic)
-        self._progress_anim = anim
         anim.start()
 
     def set_snapshot(self, snapshot: dict):
@@ -97,12 +104,16 @@ class DownloadStatusBar(QFrame):
                 return
         failed = bool(snapshot.get('failed')) and not snapshot.get('active')
         percent = max(0.0, min(100.0, float(snapshot.get('percent', 0))))
-        self.title_label.setText(snapshot.get('title', '下载任务'))
-        self.title_label.setToolTip('\n'.join((part for part in (snapshot.get('title', ''), snapshot.get('status', '')) if part)))
+        title = snapshot.get('title', '下载任务')
+        if self.title_label.text() != title:
+            self.title_label.setText(title)
+        self.title_label.setToolTip('\n'.join((part for part in (title, snapshot.get('status', '')) if part)))
         self._animate_progress(int(percent * 10))
         self.percent_label.setText(f'{percent:.2f}%')
-        self.percent_label.setStyleSheet('color:#ff8a8a; font-size:12px; background:transparent;' if failed else 'color:rgba(255,255,255,0.82); font-size:12px; background:transparent;')
-        self.progress.setStyleSheet('QProgressBar { background:rgba(255,255,255,0.12); border:none; border-radius:4px; height:8px; } QProgressBar::chunk { background:#d83b3b; border-radius:4px; }' if failed else 'QProgressBar { background:rgba(255,255,255,0.12); border:none; border-radius:4px; height:8px; } QProgressBar::chunk { background:#0078d4; border-radius:4px; }')
+        if self._failed_view is not failed:
+            self._failed_view = failed
+            self.percent_label.setStyleSheet('color:#ff8a8a; font-size:12px; background:transparent;' if failed else 'color:rgba(255,255,255,0.82); font-size:12px; background:transparent;')
+            self.progress.setStyleSheet('QProgressBar { background:rgba(255,255,255,0.12); border:none; border-radius:4px; height:8px; } QProgressBar::chunk { background:#d83b3b; border-radius:4px; }' if failed else 'QProgressBar { background:rgba(255,255,255,0.12); border:none; border-radius:4px; height:8px; } QProgressBar::chunk { background:#0078d4; border-radius:4px; }')
         speed = snapshot.get('speed') or '0 B/s'
         self.speed_label.setText('失败' if failed else speed)
         self._animate_show()

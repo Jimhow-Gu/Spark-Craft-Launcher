@@ -15,6 +15,18 @@ class DownloadManager(QObject):
         self._tasks = {}
         self._order = []
         self._cancel_callbacks = {}
+        self._emit_lock = threading.Lock()
+        self._last_emit = 0.0
+
+    def _emit_changed(self, force=False):
+        '''限制进度刷新频率，避免高频信号拖慢主界面。'''
+
+        now = time.monotonic()
+        with self._emit_lock:
+            if not force and now - self._last_emit < 0.08:
+                return
+            self._last_emit = now
+        self.changed.emit()
 
     @classmethod
     def instance(cls):
@@ -29,7 +41,7 @@ class DownloadManager(QObject):
                 self._order.append(task_id)
             if cancel_callback is not None:
                 self._cancel_callbacks[task_id] = cancel_callback
-        self.changed.emit()
+        self._emit_changed(force=True)
 
     def update_task(self, task_id, **kwargs):
         with self._lock:
@@ -39,7 +51,7 @@ class DownloadManager(QObject):
             for key, value in kwargs.items():
                 if key in task:
                     task[key] = value
-        self.changed.emit()
+        self._emit_changed()
 
     def set_cancel_callback(self, task_id, callback):
         '''任务创建后再绑定取消回调（例如先创建 Worker 再启动任务）。'''
@@ -51,7 +63,7 @@ class DownloadManager(QObject):
                 changed = True
         # 不能在持锁时 emit：UI 槽会回调 task()/tasks()，同一把非重入锁会自锁
         if changed:
-            self.changed.emit()
+            self._emit_changed(force=True)
 
     def update_step(self, task_id, index, text=None, state=None, percent=None):
         with self._lock:
@@ -65,7 +77,7 @@ class DownloadManager(QObject):
                 step['state'] = state
             if percent is not None:
                 step['percent'] = max(0.0, min(100.0, float(percent)))
-        self.changed.emit()
+        self._emit_changed()
 
     def finish_task(self, task_id, success, message=''):
         removed = False
@@ -88,7 +100,7 @@ class DownloadManager(QObject):
                     if step['state'] == 'active':
                         step['state'] = 'error'
         if removed or not success:
-            self.changed.emit()
+            self._emit_changed(force=True)
 
     def remove_task(self, task_id):
         with self._lock:
@@ -96,7 +108,7 @@ class DownloadManager(QObject):
             self._cancel_callbacks.pop(task_id, None)
             if task_id in self._order:
                 self._order.remove(task_id)
-        self.changed.emit()
+        self._emit_changed(force=True)
 
     def cancel_task(self, task_id):
         '''关闭任务；如果仍在进行中，同时通知对应 worker 取消。'''
@@ -107,7 +119,7 @@ class DownloadManager(QObject):
             callback = self._cancel_callbacks.pop(task_id, None)
             if task_id in self._order:
                 self._order.remove(task_id)
-        self.changed.emit()
+        self._emit_changed(force=True)
         if callback is not None:
             try:
                 callback()

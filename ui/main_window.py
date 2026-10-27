@@ -367,11 +367,11 @@ class MainWindow(QMainWindow):
         self.music_toggle_btn.setEnabled(has_music)
         set_button_icon(
             self.music_toggle_btn,
-            'stop' if audible else 'music',
+            'music_off' if audible else 'music',
             16,
             '#e6edf3',
         )
-        self.music_toggle_btn.setToolTip('停止背景音乐' if audible else '播放背景音乐')
+        self.music_toggle_btn.setToolTip('暂停背景音乐' if audible else '播放背景音乐')
         if hasattr(self, 'media_row'):
             self.media_row.setVisible(video_available or has_music)
 

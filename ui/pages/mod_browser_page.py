@@ -15,10 +15,11 @@ from collections import OrderedDict, deque
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
+from urllib.parse import quote
 from PySide6.QtCore import (Qt, Signal, QThread, QTimer, QUrl, QSize, QObject, QEvent)
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPixmap)
 from PySide6.QtNetwork import (QNetworkAccessManager, QNetworkDiskCache, QNetworkReply, QNetworkRequest)
-from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QHeaderView, QAbstractItemView, QProgressBar, QSizePolicy, QRadioButton, QButtonGroup, QScrollArea, QToolButton, QDialogButtonBox, QStackedWidget)
+from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QHeaderView, QAbstractItemView, QProgressBar, QSizePolicy, QRadioButton, QButtonGroup, QScrollArea, QToolButton, QDialogButtonBox, QStackedWidget)
 from core.app_font import ui_font
 from ui.widgets.back_button import BackButton
 from ui.widgets.dark_dialog import DarkQuestionDialog
@@ -31,7 +32,7 @@ from core.mods import (LOADER_RELEVANT_TYPES, LOADERS, PROJECT_TYPES, SORTS, Mod
 from core.mod_translations import bilingual_html, bilingual_plain, translation_db
 from core.net import (DownloadError, HttpClient, sanitize_filename, unique_path, is_network_error_text, network_available)
 from core.paths import scl_dir
-from ui.widgets.toast import notify_network_failure
+from ui.widgets.toast import notify_network_failure, show_toast
 from core.version import VersionManager
 PROJECT_TEMP = scl_dir() / 'temp_install'
 PROJECT_TEMP.mkdir(parents=True, exist_ok=True)
@@ -759,6 +760,52 @@ class CollapsibleSection(QWidget):
         self._toggle.setChecked(expanded)
 
 
+def _release_badge_pixmap(kind, size=22):
+    kind = str(kind or 'release').lower()
+    if kind == 'beta':
+        letter, color = 'B', QColor('#d18a2f')
+    elif kind == 'alpha':
+        letter, color = 'A', QColor('#3f8fc7')
+    else:
+        letter, color = 'R', QColor('#75b93f')
+    pix = QPixmap(max(16, int(size)), max(16, int(size)))
+    pix.fill(Qt.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    w = h = pix.width()
+    cx = w / 2.0
+    top = QPainterPath()
+    top.moveTo(cx, 0.8)
+    top.lineTo(w - 1.2, h * 0.28)
+    top.lineTo(cx, h * 0.53)
+    top.lineTo(1.2, h * 0.28)
+    top.closeSubpath()
+    left = QPainterPath()
+    left.moveTo(1.2, h * 0.28)
+    left.lineTo(cx, h * 0.53)
+    left.lineTo(cx, h - 1.0)
+    left.lineTo(1.2, h * 0.76)
+    left.closeSubpath()
+    right = QPainterPath()
+    right.moveTo(cx, h * 0.53)
+    right.lineTo(w - 1.2, h * 0.28)
+    right.lineTo(w - 1.2, h * 0.76)
+    right.lineTo(cx, h - 1.0)
+    right.closeSubpath()
+    painter.fillPath(top, color.lighter(132))
+    painter.fillPath(left, color)
+    painter.fillPath(right, color.darker(122))
+    painter.setPen(Qt.NoPen)
+    painter.setPen(QColor('#ffffff'))
+    font = painter.font()
+    font.setPixelSize(max(9, int(w * 0.48)))
+    font.setBold(True)
+    painter.setFont(font)
+    painter.drawText(pix.rect(), Qt.AlignCenter, letter)
+    painter.end()
+    return pix
+
+
 class FileRow(QWidget):
     clicked = Signal(object)
     def __init__(self, mod_file, current_mc='', project_title='', project_translated='', parent=None):
@@ -768,6 +815,12 @@ class FileRow(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 7, 10, 7)
         layout.setSpacing(8)
+        release = str(mod_file.release_type or 'release').lower()
+        badge = QLabel()
+        badge.setFixedSize(22, 22)
+        badge.setPixmap(_release_badge_pixmap(release, 22))
+        badge.setToolTip({'release': '正式版', 'beta': '测试版', 'alpha': '早期测试版'}.get(release, release))
+        layout.addWidget(badge, 0, Qt.AlignTop)
         style = ''
         try:
             style = ConfigManager().get('mod_manage_style', 'title_translated')
@@ -1016,6 +1069,33 @@ class ProjectFilesDialog(QDialog):
                 self.world_combo.setEnabled(False)
             world_row.addWidget(self.world_combo, 1)
             layout.addLayout(world_row)
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        self.modrinth_btn = QPushButton('转到 Modrinth')
+        self.modrinth_btn.setStyleSheet(
+            'QPushButton { background:transparent; color:#9ac35a; border:1px solid #719b3d;'
+            ' border-radius:6px; padding:6px 12px; }'
+            'QPushButton:hover { background:rgba(120,170,60,0.16); }'
+        )
+        self.modrinth_btn.clicked.connect(self._open_modrinth)
+        self.mcmod_btn = QPushButton('转到 MC 百科')
+        self.mcmod_btn.setStyleSheet(
+            'QPushButton { background:transparent; color:#e8e8e8; border:1px solid rgba(255,255,255,0.30);'
+            ' border-radius:6px; padding:6px 12px; }'
+            'QPushButton:hover { background:rgba(255,255,255,0.10); }'
+        )
+        self.mcmod_btn.clicked.connect(self._open_mcmod)
+        self.copy_name_btn = QPushButton('复制名称')
+        self.copy_name_btn.setStyleSheet(
+            'QPushButton { background:transparent; color:#e8e8e8; border:1px solid rgba(255,255,255,0.30);'
+            ' border-radius:6px; padding:6px 12px; }'
+            'QPushButton:hover { background:rgba(255,255,255,0.10); }'
+        )
+        self.copy_name_btn.clicked.connect(self._copy_name)
+        action_row.addWidget(self.modrinth_btn, 1)
+        action_row.addWidget(self.mcmod_btn, 1)
+        action_row.addWidget(self.copy_name_btn, 1)
+        layout.addLayout(action_row)
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
         self.download_btn = QPushButton('下一步')
@@ -1290,6 +1370,26 @@ class ProjectFilesDialog(QDialog):
         if self.world_combo is None:
             return ''
         return self.world_combo.currentData() or ''
+
+    def _open_modrinth(self):
+        project = self.project
+        project_type = str(project.project_type or 'mod')
+        url = str(project.website_url or '')
+        if 'modrinth.com' not in url:
+            slug = str(project.slug or '').strip()
+            if slug:
+                url = f'https://modrinth.com/{project_type}/{slug}'
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
+
+    def _open_mcmod(self):
+        name = self.project.translated_title or self.project.english_title or self.project.title
+        QDesktopServices.openUrl(QUrl(f'https://search.mcmod.cn/s?key={quote(str(name))}'))
+
+    def _copy_name(self):
+        name = bilingual_plain(self.project.translated_title, self.project.english_title) or self.project.title
+        QApplication.clipboard().setText(str(name))
+        show_toast(f'已复制名称：{name}', 'success', self, 2600)
 
     def cleanup(self):
         if self._cleaned:
@@ -1747,6 +1847,49 @@ class ModBrowserPage(QWidget):
             return
         QMessageBox.information(self, bilingual_plain(project.translated_title, project.english_title), f'{project.description}\n\n来源: {project.source}\n下载量: {project.downloads:,}')
 
+    def _ensure_selected_version(self):
+        '''未选择版本时先让用户选择，避免下载到全局根目录。'''
+
+        current = str(self.config.get('selected_version', '') or '').strip()
+        try:
+            rows = self.version_mgr.get_installed_versions()
+        except Exception:
+            rows = []
+        ids = []
+        for row in rows:
+            vid = str(row.get('id') if isinstance(row, dict) else row or '').strip()
+            if vid and vid not in ids:
+                ids.append(vid)
+        if current and current in ids:
+            return True
+        if not ids:
+            return False
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle('选择游戏版本')
+        dialog.setLabelText('当前没有选择游戏版本，请选择要安装到的版本：')
+        dialog.setComboBoxItems(ids)
+        dialog.setComboBoxEditable(False)
+        dialog.setOkButtonText('选择')
+        dialog.setCancelButtonText('取消')
+        dialog.setStyleSheet(
+            'QDialog { background:#1f2229; color:#f0f0f0; }'
+            'QLabel { color:#f0f0f0; }'
+            'QComboBox { background:rgba(255,255,255,0.08); color:#f0f0f0;'
+            ' border:1px solid rgba(255,255,255,0.16); border-radius:6px; padding:4px 8px; }'
+            'QComboBox QAbstractItemView { background:#2a2d36; color:#f0f0f0;'
+            ' selection-background-color:#0078d4; }'
+            'QPushButton { background:#3a3d47; color:#f0f0f0; border:none;'
+            ' border-radius:6px; padding:6px 14px; }'
+        )
+        if dialog.exec() != QInputDialog.Accepted:
+            return False
+        version_id = str(dialog.textValue() or '').strip()
+        if not version_id:
+            return False
+        self.config.set('selected_version', version_id)
+        self.config.save()
+        return True
+
     def _target_game_dir(self):
         base = Path(self.config.get_mc_dir())
         vid = str(self.config.get('selected_version', '') or '').strip()
@@ -1841,6 +1984,8 @@ class ModBrowserPage(QWidget):
             if dialog.choice == 'go':
                 self.download_game_requested.emit()
             return
+        if not self._ensure_selected_version():
+            return
         from core.net import DownloadGate
         if DownloadGate.available() <= 0:
             QMessageBox.warning(self, '下载任务已满', f'当前同时下载任务已达到上限 {DownloadGate.max_threads()}。\n请前往「全局设置 → 下载线程数」调整后再试。')
@@ -1878,7 +2023,8 @@ class ModBrowserPage(QWidget):
             page.deleteLater()
         self.stack.setCurrentWidget(self._browser_widget)
 
-    def _start_project_download(self, project, mod_file, world, game_dir):
+    def _start_project_download(self, project, mod_file, world, game_dir, manual_dir=None):
+        display_name = project.translated_title or project.english_title or project.title
         if self.project_type == 'modpack':
             dest = PROJECT_TEMP / 'modpacks' / sanitize_filename(mod_file.filename, 'modpack.mrpack')
             self._pending_download = 'modpack', project.title
@@ -1894,9 +2040,21 @@ class ModBrowserPage(QWidget):
                 dest_dir = game_dir / 'shaderpacks'
             else:
                 dest_dir = game_dir / 'mods'
-            dest_dir.mkdir(parents=True, exist_ok=True)
+            if manual_dir is not None:
+                dest_dir = Path(manual_dir)
+            try:
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                if not dest_dir.is_dir():
+                    raise OSError('not a directory')
+            except OSError:
+                folder_name = dest_dir.name or 'mods'
+                QTimer.singleShot(
+                    120,
+                    (lambda: self._choose_manual_folder(project, mod_file, world, game_dir, folder_name)),
+                )
+                return
             dest = unique_path(dest_dir, self._formatted_filename(project, mod_file))
-            self._pending_download = 'file', str(dest)
+            self._pending_download = 'file', str(dest), display_name
         self._download_expected_size = int(mod_file.size or 0)
         worker = DownloadWorker(mod_file.download_url, dest, mod_file.sha1, mod_file.size)
         worker.status.connect(self.status_label.setText)
@@ -1908,6 +2066,16 @@ class ModBrowserPage(QWidget):
         self.download_bar.show()
         self.download_bar.reset_value()
         _track_worker(worker)
+
+    def _choose_manual_folder(self, project, mod_file, world, game_dir, folder_name='mods'):
+        QMessageBox.warning(
+            self,
+            '未找到安装文件夹',
+            f'当前没有合适的 {folder_name} 文件夹，请手动选择位置。',
+        )
+        chosen = QFileDialog.getExistingDirectory(self, '选择安装位置', str(game_dir))
+        if chosen:
+            self._start_project_download(project, mod_file, world, game_dir, Path(chosen))
 
     def _on_download_progress(self, done, total):
         if total <= 0:
@@ -1923,15 +2091,21 @@ class ModBrowserPage(QWidget):
     def _on_download_done(self, path):
         self.download_bar.hide()
         self.download_bar.setRange(0, 100)
-        kind = self._pending_download[0] if self._pending_download else 'file'
-        name = self._pending_download[1] if self._pending_download else ''
+        pending = self._pending_download or ()
+        kind = pending[0] if len(pending) > 0 else 'file'
+        name = pending[1] if len(pending) > 1 else ''
+        display = pending[2] if len(pending) > 2 else name
         self._pending_download = None
         if kind == 'modpack':
             self.status_label.setText('整合包下载完成，准备导入...')
             self.import_pack_requested.emit(path, name)
             return
         self.status_label.setText(f'下载完成: {path}')
-        QMessageBox.information(self, '下载完成', f'已保存到：\n{path}')
+        display = display or Path(path).stem
+        QTimer.singleShot(
+            150,
+            (lambda n=display: show_toast(f'{n} 下载成功！', 'success', self, 3500)),
+        )
 
     def _on_download_error(self, message):
         self.download_bar.hide()
