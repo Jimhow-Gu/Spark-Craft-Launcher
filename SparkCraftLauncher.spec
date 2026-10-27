@@ -71,7 +71,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="SparkCraftLauncher",
+    name="Spark Craft Launcher",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

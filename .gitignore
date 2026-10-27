@@ -10,6 +10,8 @@ dist/
 _recovery_backup_core/
 SparkCraftLauncher.exe
 SparkCraftLauncher.zip
+Spark Craft Launcher.exe
+Spark Craft Launcher.zip
 *.stackdump
 Amiya.mp4
 *.mp4
@@ -22,3 +24,5 @@ build3/
 dist3/
 build4/
 dist4/
+build5/
+dist5/

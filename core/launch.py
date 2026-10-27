@@ -1135,8 +1135,62 @@ def set_process_priority(pid: int, level: str) -> bool:
     except Exception:
         return False
 
+def _process_tree_pids(pid: int) -> set:
+    '''返回进程自身及所有子进程 PID。Java 8 的 Oracle 启动器会再开子进程，窗口属于子进程。'''
+
+    if not pid:
+        return set()
+    pids = {int(pid)}
+    if sys.platform != 'win32':
+        return pids
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class PROCESSENTRY32W(ctypes.Structure):
+            _fields_ = [
+                ('dwSize', wintypes.DWORD),
+                ('cntUsage', wintypes.DWORD),
+                ('th32ProcessID', wintypes.DWORD),
+                ('th32DefaultHeapID', ctypes.c_void_p),
+                ('th32ModuleID', wintypes.DWORD),
+                ('cntThreads', wintypes.DWORD),
+                ('th32ParentProcessID', wintypes.DWORD),
+                ('pcPriClassBase', ctypes.c_long),
+                ('dwFlags', wintypes.DWORD),
+                ('szExeFile', wintypes.WCHAR * 260),
+            ]
+
+        kernel32 = ctypes.windll.kernel32
+        TH32CS_SNAPPROCESS = 0x00000002
+        INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+        snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if not snapshot or snapshot == INVALID_HANDLE_VALUE:
+            return pids
+        children = {}
+        try:
+            entry = PROCESSENTRY32W()
+            entry.dwSize = ctypes.sizeof(entry)
+            ok = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+            while ok:
+                children.setdefault(int(entry.th32ParentProcessID), []).append(int(entry.th32ProcessID))
+                ok = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+        finally:
+            kernel32.CloseHandle(snapshot)
+        stack = [int(pid)]
+        while stack:
+            parent = stack.pop()
+            for child in children.get(parent, ()):
+                if child not in pids:
+                    pids.add(child)
+                    stack.append(child)
+    except Exception:
+        pass
+    return pids
+
+
 def _game_window_handle(pid: int):
-    """按进程查找可见游戏窗口；1.8.9 等低版本窗口可能暂时没有标题，因此也接受 LWJGL/GLFW 类名。"""
+    """按进程树查找可见游戏窗口；兼容 Java 启动代理子进程和低版本无标题 LWJGL 窗口。"""
 
     if sys.platform != 'win32' or not pid:
         return 0
@@ -1144,8 +1198,9 @@ def _game_window_handle(pid: int):
         import ctypes
         from ctypes import wintypes
         user32 = ctypes.windll.user32
-        best = {'hwnd': 0, 'area': 0}
+        best = {'hwnd': 0, 'area': 0, 'pid': 0}
         known_classes = ('lwjgl', 'glfw30', 'glfw', 'sunawtframe', 'minecraft')
+        pids = _process_tree_pids(pid)
         EnumProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
         def callback(hwnd, _lparam):
@@ -1153,7 +1208,7 @@ def _game_window_handle(pid: int):
                 return True
             proc_id = wintypes.DWORD()
             user32.GetWindowThreadProcessId(hwnd, ctypes.byref(proc_id))
-            if proc_id.value != pid:
+            if proc_id.value not in pids:
                 return True
             rect = wintypes.RECT()
             if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
@@ -1172,6 +1227,7 @@ def _game_window_handle(pid: int):
             if area > best['area']:
                 best['hwnd'] = hwnd
                 best['area'] = area
+                best['pid'] = int(proc_id.value)
             return True
 
         user32.EnumWindows(EnumProc(callback), 0)

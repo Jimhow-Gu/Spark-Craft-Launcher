@@ -19,7 +19,7 @@ from core.paths import safe_rmtree, scl_dir
 
 CURRENT_VERSION = '1.0.2'
 VERSION_DISPLAY = 'V1.0.2（正式版）'
-REPO = 'Jimhow-GU/SparkCraftLauncher'
+REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
 
 
@@ -39,7 +39,7 @@ def fetch_latest_release(timeout=12):
     http = HttpClient(timeout=timeout, retries=1, verify=False)
     data = http.get_json(
         API_LATEST,
-        headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'SparkCraftLauncher-Updater'},
+        headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'Spark-Craft-Launcher-Updater'},
     )
     if not isinstance(data, dict):
         return None
@@ -104,7 +104,7 @@ class UpdateDownloadWorker(QThread):
 
     def run(self):
         url = str(self.info.get('asset_url') or '')
-        name = str(self.info.get('asset_name') or 'SparkCraftLauncher-update.exe')
+        name = str(self.info.get('asset_name') or 'Spark Craft Launcher-update.exe')
         if not url:
             self.failed.emit('该 Release 没有可下载的 exe/zip 附件')
             return
@@ -134,22 +134,23 @@ class UpdateDownloadWorker(QThread):
 
 def _extract_exe(asset_path):
     path = Path(asset_path)
+    target = scl_dir() / 'update' / 'Spark Craft Launcher.exe.new'
+    target.parent.mkdir(parents=True, exist_ok=True)
     if path.suffix.lower() == '.exe':
         data = path.read_bytes()[:2]
         if data != b'MZ':
             raise DownloadError('下载的更新文件不是有效的 exe')
-        target = scl_dir() / 'update' / 'SparkCraftLauncher.exe.new'
-        target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target)
         return target
     if path.suffix.lower() != '.zip':
         raise DownloadError('不支持的更新附件格式')
-    target = scl_dir() / 'update' / 'SparkCraftLauncher.exe.new'
-    target.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(path) as zf:
-        member = next((name for name in zf.namelist() if Path(name).name.lower() == 'sparkcraftlauncher.exe'), '')
+        members = [name for name in zf.namelist() if Path(name).suffix.lower() == '.exe']
+        member = next((name for name in members if Path(name).name.lower() in ('spark craft launcher.exe', 'sparkcraftlauncher.exe')), '')
+        if not member and len(members) == 1:
+            member = members[0]
         if not member:
-            raise DownloadError('更新 zip 中没有 SparkCraftLauncher.exe')
+            raise DownloadError('更新 zip 中没有可用的启动器 exe')
         target.write_bytes(zf.read(member))
     if target.read_bytes()[:2] != b'MZ':
         raise DownloadError('更新文件不是有效的 exe')

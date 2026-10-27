@@ -1,4 +1,4 @@
-# PMGL - Python Minecraft Game Launcher
+# Spark Craft Launcher
 
 基于 **PySide6 + PyQt-Fluent-Widgets + minecraft-launcher-lib** 开发的现代化 Minecraft Java 版启动器。
 

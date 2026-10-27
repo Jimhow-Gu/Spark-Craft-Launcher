@@ -92,10 +92,10 @@ class AboutPage(QWidget):
             scl.setPixmap(rounded_pixmap(
                 hidpi_pixmap(trim_transparent(QPixmap(str(scl_logo))), 44, 44)
             ))
-        layout.addLayout(self._row(gubwon, 'Gubwon', 'SparkCraftLauncher 的开发者'))
-        layout.addLayout(self._row(deepseek, 'DeepSeek', 'SparkCraftLauncher 的协助开发者'))
-        layout.addLayout(self._row(zhipu, '智谱AI', 'SparkCraftLauncher 的协助开发者'))
-        scl_row = self._row(scl, 'SparkCraftLauncher', f'当前版本: {_VERSION_TEXT}')
+        layout.addLayout(self._row(gubwon, 'Gubwon', 'Spark Craft Launcher 的开发者'))
+        layout.addLayout(self._row(deepseek, 'DeepSeek', 'Spark Craft Launcher 的协助开发者'))
+        layout.addLayout(self._row(zhipu, '智谱AI', 'Spark Craft Launcher 的协助开发者'))
+        scl_row = self._row(scl, 'Spark Craft Launcher', f'当前版本: {_VERSION_TEXT}')
         self.check_update_btn = QPushButton('检查更新')
         self.check_update_btn.setCursor(Qt.PointingHandCursor)
         self.check_update_btn.setStyleSheet(
