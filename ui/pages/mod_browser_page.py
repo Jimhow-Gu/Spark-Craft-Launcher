@@ -5,6 +5,7 @@
 '''
 
 from __future__ import annotations
+import html
 import json
 import math
 import re
@@ -12,6 +13,7 @@ import threading
 import time
 import weakref
 from collections import OrderedDict, deque
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 from PySide6.QtCore import (Qt, Signal, QThread, QTimer, QUrl, QSize, QObject, QEvent)
@@ -498,6 +500,65 @@ class IconLoader(QObject):
         self._active.clear()
 
 
+def _format_downloads(value):
+    try:
+        count = int(value or 0)
+    except (TypeError, ValueError):
+        count = 0
+    if count >= 100000000:
+        return f'{count / 100000000:.1f} 亿'
+    if count >= 10000:
+        return f'{count / 10000:.1f} 万'
+    return f'{count:,}'
+
+
+def _relative_update(value):
+    text = str(value or '').strip()
+    if not text:
+        return '未知'
+    try:
+        date = datetime.strptime(text[:10], '%Y-%m-%d')
+        days = max(0, (datetime.now() - date).days)
+    except (TypeError, ValueError):
+        return text
+    if days <= 0:
+        return '今天'
+    if days < 30:
+        return f'{days} 天前'
+    if days < 365:
+        return f'{max(1, days // 30)} 个月前'
+    return f'{days // 365} 年前'
+
+
+def _version_summary(versions):
+    years = []
+    for item in list(versions or [])[:20]:
+        match = re.search(r'\d+\.\d+(?:\.\d+)?', str(item or ''))
+        if match and match.group(0) not in years:
+            years.append(match.group(0))
+    if not years:
+        return '全版本'
+    suffix = '…' if len(years) > 3 else ''
+    return ', '.join(years[:3]) + suffix
+
+
+_CATEGORY_COLORS = ('#73a9d8', '#67c49b', '#e0a35c', '#bd8ee3', '#d98282', '#72c4c8')
+
+
+def _project_summary_html(project):
+    tags = []
+    for index, category in enumerate(list(project.categories or [])[:6]):
+        if not category:
+            continue
+        color = _CATEGORY_COLORS[index % len(_CATEGORY_COLORS)]
+        tags.append(f'<span style="color:{color};font-size:11px;">{html.escape(str(category))}</span>')
+    description = ' '.join(str(project.description or '暂无描述').split())
+    prefix = '&nbsp; '.join(tags)
+    if prefix:
+        prefix += '&nbsp;&nbsp;'
+    return prefix + f'<span style="color:#9aa0aa;font-size:12px;">{html.escape(description)}</span>'
+
+
 class ProjectCard(QFrame):
     clicked = Signal(object)
     download_clicked = Signal(object)
@@ -506,87 +567,67 @@ class ProjectCard(QFrame):
         self.project = project
         self.icon_url = project.icon_url
         self.setObjectName('ProjectCard')
-        self.setStyleSheet('\n            QFrame#ProjectCard {\n                background: rgba(18,20,26,0.58);\n                border: 1px solid rgba(255,255,255,0.18);\n                border-radius: 10px;\n            }\n            QFrame#ProjectCard:hover {\n                background: rgba(28,30,38,0.72);\n                border: 1px solid rgba(122,160,255,0.45);\n            }\n        ')
+        self.setStyleSheet('\n            QFrame#ProjectCard {\n                background: rgba(18,20,26,0.58);\n                border: 1px solid rgba(255,255,255,0.16);\n                border-radius: 9px;\n            }\n            QFrame#ProjectCard:hover {\n                background: rgba(28,30,38,0.72);\n                border: 1px solid rgba(122,160,255,0.45);\n            }\n        ')
         self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(96)
+        self.setMinimumHeight(104)
+        self.setToolTip('点击选择版本并下载')
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setContentsMargins(12, 9, 14, 9)
         layout.setSpacing(12)
         self.icon_label = QLabel()
-        self.icon_label.setFixedSize(64, 64)
-        self.icon_label.setStyleSheet('background: rgba(255,255,255,0.06); border-radius: 10px; color: #888;')
+        self.icon_label.setFixedSize(56, 56)
+        self.icon_label.setStyleSheet('background: rgba(255,255,255,0.055); border-radius: 9px; color: #888;')
         self.icon_label.setAlignment(Qt.AlignCenter)
         self.icon_label.setText('?')
         layout.addWidget(self.icon_label)
         text_box = QVBoxLayout()
-        text_box.setSpacing(3)
+        text_box.setSpacing(2)
         self.title_label = QLabel()
         self.title_label.setTextFormat(Qt.RichText)
-        self.title_label.setText(bilingual_html(project.translated_title, project.english_title, 12, 10))
+        self.title_label.setText(bilingual_html(project.translated_title, project.english_title, 13, 11))
         self.title_label.setStyleSheet('background: transparent;')
         text_box.addWidget(self.title_label)
-        self.desc_label = QLabel(project.description or '暂无描述')
+        self.desc_label = QLabel()
+        self.desc_label.setTextFormat(Qt.RichText)
         self.desc_label.setWordWrap(True)
         self.desc_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        self.desc_label.setMaximumHeight(90)
+        self.desc_label.setMaximumHeight(40)
+        self.desc_label.setText(_project_summary_html(project))
         self.desc_label.setToolTip(project.description or '暂无描述')
-        self.desc_label.setStyleSheet('color: rgba(255,255,255,0.62); font-size: 12px; background: transparent;')
+        self.desc_label.setStyleSheet('background: transparent;')
         text_box.addWidget(self.desc_label)
-        cats = ' / '.join(project.categories[:4]) if project.categories else PROJECT_TYPES.get(project.project_type, '')
-        meta = f'{project.source}  ·  下载 {project.downloads:,}  ·  更新 {project.updated}'
-        if cats:
-            meta += f'  ·  {cats}'
-        self.meta_label = QLabel(meta)
-        self.meta_label.setStyleSheet('color: rgba(255,255,255,0.42); font-size: 11px; background: transparent;')
-        self.meta_label.setWordWrap(True)
-        text_box.addWidget(self.meta_label)
+        meta_row = QHBoxLayout()
+        meta_row.setContentsMargins(0, 1, 0, 0)
+        meta_row.setSpacing(8)
+        meta_style = 'color:rgba(255,255,255,0.42); font-size:11px; background:transparent;'
+        self.version_label = QLabel(f'版本 {_version_summary(project.versions)}')
+        self.download_label = QLabel(f'↓ {_format_downloads(project.downloads)}')
+        self.updated_label = QLabel(f'↑ {_relative_update(project.updated)}')
+        self.source_label = QLabel(f'◎ {project.source}')
+        for label in (self.version_label, self.download_label, self.updated_label, self.source_label):
+            label.setStyleSheet(meta_style)
+        meta_row.addWidget(self.version_label)
+        meta_row.addStretch(1)
+        meta_row.addWidget(self.download_label)
+        meta_row.addStretch(1)
+        meta_row.addWidget(self.updated_label)
+        meta_row.addStretch(1)
+        meta_row.addWidget(self.source_label)
+        text_box.addLayout(meta_row)
         layout.addLayout(text_box, 1)
-        actions = QVBoxLayout()
-        actions.setSpacing(6)
-        dl_btn = QPushButton('下载')
-        dl_btn.setFixedWidth(76)
-        dl_btn.setStyleSheet('\n            QPushButton {\n                background: #0078d4; color: white; border: none;\n                border-radius: 6px; padding: 6px 10px;\n            }\n            QPushButton:hover { background: #106ebe; }\n        ')
-        dl_btn.clicked.connect((lambda: self.download_clicked.emit(self.project)))
-        actions.addWidget(dl_btn)
-        open_btn = QPushButton('主页')
-        open_btn.setFixedWidth(76)
-        open_btn.setStyleSheet('\n            QPushButton {\n                background: #3a3a3a; color: white; border: none;\n                border-radius: 6px; padding: 6px 10px;\n            }\n            QPushButton:hover { background: #4a4a4a; }\n        ')
-        open_btn.clicked.connect(self._open_homepage)
-        actions.addWidget(open_btn)
-        actions.addStretch(1)
-        layout.addLayout(actions)
-
-    def preferred_height(self, width):
-        '''按描述实际行数计算卡片高度，避免文字被上下截断。'''
-
-        text_width = max(220, int(width) - 188)
-        fm = self.desc_label.fontMetrics()
-        desc_rect = fm.boundingRect(0, 0, text_width, 240, Qt.TextWordWrap, self.desc_label.text() or '')
-        desc_height = min(90, max(16, desc_rect.height()))
-        title_height = max(16, self.title_label.sizeHint().height())
-        meta_fm = self.meta_label.fontMetrics()
-        meta_rect = meta_fm.boundingRect(0, 0, text_width, 60, Qt.TextWordWrap, self.meta_label.text() or '')
-        meta_height = min(32, max(14, meta_rect.height()))
-        return max(96, 20 + title_height + 3 + desc_height + 3 + meta_height)
 
     def set_icon(self, pix):
         if pix is None or pix.isNull():
             return
         from ui.widgets.settings_widgets import hidpi_pixmap, rounded_pixmap
-        size = self.icon_label.width() or 64
+        size = self.icon_label.width() or 56
         pixmap = hidpi_pixmap(pix, size, size)
-        self.icon_label.setPixmap(rounded_pixmap(pixmap, max(6, round(size * 0.22))))
+        self.icon_label.setPixmap(rounded_pixmap(pixmap, max(6, round(size * 0.2))))
         self.icon_label.setText('')
-
-    def _open_homepage(self):
-        if self.project.website_url:
-            QDesktopServices.openUrl(QUrl(self.project.website_url))
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton and self.rect().contains(event.position().toPoint()):
-            child = self.childAt(event.position().toPoint())
-            if child is None or not isinstance(child, QPushButton):
-                self.clicked.emit(self.project)
+            self.clicked.emit(self.project)
         super().mouseReleaseEvent(event)
 
 
@@ -1683,8 +1724,7 @@ class ModBrowserPage(QWidget):
             card.clicked.connect(self._download_project)
             card.download_clicked.connect(self._download_project)
             item = QListWidgetItem()
-            width = max(360, self.results_list.viewport().width() - 8)
-            item.setSizeHint(QSize(100, max(96, card.preferred_height(width))))
+            item.setSizeHint(QSize(100, 108))
             self.results_list.addItem(item)
             self.results_list.setItemWidget(item, card)
             card._list_item = item

@@ -132,6 +132,17 @@ def _natural_key(text):
 def _release_rank(kind):
     return {'release': 0, 'beta': 1, 'alpha': 2}.get((kind or '').lower(), 3)
 
+def _cf_game_versions(files):
+    result = []
+    for item in files or []:
+        if not isinstance(item, dict):
+            continue
+        for version in item.get('gameVersions') or []:
+            value = str(version or '').strip()
+            if re.match(r'^\d+\.\d+', value) and value not in result:
+                result.append(value)
+    return result[:8]
+
 class BaseSource:
     name = ''
     def search(self, query, project_type, mc_version='', loader='', category='', sort='relevance', offset=0, limit=20):
@@ -428,7 +439,7 @@ class CurseForgeSource(BaseSource):
             website = (row.get('links') or {}).get('websiteUrl') or ''
             if not website and slug:
                 website = f'https://www.curseforge.com/minecraft/{CF_SECTION_URL.get(project_type, "mc-mods")}/{slug}'
-            projects.append(ModProject(source=self.name, project_id=str(row.get('id', '')), slug=slug, title=row.get('name') or slug, description=(row.get('summary') or '').strip(), icon_url=logo.get('thumbnailUrl') or logo.get('url') or '', author=authors[0].get('name', '') if authors and isinstance(authors[0], dict) else '', downloads=int(row.get('downloadCount') or 0), updated=_fmt_date(row.get('dateModified') or ''), categories=[category_label(c.get('name', '')) for c in categories if isinstance(c, dict)], versions=[f.get('displayName', '') for f in files[:8] if isinstance(f, dict) and f.get('displayName')], website_url=website, project_type=project_type))
+            projects.append(ModProject(source=self.name, project_id=str(row.get('id', '')), slug=slug, title=row.get('name') or slug, description=(row.get('summary') or '').strip(), icon_url=logo.get('thumbnailUrl') or logo.get('url') or '', author=authors[0].get('name', '') if authors and isinstance(authors[0], dict) else '', downloads=int(row.get('downloadCount') or 0), updated=_fmt_date(row.get('dateModified') or ''), categories=[category_label(c.get('name', '')) for c in categories if isinstance(c, dict)], versions=_cf_game_versions(files), website_url=website, project_type=project_type))
         total = int(pagination.get('totalCount') or len(projects))
         return SearchResult(projects, total, offset, limit)
 
@@ -574,7 +585,7 @@ class CurseForgeSource(BaseSource):
         if not website:
             if slug:
                 website = f'https://www.curseforge.com/minecraft/mc-mods/{slug}'
-        return ModProject(source=self.name, project_id=str(row.get('id', project_id)), slug=slug, title=row.get('name') or slug, description=(row.get('summary') or '').strip(), icon_url=logo.get('thumbnailUrl') or logo.get('url') or '', author=authors[0].get('name', '') if authors and isinstance(authors[0], dict) else '', downloads=int(row.get('downloadCount') or 0), updated=_fmt_date(row.get('dateModified') or ''), categories=[category_label(c.get('name', '')) for c in categories if isinstance(c, dict)], versions=[f.get('displayName', '') for f in files[:8] if isinstance(f, dict) and f.get('displayName')], website_url=website, project_type='mod')
+        return ModProject(source=self.name, project_id=str(row.get('id', project_id)), slug=slug, title=row.get('name') or slug, description=(row.get('summary') or '').strip(), icon_url=logo.get('thumbnailUrl') or logo.get('url') or '', author=authors[0].get('name', '') if authors and isinstance(authors[0], dict) else '', downloads=int(row.get('downloadCount') or 0), updated=_fmt_date(row.get('dateModified') or ''), categories=[category_label(c.get('name', '')) for c in categories if isinstance(c, dict)], versions=_cf_game_versions(files), website_url=website, project_type='mod')
 
     @staticmethod
     def _cdn_url(file_id, filename):
