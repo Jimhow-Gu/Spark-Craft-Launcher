@@ -1020,6 +1020,33 @@ class ProjectFilesDialog(QDialog):
         sub.setWordWrap(True)
         sub.setStyleSheet('color: rgba(255,255,255,0.6);')
         layout.addWidget(sub)
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        self.modrinth_btn = QPushButton('转到 Modrinth')
+        self.modrinth_btn.setStyleSheet(
+            'QPushButton { background:transparent; color:#9ac35a; border:1px solid #719b3d;'
+            ' border-radius:6px; padding:6px 12px; }'
+            'QPushButton:hover { background:rgba(120,170,60,0.16); }'
+        )
+        self.modrinth_btn.clicked.connect(self._open_modrinth)
+        self.mcmod_btn = QPushButton('转到 MC 百科')
+        self.mcmod_btn.setStyleSheet(
+            'QPushButton { background:transparent; color:#e8e8e8; border:1px solid rgba(255,255,255,0.30);'
+            ' border-radius:6px; padding:6px 12px; }'
+            'QPushButton:hover { background:rgba(255,255,255,0.10); }'
+        )
+        self.mcmod_btn.clicked.connect(self._open_mcmod)
+        self.copy_name_btn = QPushButton('复制名称')
+        self.copy_name_btn.setStyleSheet(
+            'QPushButton { background:transparent; color:#e8e8e8; border:1px solid rgba(255,255,255,0.30);'
+            ' border-radius:6px; padding:6px 12px; }'
+            'QPushButton:hover { background:rgba(255,255,255,0.10); }'
+        )
+        self.copy_name_btn.clicked.connect(self._copy_name)
+        action_row.addWidget(self.modrinth_btn, 1)
+        action_row.addWidget(self.mcmod_btn, 1)
+        action_row.addWidget(self.copy_name_btn, 1)
+        layout.addLayout(action_row)
         self.warning_label = QLabel('')
         self.warning_label.setWordWrap(True)
         self.warning_label.setStyleSheet('\n            QLabel { background: rgba(255,180,80,0.18); color: #ffcc80;\n                     border-left: 3px solid #f0a030; padding: 7px 10px;\n                     font-size: 12px; }\n        ')
@@ -1069,33 +1096,6 @@ class ProjectFilesDialog(QDialog):
                 self.world_combo.setEnabled(False)
             world_row.addWidget(self.world_combo, 1)
             layout.addLayout(world_row)
-        action_row = QHBoxLayout()
-        action_row.setSpacing(8)
-        self.modrinth_btn = QPushButton('转到 Modrinth')
-        self.modrinth_btn.setStyleSheet(
-            'QPushButton { background:transparent; color:#9ac35a; border:1px solid #719b3d;'
-            ' border-radius:6px; padding:6px 12px; }'
-            'QPushButton:hover { background:rgba(120,170,60,0.16); }'
-        )
-        self.modrinth_btn.clicked.connect(self._open_modrinth)
-        self.mcmod_btn = QPushButton('转到 MC 百科')
-        self.mcmod_btn.setStyleSheet(
-            'QPushButton { background:transparent; color:#e8e8e8; border:1px solid rgba(255,255,255,0.30);'
-            ' border-radius:6px; padding:6px 12px; }'
-            'QPushButton:hover { background:rgba(255,255,255,0.10); }'
-        )
-        self.mcmod_btn.clicked.connect(self._open_mcmod)
-        self.copy_name_btn = QPushButton('复制名称')
-        self.copy_name_btn.setStyleSheet(
-            'QPushButton { background:transparent; color:#e8e8e8; border:1px solid rgba(255,255,255,0.30);'
-            ' border-radius:6px; padding:6px 12px; }'
-            'QPushButton:hover { background:rgba(255,255,255,0.10); }'
-        )
-        self.copy_name_btn.clicked.connect(self._copy_name)
-        action_row.addWidget(self.modrinth_btn, 1)
-        action_row.addWidget(self.mcmod_btn, 1)
-        action_row.addWidget(self.copy_name_btn, 1)
-        layout.addLayout(action_row)
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
         self.download_btn = QPushButton('下一步')
