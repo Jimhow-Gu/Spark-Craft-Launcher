@@ -712,6 +712,9 @@ class HomePage(QWidget):
         return f'当前登录方式已被修改为：{label}'
 
     def _update_home_display(self, versions):
+        # 启动准备/启动中时，其他刷新不能把进度按钮重置成“启动游戏”
+        if self._launch_preparing or self._starting_worker is not None:
+            return
         if not versions:
             self._set_version_display('当前没有版本', color='rgba(255,255,255,0.6)')
             self.status_label.setText('当前没有版本，可前往下载')

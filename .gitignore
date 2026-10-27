@@ -18,3 +18,5 @@ _*.png
 config.json
 build2/
 dist2/
+build3/
+dist3/
