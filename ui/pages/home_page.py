@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushB
 from PySide6.QtGui import (QFont, QColor, QPalette, QPixmap, QIcon)
 from core.app_font import ui_font
 from ui.widgets.painted_icons import painted_icon, set_button_icon
+from ui.widgets.launch_progress_button import LaunchProgressButton
 from ui.version_meta import version_description, version_icon, display_name as version_display_name
 from ui.widgets.back_button import BackButton
 from core.config import ConfigManager
@@ -352,6 +353,7 @@ class HomePage(QWidget):
         self._prepare_done = False
         self._launch_preparing = False
         self._prepare_cancelled = False
+        self._preflight_cancelled = False
         self._delete_worker = None
         self._launcher_hidden_by_game = False
         self._is_running = False
@@ -421,7 +423,7 @@ class HomePage(QWidget):
         self.select_version_btn.setFont(ui_font(12))
         self.select_version_btn.setStyleSheet('\n            QPushButton {\n                background: #3a3a3a;\n                color: white;\n                border: none;\n                border-radius: 8px;\n            }\n            QPushButton:hover { background: #4a4a4a; }\n            QPushButton:pressed { background: #2a2a2a; }\n            QPushButton:disabled { background: #2a2a2a; color: #666; }\n        ')
         self.select_version_btn.clicked.connect(self._show_version_selector)
-        self.action_btn = QPushButton('启动游戏')
+        self.action_btn = LaunchProgressButton('启动游戏')
         self.action_btn.setMinimumHeight(50)
         self.action_btn.setFont(ui_font(14, QFont.DemiBold))
         self.action_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -718,9 +720,7 @@ class HomePage(QWidget):
             self.select_version_btn.setEnabled(True)
             self.settings_btn.hide()
             self.mod_manager_btn.hide()
-            self.action_btn.setText('下载游戏')
-            self.action_btn.setStyleSheet(self._launch_button_style())
-            self.action_btn.setEnabled(True)
+            self.action_btn.set_idle('下载游戏')
             self.action_btn.setToolTip('')
             self.login_notice_label.hide()
             return
@@ -747,18 +747,14 @@ class HomePage(QWidget):
                 if fatal:
                     self._set_version_display(f'{display}   [错误：无法启动]', v)
                     self.status_label.setText('错误版本无法启动，请删除后重新安装')
-                    self.action_btn.setText('错误版本无法启动')
-                    self.action_btn.setStyleSheet(self._fatal_button_style())
-                    self.action_btn.setEnabled(False)
+                    self.action_btn.set_disabled_state('错误版本无法启动')
                     self.action_btn.setToolTip('；'.join(issues))
                     return
                 self._selected_version_fatal = False
                 self._set_version_display(display, v)
                 hint = '（启动前会自动修复）' if issues else ''
                 self.status_label.setText(f'当前版本：{display}{hint}')
-                self.action_btn.setText('启动游戏')
-                self.action_btn.setStyleSheet(self._launch_button_style())
-                self.action_btn.setEnabled(True)
+                self.action_btn.set_idle('启动游戏')
                 self.action_btn.setToolTip('；'.join(issues))
                 return
         self._selected_version_fatal = False
@@ -1064,13 +1060,9 @@ class HomePage(QWidget):
     def _restore_action_button(self):
         self._launch_preparing = False
         if self._selected_version_fatal:
-            self.action_btn.setEnabled(False)
-            self.action_btn.setText('错误版本无法启动')
-            self.action_btn.setStyleSheet(self._fatal_button_style())
+            self.action_btn.set_disabled_state('错误版本无法启动')
         else:
-            self.action_btn.setEnabled(True)
-            self.action_btn.setText('启动游戏')
-            self.action_btn.setStyleSheet(self._launch_button_style())
+            self.action_btn.set_idle('启动游戏')
 
     def _launch_option_enabled(self, key):
         '''读取当前版本的高级选项，未设置时继承全局默认值。'''
@@ -1129,8 +1121,9 @@ class HomePage(QWidget):
         if self._preflight_worker is not None and self._preflight_worker.isRunning():
             return
         self.status_label.setText('正在检查 Java 环境...')
-        self.action_btn.setEnabled(False)
-        self.action_btn.setText('正在准备...')
+        self._launch_preparing = True
+        self._preflight_cancelled = False
+        self.action_btn.set_working('取消', 0.0, animate=False, show_percent=False)
         worker = JavaPreflightWorker(self.launch_mgr, version_id)
         self._preflight_worker = worker
         worker.done.connect(
@@ -1155,6 +1148,9 @@ class HomePage(QWidget):
     def _on_java_preflight_done(self, java_state, worker, version_id):
         if self._preflight_worker is worker:
             self._preflight_worker = None
+        if self._preflight_cancelled:
+            self._restore_action_button()
+            return
         if not version_id or version_id != self.selected_version_id:
             self._restore_action_button()
             return
@@ -1199,26 +1195,12 @@ class HomePage(QWidget):
         nickname = self._nickname(version_id)
         self._launch_preparing = True
         self._prepare_cancelled = False
-        self.action_btn.setEnabled(True)
-        self.action_btn.setText('取消')
-        self.action_btn.setStyleSheet(
-            'QPushButton { background:rgba(190,60,60,0.92); color:white; border:none;'
-            ' border-radius:8px; font-weight:600; }'
-            'QPushButton:hover { background:rgba(215,75,75,0.96); }'
-            'QPushButton:pressed { background:rgba(160,45,45,0.96); }'
-        )
+        self.action_btn.set_working('取消', 0.0, animate=False, show_percent=True)
         self.status_label.setText(f'正在准备启动 {nickname} ...')
         worker = LaunchPrepareWorker(self.launch_mgr, version_id, force_java_path)
         self._prepare_worker = worker
         self._prepare_done = False
-        import time as _time
-        self._prepare_task_id = f'prepare-{version_id}-{int(_time.time() * 1000)}'
-        if self._launch_option_enabled('disable_file_verification'):
-            prepare_steps = ['补全缺失文件', '生成启动命令']
-        else:
-            prepare_steps = ['校验版本文件', '自动修复缺失文件', '生成启动命令']
-        DownloadManager.instance().start_task(self._prepare_task_id, f'{nickname} 启动准备', steps=prepare_steps, cancel_callback=worker.cancel)
-        DownloadManager.instance().update_step(self._prepare_task_id, 0, state='active')
+        self._prepare_task_id = ''
         worker.success.connect(self._on_launch_prepared)
         worker.error.connect(self._on_launch_prepare_error)
         worker.status.connect(self._on_launch_prepare_status)
@@ -1228,53 +1210,23 @@ class HomePage(QWidget):
 
     def _on_launch_prepare_status(self, text):
         self.status_label.setText(text)
-        if self._prepare_task_id:
-            DownloadManager.instance().update_task(self._prepare_task_id, status=text)
 
     def _on_launch_prepare_progress(self, value):
-        self.status_label.setText(f'正在准备 {value}%')
-        if not self._prepare_task_id:
+        try:
+            percent = max(0, min(100, int(value)))
+        except (TypeError, ValueError):
             return
-        manager = DownloadManager.instance()
-        task = manager.task(self._prepare_task_id)
-        if not task:
-            return
-        steps = [dict(step) for step in task.get('steps', [])]
-        ranges = [(0, 5), (5, 95), (95, 100)]
-        for index, step in enumerate(steps):
-            if index >= len(ranges):
-                continue
-            start, end = ranges[index]
-            if value >= end:
-                step['percent'] = 100.0
-                step['state'] = 'done'
-            elif value <= start:
-                step['percent'] = 0.0
-                step['state'] = 'pending'
-            else:
-                step['percent'] = round((value - start) * 100 / max(1, end - start), 1)
-                step['state'] = 'active'
-        if not any((step.get('state') == 'active' for step in steps)):
-            for step in steps:
-                if step.get('state') == 'pending':
-                    step['state'] = 'active'
-                    break
-        manager.update_task(self._prepare_task_id, percent=float(value), steps=steps)
+        self.status_label.setText(f'正在准备启动 {percent}%')
+        self.action_btn.set_working('取消', percent / 100.0, show_percent=True)
 
     def _on_launch_prepared(self, command, version_id):
         self._prepare_done = True
         self._launch_preparing = False
-        if self._prepare_task_id:
-            DownloadManager.instance().finish_task(self._prepare_task_id, True, '启动准备完成')
-            self._prepare_task_id = ''
         self._start_game(command, version_id)
 
     def _on_launch_prepare_error(self, message):
         self._prepare_done = True
         self._launch_preparing = False
-        if self._prepare_task_id:
-            DownloadManager.instance().finish_task(self._prepare_task_id, False, message)
-            self._prepare_task_id = ''
         self._restore_action_button()
         if self._prepare_cancelled:
             self.status_label.setText('已取消启动准备')
@@ -1292,15 +1244,13 @@ class HomePage(QWidget):
     def _cancel_launch_prepare(self):
         self._prepare_cancelled = True
         self._launch_preparing = False
+        self._preflight_cancelled = True
         worker = self._prepare_worker
         try:
             if worker is not None and worker.isRunning():
                 worker.cancel()
         except RuntimeError:
             pass
-        if self._prepare_task_id:
-            DownloadManager.instance().finish_task(self._prepare_task_id, False, '启动准备已取消')
-            self._prepare_task_id = ''
         self._restore_action_button()
         self.status_label.setText('已取消启动准备')
 
@@ -1310,12 +1260,6 @@ class HomePage(QWidget):
             self._prepare_worker = None
         if not self._prepare_done:
             cancelled = bool(getattr(worker, '_cancelled', False))
-            if self._prepare_task_id:
-                DownloadManager.instance().finish_task(
-                    self._prepare_task_id, False,
-                    '启动准备已取消' if cancelled else '启动准备意外中断',
-                )
-                self._prepare_task_id = ''
             if not cancelled:
                 self.status_label.setText('启动准备意外中断，请重试')
                 self._restore_action_button()
@@ -1328,8 +1272,7 @@ class HomePage(QWidget):
     def _start_game(self, command, version_id):
         import time as _time
         nickname = self._nickname(version_id)
-        self.action_btn.setEnabled(False)
-        self.action_btn.setText('正在启动...')
+        self.action_btn.set_working('正在启动...', 1.0, animate=False, show_percent=False, starting=True)
         self.status_label.setText(f'正在启动 {nickname} ...')
         mc_dir = Path(self.config.get_mc_dir())
         log_dir = LOG_DIR
@@ -1413,9 +1356,8 @@ class HomePage(QWidget):
                 info['pid'] = proc.pid
         except Exception:
             pass
-        # 进程启动不等于游戏窗口已出现；保持按钮不可用，等 window_ready 再恢复
-        self.action_btn.setEnabled(False)
-        self.action_btn.setText('游戏启动中...')
+        # 进程启动不等于游戏窗口已出现；保持按钮为进度状态，等 window_ready 再恢复
+        self.action_btn.set_working('游戏启动中...', 1.0, animate=False, show_percent=False, starting=True)
         self.status_label.setText(f'{info["nickname"]} 进程已启动，正在等待游戏窗口...')
         self._append_log(f'{info["nickname"]} 进程已启动', worker)
         try:
@@ -1423,7 +1365,8 @@ class HomePage(QWidget):
         except Exception:
             pass
         self._add_running_row(worker)
-        self._apply_launcher_visibility()
+        # 游戏窗口真正出现后再隐藏/最小化启动器，并允许启动其他版本
+        QTimer.singleShot(300, (lambda w=worker: self._poll_game_window(w)))
         # 非 Windows 或窗口检测异常时的兜底，避免按钮永久停在“游戏启动中”
         delay = 90000 if sys.platform == 'win32' else 4000
         QTimer.singleShot(delay, (lambda w=worker: self._on_game_window_ready(w)))
@@ -1437,23 +1380,42 @@ class HomePage(QWidget):
         except RuntimeError:
             return
         self._starting_worker = None
-        self.action_btn.setEnabled(True)
-        self.action_btn.setText('启动游戏')
-        self.action_btn.setStyleSheet(self._launch_button_style())
+        self.action_btn.set_idle('启动游戏')
         info = self._instance_info.get(worker) or {}
         nickname = info.get('nickname') or ''
         if nickname:
             self.status_label.setText(f'{nickname} 已启动')
             from ui.widgets.toast import show_toast
             show_toast(f'{nickname} 启动成功', 'success', self)
+        self._apply_launcher_visibility()
+
+    def _poll_game_window(self, worker):
+        if self._starting_worker is not worker:
+            return
+        try:
+            if not worker.isRunning():
+                return
+        except RuntimeError:
+            return
+        info = self._instance_info.get(worker) or {}
+        pid = int(info.get('pid') or 0)
+        found = False
+        if pid:
+            try:
+                from core.launch import _game_window_handle
+                found = bool(_game_window_handle(pid))
+            except Exception:
+                found = False
+        if found:
+            self._on_game_window_ready(worker)
+            return
+        QTimer.singleShot(500, (lambda w=worker: self._poll_game_window(w)))
 
     def _on_launch_error(self, worker, msg):
         info = self._instance_info.get(worker)
         if self._starting_worker is worker:
             self._starting_worker = None
-        self.action_btn.setEnabled(True)
-        self.action_btn.setText('启动游戏')
-        self.action_btn.setStyleSheet(self._launch_button_style())
+        self.action_btn.set_idle('启动游戏')
         self.status_label.setText('启动失败')
         self._append_log(f'启动失败：{msg}', worker)
         if info:
@@ -1473,11 +1435,7 @@ class HomePage(QWidget):
             self._starting_worker = None
         log_path = info.get('log_path')
         lines = list(info.get('lines', []))
-        if self._starting_worker is worker:
-            self._starting_worker = None
-        self.action_btn.setEnabled(True)
-        self.action_btn.setText('启动游戏')
-        self.action_btn.setStyleSheet(self._launch_button_style())
+        self.action_btn.set_idle('启动游戏')
         self._finalize_instance(worker)
         if exit_code == 0:
             self.status_label.setText(f'{nickname} 已正常退出')
@@ -1629,9 +1587,7 @@ class HomePage(QWidget):
                 pass
             self._prepare_worker = None
         self._launch_preparing = False
-        if self._prepare_task_id:
-            DownloadManager.instance().finish_task(self._prepare_task_id, False, '启动准备已取消')
-            self._prepare_task_id = ''
+        self._prepare_task_id = ''
         for worker in list(self._instances):
             info = self._instance_info.get(worker)
             if info and info.get('log_handle'):
