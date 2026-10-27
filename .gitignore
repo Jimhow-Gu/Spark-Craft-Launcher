@@ -16,3 +16,5 @@ Amiya.mp4
 exe_icon_*.png
 _*.png
 config.json
+build2/
+dist2/
