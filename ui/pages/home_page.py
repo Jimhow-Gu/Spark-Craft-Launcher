@@ -280,8 +280,8 @@ class LaunchPrepareWorker(QThread):
                 if status.get('fatal'):
                     self.error.emit('版本文件损坏，无法启动：\n' + '\n'.join(status.get('issues') or ['未知错误']) + '\n\n请在版本选择列表中删除后重新安装。')
                     return
-                self.status.emit('正在校验游戏文件...')
-                engine = RepairEngine(self.version_id, mc_dir, status=self.status.emit, progress=self.progress.emit, cancel=(lambda: self._cancelled), fast=True)
+                self.status.emit('正在检查缺失文件（快速启动）...')
+                engine = RepairEngine(self.version_id, mc_dir, status=self.status.emit, progress=self.progress.emit, cancel=(lambda: self._cancelled), fast=True, missing_only=True)
                 result = engine.repair()
                 if self._cancelled:
                     return
@@ -350,6 +350,8 @@ class HomePage(QWidget):
         self._preflight_worker = None
         self._prepare_task_id = ''
         self._prepare_done = False
+        self._launch_preparing = False
+        self._prepare_cancelled = False
         self._delete_worker = None
         self._launcher_hidden_by_game = False
         self._is_running = False
@@ -1060,6 +1062,7 @@ class HomePage(QWidget):
         )
 
     def _restore_action_button(self):
+        self._launch_preparing = False
         if self._selected_version_fatal:
             self.action_btn.setEnabled(False)
             self.action_btn.setText('错误版本无法启动')
@@ -1082,6 +1085,9 @@ class HomePage(QWidget):
             return False
 
     def _on_action_clicked(self):
+        if self._launch_preparing:
+            self._cancel_launch_prepare()
+            return
         if self._selected_version_fatal:
             QMessageBox.warning(self, '无法启动', '当前选择的是错误版本，无法启动。\n请删除后重新安装该版本。')
             return
@@ -1191,8 +1197,16 @@ class HomePage(QWidget):
         if self._prepare_worker is not None and self._prepare_worker.isRunning():
             return
         nickname = self._nickname(version_id)
-        self.action_btn.setEnabled(False)
-        self.action_btn.setText('正在准备...')
+        self._launch_preparing = True
+        self._prepare_cancelled = False
+        self.action_btn.setEnabled(True)
+        self.action_btn.setText('取消')
+        self.action_btn.setStyleSheet(
+            'QPushButton { background:rgba(190,60,60,0.92); color:white; border:none;'
+            ' border-radius:8px; font-weight:600; }'
+            'QPushButton:hover { background:rgba(215,75,75,0.96); }'
+            'QPushButton:pressed { background:rgba(160,45,45,0.96); }'
+        )
         self.status_label.setText(f'正在准备启动 {nickname} ...')
         worker = LaunchPrepareWorker(self.launch_mgr, version_id, force_java_path)
         self._prepare_worker = worker
@@ -1214,13 +1228,11 @@ class HomePage(QWidget):
 
     def _on_launch_prepare_status(self, text):
         self.status_label.setText(text)
-        if '正在修复' in text or '正在校验' in text:
-            self.action_btn.setText('正在校验...')
         if self._prepare_task_id:
             DownloadManager.instance().update_task(self._prepare_task_id, status=text)
 
     def _on_launch_prepare_progress(self, value):
-        self.action_btn.setText(f'正在准备 {value}%')
+        self.status_label.setText(f'正在准备 {value}%')
         if not self._prepare_task_id:
             return
         manager = DownloadManager.instance()
@@ -1251,6 +1263,7 @@ class HomePage(QWidget):
 
     def _on_launch_prepared(self, command, version_id):
         self._prepare_done = True
+        self._launch_preparing = False
         if self._prepare_task_id:
             DownloadManager.instance().finish_task(self._prepare_task_id, True, '启动准备完成')
             self._prepare_task_id = ''
@@ -1258,10 +1271,14 @@ class HomePage(QWidget):
 
     def _on_launch_prepare_error(self, message):
         self._prepare_done = True
+        self._launch_preparing = False
         if self._prepare_task_id:
             DownloadManager.instance().finish_task(self._prepare_task_id, False, message)
             self._prepare_task_id = ''
         self._restore_action_button()
+        if self._prepare_cancelled:
+            self.status_label.setText('已取消启动准备')
+            return
         self.status_label.setText('启动准备失败')
         from core.net import is_network_error_text, network_available
         if is_network_error_text(message) or not network_available():
@@ -1272,7 +1289,23 @@ class HomePage(QWidget):
         from ui.widgets.dark_dialog import show_severe_error
         show_severe_error(self, '启动失败', message)
 
+    def _cancel_launch_prepare(self):
+        self._prepare_cancelled = True
+        self._launch_preparing = False
+        worker = self._prepare_worker
+        try:
+            if worker is not None and worker.isRunning():
+                worker.cancel()
+        except RuntimeError:
+            pass
+        if self._prepare_task_id:
+            DownloadManager.instance().finish_task(self._prepare_task_id, False, '启动准备已取消')
+            self._prepare_task_id = ''
+        self._restore_action_button()
+        self.status_label.setText('已取消启动准备')
+
     def _on_launch_prepare_finished(self, worker):
+        self._launch_preparing = False
         if self._prepare_worker is worker:
             self._prepare_worker = None
         if not self._prepare_done:
@@ -1595,6 +1628,10 @@ class HomePage(QWidget):
             except RuntimeError:
                 pass
             self._prepare_worker = None
+        self._launch_preparing = False
+        if self._prepare_task_id:
+            DownloadManager.instance().finish_task(self._prepare_task_id, False, '启动准备已取消')
+            self._prepare_task_id = ''
         for worker in list(self._instances):
             info = self._instance_info.get(worker)
             if info and info.get('log_handle'):

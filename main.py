@@ -208,7 +208,7 @@ def main():
     app.aboutToQuit.connect(release_single_instance)
     app.setApplicationName("Spark Craft Launcher")
     app.setApplicationDisplayName("Spark Craft Launcher")
-    app.setApplicationVersion("1.0.0")
+    app.setApplicationVersion("1.0.2")
     app_icon = QIcon()
     ico_path = resource_path("ui/imgs/sparkler.ico")
     png_path = resource_path("ui/imgs/sparkler.png")

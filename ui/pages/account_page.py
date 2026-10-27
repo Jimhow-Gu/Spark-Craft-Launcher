@@ -100,12 +100,20 @@ class AvatarLabel(QLabel):
     @staticmethod
     def _head_from_skin(pixmap, size=96):
         if pixmap.width() >= 64 and pixmap.height() >= 32:
+            # HD 皮肤（128/256）的头部坐标要按 64 基准等比放大
+            scale = max(1, int(round(pixmap.width() / 64.0)))
             out = QImage(8, 8, QImage.Format_ARGB32_Premultiplied)
             out.fill(Qt.transparent)
             painter = QPainter(out)
-            painter.drawPixmap(0, 0, pixmap.copy(8, 8, 8, 8))
-            if pixmap.height() >= 64:
-                painter.drawPixmap(0, 0, pixmap.copy(40, 8, 8, 8))
+            face = pixmap.copy(8 * scale, 8 * scale, 8 * scale, 8 * scale).scaled(
+                8, 8, Qt.IgnoreAspectRatio, Qt.FastTransformation
+            )
+            painter.drawPixmap(0, 0, face)
+            if pixmap.height() >= 64 * scale:
+                hat = pixmap.copy(40 * scale, 8 * scale, 8 * scale, 8 * scale).scaled(
+                    8, 8, Qt.IgnoreAspectRatio, Qt.FastTransformation
+                )
+                painter.drawPixmap(0, 0, hat)
             painter.end()
             pixmap = QPixmap.fromImage(out)
         from ui.widgets.settings_widgets import hidpi_pixmap
@@ -1557,7 +1565,12 @@ class AccountPage(QWidget):
         webbrowser.open('https://littleskin.cn/auth/forgot')
 
     def _on_tp_inline_login(self):
-        if self._tp_inline_worker is not None and self._tp_inline_worker.isRunning():
+        try:
+            inline_busy = self._tp_inline_worker is not None and self._tp_inline_worker.isRunning()
+        except RuntimeError:
+            self._tp_inline_worker = None
+            inline_busy = False
+        if inline_busy:
             self.tp_inline_status.setStyleSheet('color:rgba(255,255,255,0.6); font-size:12px;')
             self.tp_inline_status.setText('正在登录中，请稍候...')
             return
@@ -1881,8 +1894,12 @@ class AccountPage(QWidget):
             webbrowser.open(url)
 
     def _on_tp_login(self):
-        if self._thirdparty_worker and self._thirdparty_worker.isRunning():
-            return
+        worker = self._thirdparty_worker
+        try:
+            if worker is not None and worker.isRunning():
+                return
+        except RuntimeError:
+            self._thirdparty_worker = None
         api = self.tp_api_edit.text().strip()
         username = self.tp_user_edit.text().strip()
         password = self.tp_pass_edit.text()
@@ -1896,8 +1913,13 @@ class AccountPage(QWidget):
         self._thirdparty_worker = ThirdPartyLoginWorker(api, username, password, self.tp_server_name_edit.text().strip() or '第三方登录', self.tp_register_edit.text().strip(), self.tp_auto_server_edit.text().strip())
         self._thirdparty_worker.success.connect(self._on_tp_success)
         self._thirdparty_worker.error.connect(self._on_tp_error)
+        self._thirdparty_worker.finished.connect((lambda w=self._thirdparty_worker: self._on_tp_worker_done(w)))
         self._thirdparty_worker.finished.connect(self._thirdparty_worker.deleteLater)
         self._thirdparty_worker.start()
+
+    def _on_tp_worker_done(self, worker):
+        if self._thirdparty_worker is worker:
+            self._thirdparty_worker = None
 
     def _on_tp_success(self, account):
         self.tp_login_btn.setEnabled(True)
@@ -2535,6 +2557,15 @@ class AccountPage(QWidget):
 
     def _on_logout(self):
         self._close_ms_code_dialog()
+        # 不等待网络线程，避免退出登录卡 UI；旧线程的信号由 worker done 回调丢弃
+        self._thirdparty_worker = None
+        self._tp_inline_worker = None
+        self.tp_login_btn.setEnabled(True)
+        self.tp_login_btn.setText('第三方登录')
+        self.tp_inline_login_btn.setEnabled(True)
+        self.tp_inline_login_btn.setText('登录')
+        self._tp_inline_switching = False
+        self.tp_inline_wrap.hide()
         self.auth.logout()
         self.name_input.clear()
         self._refresh_account_info()

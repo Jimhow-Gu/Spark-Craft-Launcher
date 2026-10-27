@@ -466,12 +466,40 @@ class AuthManager:
         if not profile:
             raise AuthError('该账号还没有创建角色，请先到认证服务器网站创建角色。')
         account = {'api': api, 'access_token': data.get('accessToken', ''), 'client_token': data.get('clientToken', client_token), 'name': profile.get('name', username), 'uuid': profile.get('id', ''), 'email': username, 'avatar_url': f'https://littleskin.cn/avatar/{profile.get("id", "")}' if 'littleskin.cn' in api.lower() else f'https://mc-heads.net/avatar/{profile.get("name", username)}/96', 'server_name': server_name, 'register_url': register_url, 'auto_server': auto_server}
+        validation = self.validate_thirdparty_account(account)
+        if validation is False:
+            raise AuthError('第三方登录校验失败：服务器返回的登录凭据无效，请重新输入密码。', 'expired')
         self.config.set('login_type', 'thirdparty')
         self.config.set('thirdparty_account', account)
         self.config.set('microsoft_account', None)
         self.config.save()
         self.save_thirdparty_account(account)
         return account
+
+    def validate_thirdparty_account(self, account=None):
+        """验证第三方 accessToken；True=有效，False=已失效，None=服务器不支持验证。"""
+
+        account = account or self.config.get('thirdparty_account') or {}
+        api = str(account.get('api') or '').rstrip('/')
+        access_token = str(account.get('access_token') or '')
+        client_token = str(account.get('client_token') or '')
+        if not api or not access_token:
+            return False
+        try:
+            resp = requests.post(
+                f'{api}/authserver/validate',
+                json={'accessToken': access_token, 'clientToken': client_token},
+                timeout=15, headers={'User-Agent': 'PMGL-Launcher/1.1', 'Content-Type': 'application/json'},
+            )
+        except Exception as exc:
+            if is_network_error(exc) or not network_available():
+                raise AuthError('因为网络问题导致登录状态校验失败！', 'network') from exc
+            raise AuthError(f'登录状态校验失败：{exc}') from exc
+        if resp.status_code in (200, 204):
+            return True
+        if resp.status_code in (400, 401, 403):
+            return False
+        return None
 
     def logout(self):
         if self.config.get('login_type') == 'microsoft':

@@ -17,8 +17,8 @@ from PySide6.QtCore import QThread, Signal
 from core.net import DownloadCancelled, DownloadError, HttpClient
 from core.paths import safe_rmtree, scl_dir
 
-CURRENT_VERSION = '1.0.0'
-VERSION_DISPLAY = 'V1.0.0（正式版）'
+CURRENT_VERSION = '1.0.2'
+VERSION_DISPLAY = 'V1.0.2（正式版）'
 REPO = 'Jimhow-GU/SparkCraftLauncher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
 

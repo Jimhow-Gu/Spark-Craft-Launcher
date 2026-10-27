@@ -104,13 +104,21 @@ def avatar_urls_for_account(account: dict) -> list:
 
     add(account.get('avatar_url'))
     if uuid:
+        add(f'https://minotar.net/helm/{uuid}/96.png')
+        add(f'https://mineskin.eu/avatar/{uuid}/96')
+        add(f'https://crafthead.net/helm/{uuid}/96')
+        add(f'https://mc-heads.net/avatar/{uuid}/96')
         add(f'https://crafatar.com/avatars/{uuid}?size=96&overlay')
         add(f'https://visage.surgeplay.com/face/96/{uuid}')
     if name:
         add(f'https://minotar.net/helm/{name}/96.png')
+        add(f'https://mineskin.eu/helm/{name}/96.png')
+        add(f'https://crafthead.net/helm/{name}/96')
         add(f'https://mc-heads.net/avatar/{name}/96')
-    # 官方纹理域名在部分机房会被重置，放最后尝试
-    add(account.get('skin_url'))
+    # 只把官方纹理当兜底（本地会裁剪成头部）；第三方皮肤 URL 直接显示会是整张皮肤图
+    skin_url = str(account.get('skin_url') or '')
+    if 'textures.minecraft.net' in skin_url:
+        add(skin_url)
     return urls
 
 
