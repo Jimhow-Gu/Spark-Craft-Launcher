@@ -5,7 +5,6 @@
 '''
 
 from __future__ import annotations
-import html
 import json
 import math
 import re
@@ -542,23 +541,6 @@ def _version_summary(versions):
     return ', '.join(years[:3]) + suffix
 
 
-_CATEGORY_COLORS = ('#73a9d8', '#67c49b', '#e0a35c', '#bd8ee3', '#d98282', '#72c4c8')
-
-
-def _project_summary_html(project):
-    tags = []
-    for index, category in enumerate(list(project.categories or [])[:6]):
-        if not category:
-            continue
-        color = _CATEGORY_COLORS[index % len(_CATEGORY_COLORS)]
-        tags.append(f'<span style="color:{color};font-size:11px;">{html.escape(str(category))}</span>')
-    description = ' '.join(str(project.description or '暂无描述').split())
-    prefix = '&nbsp; '.join(tags)
-    if prefix:
-        prefix += '&nbsp;&nbsp;'
-    return prefix + f'<span style="color:#9aa0aa;font-size:12px;">{html.escape(description)}</span>'
-
-
 class ProjectCard(QFrame):
     clicked = Signal(object)
     download_clicked = Signal(object)
@@ -587,15 +569,27 @@ class ProjectCard(QFrame):
         self.title_label.setText(bilingual_html(project.translated_title, project.english_title, 13, 11))
         self.title_label.setStyleSheet('background: transparent;')
         text_box.addWidget(self.title_label)
-        self.desc_label = QLabel()
-        self.desc_label.setTextFormat(Qt.RichText)
+        summary_row = QHBoxLayout()
+        summary_row.setContentsMargins(0, 0, 0, 0)
+        summary_row.setSpacing(5)
+        tag_style = (
+            'QLabel { background: rgba(255,255,255,0.10); color: rgba(255,255,255,0.58);'
+            ' border-radius: 4px; padding: 1px 6px; font-size: 11px; }'
+        )
+        for category in list(project.categories or [])[:4]:
+            if not category:
+                continue
+            tag = QLabel(str(category))
+            tag.setStyleSheet(tag_style)
+            summary_row.addWidget(tag, 0, Qt.AlignTop)
+        self.desc_label = QLabel(' '.join(str(project.description or '暂无描述').split()))
         self.desc_label.setWordWrap(True)
         self.desc_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        self.desc_label.setMaximumHeight(40)
-        self.desc_label.setText(_project_summary_html(project))
+        self.desc_label.setMaximumHeight(38)
         self.desc_label.setToolTip(project.description or '暂无描述')
-        self.desc_label.setStyleSheet('background: transparent;')
-        text_box.addWidget(self.desc_label)
+        self.desc_label.setStyleSheet('color: rgba(255,255,255,0.55); font-size: 12px; background: transparent;')
+        summary_row.addWidget(self.desc_label, 1)
+        text_box.addLayout(summary_row)
         meta_row = QHBoxLayout()
         meta_row.setContentsMargins(0, 1, 0, 0)
         meta_row.setSpacing(8)
