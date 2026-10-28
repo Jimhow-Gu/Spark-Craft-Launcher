@@ -9,7 +9,7 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from core.config import ConfigManager
 from core.paths import scl_dir
 logger = logging.getLogger('Music')
-MUSIC_EXTENSIONS = {'.wav', '.m4a', '.ogg', '.opus', '.flac', '.aac', '.mp3'}
+MUSIC_EXTENSIONS = {'.wav', '.m4a', '.ogg', '.opus', '.flac', '.aac', '.mp3', '.wma', '.aiff', '.aif'}
 
 def music_dir():
     path = scl_dir() / 'music'
@@ -18,10 +18,10 @@ def music_dir():
 
 def list_music_files():
     try:
-        files = [path for path in music_dir().iterdir() if path.is_file() if path.suffix.lower() in MUSIC_EXTENSIONS]
+        files = [path for path in music_dir().rglob('*') if path.is_file() if path.suffix.lower() in MUSIC_EXTENSIONS]
     except OSError:
         return []
-    return sorted(files, key=(lambda p: p.name.lower()))
+    return sorted(files, key=(lambda p: (p.name.lower(), str(p).lower())))
 
 class BackgroundMusicPlayer(QObject):
     state_changed = Signal()
@@ -42,16 +42,21 @@ class BackgroundMusicPlayer(QObject):
         self._index = 0
         self._source_path = ''
         self._user_paused = bool(self.config.get('background_music_paused', False))
-        video_music = bool(self.config.get('background_video_audio', False))
-        if video_music:
-            self._user_paused = True
-        volume = int(self.config.get('background_music_volume', 60) or 0)
+        self._video_music_paused = bool(self.config.get('background_video_audio', False))
+        raw_volume = self.config.get('background_music_volume', 60)
+        try:
+            volume = int(raw_volume) if raw_volume is not None else 60
+        except (TypeError, ValueError):
+            volume = 60
         volume = max(0, min(100, volume))
         self._audio.setVolume(volume / 100.0)
         self._audio.setMuted(bool(self.config.get('background_music_muted', False)))
         self._player.mediaStatusChanged.connect(self._on_media_status)
         self._player.playbackStateChanged.connect((lambda _state: self.state_changed.emit()))
-        self.reload(play=not self._user_paused)
+        self._player.errorOccurred.connect(
+            (lambda error, message: logger.warning(f'背景音乐播放失败: {message or error}'))
+        )
+        self.reload(play=not self._user_paused and not self._video_music_paused)
 
     def reload(self, play=True):
         previous = self._source_path
@@ -80,13 +85,19 @@ class BackgroundMusicPlayer(QObject):
             self._player.setSource(QUrl.fromLocalFile(str(path)))
             self.config.set('background_music_index', self._index)
         if play:
-            self._player.play()
+            if not self._video_music_paused:
+                if self.is_muted():
+                    self.set_muted(False)
+                self._player.play()
         self.state_changed.emit()
 
     def play(self, remember=True):
         if remember:
             self._user_paused = False
             self.config.set('background_music_paused', False)
+        self._video_music_paused = False
+        if self.is_muted():
+            self.set_muted(False)
         if not self._files:
             self.reload(play=True)
             return
@@ -101,6 +112,19 @@ class BackgroundMusicPlayer(QObject):
             self._user_paused = True
             self.config.set('background_music_paused', True)
         self._player.pause()
+
+    def set_video_music_enabled(self, enabled):
+        '''视频音乐开启时临时暂停自定义音乐；关闭后恢复用户未主动暂停的音乐。'''
+
+        self._video_music_paused = bool(enabled)
+        if self._video_music_paused:
+            self._player.pause()
+        elif not self._user_paused and not self.is_muted():
+            if not self._files:
+                self.reload(play=True)
+            else:
+                self._player.play()
+        self.state_changed.emit()
 
     def user_paused(self):
         '''用户主动暂停过（区别于启动器退到后台时的临时暂停）。'''

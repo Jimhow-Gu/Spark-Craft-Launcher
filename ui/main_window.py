@@ -414,8 +414,8 @@ class MainWindow(QMainWindow):
     def _on_video_music_changed(self, enabled: bool):
         try:
             self.central.set_video_audio_enabled(bool(enabled))
+            self.music_player.set_video_music_enabled(bool(enabled))
             if enabled:
-                self.music_player.pause(remember=False)
                 self.central.play_video()
         except Exception:
             pass
