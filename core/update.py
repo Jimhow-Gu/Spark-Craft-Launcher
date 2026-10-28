@@ -19,7 +19,7 @@ from core.paths import safe_rmtree, scl_dir
 
 CURRENT_VERSION = '1.0.8'
 VERSION_DISPLAY = 'V1.0.8（正式版）'
-EXECUTABLE_BUILD = '9'
+EXECUTABLE_BUILD = '10'
 REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
 API_ACCELERATED = f'https://gh-proxy.com/{API_LATEST}'

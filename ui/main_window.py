@@ -381,7 +381,7 @@ class MainWindow(QMainWindow):
         self.music_toggle_btn.setEnabled(has_music)
         set_button_icon(
             self.music_toggle_btn,
-            'stop' if audible else 'music',
+            'music_off' if audible else 'music',
             16,
             '#e6edf3',
         )
@@ -409,10 +409,6 @@ class MainWindow(QMainWindow):
             pass
         self.music_player.set_muted(False)
         self.music_player.play()
-        try:
-            self.central.pause_video()
-        except Exception:
-            pass
         self._update_media_buttons()
 
     def _on_video_music_changed(self, enabled: bool):
