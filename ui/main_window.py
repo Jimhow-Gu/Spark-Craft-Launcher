@@ -37,6 +37,9 @@ class MainWindow(QMainWindow):
         height = width * 9 // 16
         self.setFixedSize(width, height)
         self.setWindowTitle('Spark Craft Launcher')
+        app = QApplication.instance()
+        if app is not None and not app.windowIcon().isNull():
+            self.setWindowIcon(app.windowIcon())
         self.download_manager = DownloadManager.instance()
         self.music_player = BackgroundMusicPlayer.instance()
         self._media_backgrounded = False
@@ -378,7 +381,7 @@ class MainWindow(QMainWindow):
         self.music_toggle_btn.setEnabled(has_music)
         set_button_icon(
             self.music_toggle_btn,
-            'music_off' if audible else 'music',
+            'stop' if audible else 'music',
             16,
             '#e6edf3',
         )

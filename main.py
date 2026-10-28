@@ -254,6 +254,8 @@ def main():
 
     window = MainWindow()
     window.setWindowIcon(app.windowIcon())
+    if ico_path.exists():
+        apply_windows_window_icon(window, ico_path)
     try:
         config = ConfigManager()
         config.set("launcher_window_width", window.width(), auto_save=False)
@@ -270,7 +272,7 @@ def main():
     if ico_path.exists():
         apply_windows_window_icon(window, ico_path)
         QTimer.singleShot(
-            600, lambda: apply_windows_window_icon(window, ico_path)
+            100, lambda: apply_windows_window_icon(window, ico_path)
         )
     window.setWindowState(Qt.WindowNoState)
     # 首帧绘制后再后台扫描 Java，避免启动卡顿
