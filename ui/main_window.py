@@ -32,7 +32,7 @@ class MainWindow(QMainWindow):
         width = 1500
         if available is not None:
             width = min(width, int(available.width() * 0.86), int(available.height() * 0.86 * 16 / 9))
-        width = max(960, int(width * 3 / 4))
+        width = max(960, int(width * 5 / 6))
         width = width // 16 * 16
         height = width * 9 // 16
         self.setFixedSize(width, height)

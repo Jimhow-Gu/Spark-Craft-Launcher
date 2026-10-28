@@ -17,9 +17,9 @@ from PySide6.QtCore import QThread, Signal
 from core.net import DownloadCancelled, DownloadError, HttpClient
 from core.paths import safe_rmtree, scl_dir
 
-CURRENT_VERSION = '1.0.7'
-VERSION_DISPLAY = 'V1.0.7（正式版）'
-EXECUTABLE_BUILD = '2'
+CURRENT_VERSION = '1.0.8'
+VERSION_DISPLAY = 'V1.0.8（正式版）'
+EXECUTABLE_BUILD = '3'
 REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
 API_ACCELERATED = f'https://gh-proxy.com/{API_LATEST}'
