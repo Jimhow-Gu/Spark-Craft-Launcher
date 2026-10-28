@@ -101,7 +101,10 @@ class UpdateDialog(QDialog):
 
     def _on_progress(self, done, total):
         if total > 0:
-            self.progress.setValue(max(0, min(1000, int(done * 1000 / total))))
+            value = max(0, min(1000, int(done * 1000 / total)))
+            if value > 0:
+                value = max(value, 20)
+            self.progress.setValue(value)
             self.status_label.setText(f'正在下载更新：{done * 100 // total}%')
         else:
             self.progress.setValue((self.progress.value() + 17) % 1001)

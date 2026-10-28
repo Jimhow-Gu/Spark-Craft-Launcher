@@ -37,8 +37,8 @@ class RoundedProgressBar(QProgressBar):
         if self.value() > self.minimum() and option.maximum > option.minimum and rect.width() > 0:
             ratio = max(0.0, min(1.0, (self.value() - option.minimum) / (option.maximum - option.minimum)))
             fill_width = rect.width() * ratio
-            # 低进度时也至少画出一个圆角小段，避免左侧呈现直角细条。
-            fill_width = max(fill_width, min(rect.width(), max(12.0, radius * 2)))
+            # 低进度时也至少画出一个明显的圆角小段，避免左侧呈现直角细条。
+            fill_width = max(fill_width, min(rect.width(), max(18.0, radius * 3)))
             fill = QRectF(rect.left(), rect.top(), min(rect.width(), fill_width), rect.height())
             fill_path = QPainterPath()
             fill_path.addRoundedRect(fill, radius, radius)
