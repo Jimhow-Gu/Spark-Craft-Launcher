@@ -20,7 +20,7 @@ from core.config import ConfigManager
 from core.launch import LaunchManager
 from core.java_scan import JavaScanService
 from core.logging_setup import LOG_DIR, clear_logs
-from core.background import (FIT_OPTIONS, get_settings as get_background_settings, list_background_images, next_image, pictures_dir, save_setting as save_background_setting)
+from core.background import (FIT_OPTIONS, LOOP_MODES, DEFAULT_LOOP_MODE, get_settings as get_background_settings, list_background_images, next_image, pictures_dir, save_setting as save_background_setting)
 from core.music import (BackgroundMusicPlayer, list_music_files, music_dir)
 from ui.widgets.advanced_options import AdvancedOptionsPanel
 from ui.widgets.dark_dialog import DarkQuestionDialog
@@ -388,6 +388,16 @@ class SettingsPage(QWidget):
         self.bg_fit_combo.currentIndexChanged.connect(self._on_background_setting_changed)
         fit_row.addWidget(self.bg_fit_combo, 1)
         bg_layout.addLayout(fit_row)
+        loop_row = QHBoxLayout()
+        loop_row.addWidget(QLabel('循环模式'))
+        self.bg_loop_combo = QComboBox()
+        for key, label in LOOP_MODES:
+            self.bg_loop_combo.addItem(label, key)
+        self.bg_loop_combo.setToolTip('顺序/随机在当前媒体类型内切换；全部顺序/全部随机包含图片和视频')
+        self.bg_loop_combo.setStyleSheet(self.java_combo.styleSheet())
+        self.bg_loop_combo.currentIndexChanged.connect(self._on_background_loop_mode_changed)
+        loop_row.addWidget(self.bg_loop_combo, 1)
+        bg_layout.addLayout(loop_row)
         opacity_row = QHBoxLayout()
         opacity_row.addWidget(QLabel('不透明度'))
         self.bg_opacity_slider = QSlider(Qt.Horizontal)
@@ -453,7 +463,7 @@ class SettingsPage(QWidget):
         open_bg_btn = QPushButton('打开文件夹')
         open_bg_btn.clicked.connect(self._open_background_folder)
         open_bg_btn.setStyleSheet(self._secondary_button_style())
-        refresh_bg_btn = QPushButton('刷新背景图片')
+        refresh_bg_btn = QPushButton('刷新背景')
         refresh_bg_btn.clicked.connect(self._refresh_background_image)
         refresh_bg_btn.setStyleSheet(self._secondary_button_style())
         clear_bg_btn = QPushButton('清空背景图片')
@@ -1494,6 +1504,11 @@ class SettingsPage(QWidget):
         self.bg_fit_combo.blockSignals(True)
         self.bg_fit_combo.setCurrentIndex(index if index >= 0 else 0)
         self.bg_fit_combo.blockSignals(False)
+        loop_mode = str(settings.get('loop_mode', DEFAULT_LOOP_MODE) or DEFAULT_LOOP_MODE)
+        loop_index = self.bg_loop_combo.findData(loop_mode)
+        self.bg_loop_combo.blockSignals(True)
+        self.bg_loop_combo.setCurrentIndex(loop_index if loop_index >= 0 else self.bg_loop_combo.findData(DEFAULT_LOOP_MODE))
+        self.bg_loop_combo.blockSignals(False)
         self.bg_opacity_slider.blockSignals(True)
         self.bg_opacity_slider.setValue(int(settings.get('opacity', 80)))
         self.bg_opacity_slider.blockSignals(False)
@@ -1586,6 +1601,13 @@ class SettingsPage(QWidget):
         self._bg_timer.start()
         if not self._bg_preview_timer.isActive():
             self._bg_preview_timer.start()
+
+    def _on_background_loop_mode_changed(self, _index=None):
+        mode = self.bg_loop_combo.currentData() or DEFAULT_LOOP_MODE
+        save_background_setting('background_loop_mode', mode)
+        save_background_setting('background_enabled', True)
+        self._update_background_count()
+        self.background_refresh.emit()
 
     def _background_values(self):
         return {'background_fit': self.bg_fit_combo.currentData() or 'auto', 'background_opacity': self.bg_opacity_slider.value(), 'background_blur': self.bg_blur_slider.value(), 'background_ui_depth': self.bg_depth_slider.value(), 'background_overlay': self.bg_overlay_check.isChecked()}

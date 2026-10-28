@@ -195,11 +195,17 @@ class BackgroundWidget(QWidget):
 
     def _stop_video(self):
         player = self._video_player
+        sink = self._video_sink
         self._video_player = None
         self._video_sink = None
         self._video_audio = None
         self._video_image = None
         self._video_path = ''
+        if sink is not None:
+            try:
+                sink.videoFrameChanged.disconnect(self._on_video_frame)
+            except (RuntimeError, TypeError):
+                pass
         if player is not None:
             try:
                 player.stop()
@@ -210,6 +216,8 @@ class BackgroundWidget(QWidget):
         self.video_state_changed.emit(False)
 
     def _on_video_frame(self, frame):
+        if self._video_player is None:
+            return
         try:
             image = frame.toImage()
             if not image.isNull():
