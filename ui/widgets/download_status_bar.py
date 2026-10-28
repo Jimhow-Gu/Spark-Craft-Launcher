@@ -112,6 +112,7 @@ class DownloadStatusBar(QFrame):
         self.percent_label.setText(f'{percent:.2f}%')
         if self._failed_view is not failed:
             self._failed_view = failed
+            self.progress.set_fill_color('#d83b3b' if failed else '#0078d4')
             self.percent_label.setStyleSheet('color:#ff8a8a; font-size:12px; background:transparent;' if failed else 'color:rgba(255,255,255,0.82); font-size:12px; background:transparent;')
             self.progress.setStyleSheet('QProgressBar { background:rgba(255,255,255,0.12); border:none; border-radius:4px; height:8px; } QProgressBar::chunk { background:#d83b3b; border-radius:4px; }' if failed else 'QProgressBar { background:rgba(255,255,255,0.12); border:none; border-radius:4px; height:8px; } QProgressBar::chunk { background:#0078d4; border-radius:4px; }')
         speed = snapshot.get('speed') or '0 B/s'

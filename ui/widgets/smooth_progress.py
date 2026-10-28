@@ -1,12 +1,22 @@
 '''带平滑填充动画的进度条。'''
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QRectF
-from PySide6.QtGui import QPainter, QPainterPath
+from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import QProgressBar, QStyle, QStyleOptionProgressBar
 
 
 class RoundedProgressBar(QProgressBar):
-    '''始终按圆角裁剪轨道和填充，避免首次 0% 绘制成直角矩形。'''
+    '''始终按圆角裁剪轨道和填充，低进度时也保持圆角。'''
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._fill_color = QColor('#0078d4')
+
+    def set_fill_color(self, color):
+        value = QColor(color)
+        if value.isValid() and value != self._fill_color:
+            self._fill_color = value
+            self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -18,7 +28,21 @@ class RoundedProgressBar(QProgressBar):
         painter.setClipPath(path)
         option = QStyleOptionProgressBar()
         self.initStyleOption(option)
-        self.style().drawControl(QStyle.CE_ProgressBar, option, painter, self)
+        groove = QStyleOptionProgressBar()
+        self.initStyleOption(groove)
+        groove.progress = groove.minimum
+        groove.text = ''
+        groove.textVisible = False
+        self.style().drawControl(QStyle.CE_ProgressBar, groove, painter, self)
+        if self.value() > self.minimum() and option.maximum > option.minimum and rect.width() > 0:
+            ratio = max(0.0, min(1.0, (self.value() - option.minimum) / (option.maximum - option.minimum)))
+            fill_width = rect.width() * ratio
+            # 低进度时也至少画出一个圆角小段，避免左侧呈现直角细条。
+            fill_width = max(fill_width, min(rect.width(), max(12.0, radius * 2)))
+            fill = QRectF(rect.left(), rect.top(), min(rect.width(), fill_width), rect.height())
+            fill_path = QPainterPath()
+            fill_path.addRoundedRect(fill, radius, radius)
+            painter.fillPath(fill_path, self._fill_color)
         painter.end()
 
 

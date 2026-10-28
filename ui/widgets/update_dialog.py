@@ -28,6 +28,7 @@ class UpdateDialog(QDialog):
             'QProgressBar::chunk { background:#0078d4; border-radius:6px; }'
             'QPushButton { background:#3a3d47; color:#f0f0f0; border:none; border-radius:7px; padding:7px 18px; }'
             'QPushButton:hover { background:#4a4d57; }'
+            'QPushButton:disabled { background:#30333b; color:#858a94; }'
         )
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 18)
@@ -83,6 +84,8 @@ class UpdateDialog(QDialog):
         if self._worker is not None and self._worker.isRunning():
             return
         self.download_btn.setEnabled(False)
+        self.download_btn.setText('下载中')
+        self.download_btn.setStyleSheet('QPushButton { background:#30333b; color:#858a94; }')
         self.later_btn.setText('取消')
         self.status_label.setText('正在连接中国大陆加速线路...')
         self.progress.show()
@@ -114,6 +117,8 @@ class UpdateDialog(QDialog):
         self.error_label.show()
         self.progress.hide()
         self.download_btn.setEnabled(True)
+        self.download_btn.setText('重试下载')
+        self.download_btn.setStyleSheet('QPushButton { background:#0078d4; color:white; }')
         self.later_btn.setText('关闭')
 
     def _on_finished(self):
