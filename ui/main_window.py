@@ -19,6 +19,7 @@ from ui.widgets.window_border import WindowBorderOverlay
 from ui.widgets.side_panel import SidePanel
 from ui.theme import ThemeManager
 from core.download_manager import DownloadManager
+from core.build_info import BUILD_LABEL, RELEASE_BUILD, RESOURCE_PACK_SEQUENCE, EXECUTABLE_BUILD
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -31,7 +32,8 @@ class MainWindow(QMainWindow):
         width = 1500
         if available is not None:
             width = min(width, int(available.width() * 0.86), int(available.height() * 0.86 * 16 / 9))
-        width = max(960, width // 16 * 16)
+        width = max(960, int(width * 2 / 3))
+        width = width // 16 * 16
         height = width * 9 // 16
         self.setFixedSize(width, height)
         self.setWindowTitle('Spark Craft Launcher')
@@ -129,9 +131,16 @@ class MainWindow(QMainWindow):
         self.central.video_state_changed.connect((lambda _playing: self._update_media_buttons()))
         self.music_player.state_changed.connect(self._update_media_buttons)
         QTimer.singleShot(0, self._update_media_buttons)
-        self.status_label = QLabel('开发中内容，不代表最终品质！')
-        self.status_label.setStyleSheet('color: #aaa; font-size: 12px; padding: 0 0 4px 14px; background: transparent;')
+        self.status_label = QLabel(BUILD_LABEL)
+        self.status_label.setStyleSheet('color: #9a9a9a; font-size: 10px; padding: 0 6px 4px 14px; background: transparent;')
         self.status_label.setAlignment(Qt.AlignLeft | Qt.AlignBottom)
+        self.status_label.setWordWrap(True)
+        self.status_label.setToolTip(
+            f'{BUILD_LABEL}\n'
+            f'Release 构建号：{RELEASE_BUILD}\n'
+            f'资源包序号：{RESOURCE_PACK_SEQUENCE}\n'
+            f'可执行程序/DLL 构建号：{EXECUTABLE_BUILD}'
+        )
         left_layout.addWidget(self.status_label)
         self.page_stack = QStackedWidget()
         self.page_stack.setFrameShape(QFrame.NoFrame)
