@@ -32,7 +32,7 @@ class MainWindow(QMainWindow):
         width = 1500
         if available is not None:
             width = min(width, int(available.width() * 0.86), int(available.height() * 0.86 * 16 / 9))
-        width = max(960, int(width * 2 / 3))
+        width = max(960, int(width * 3 / 4))
         width = width // 16 * 16
         height = width * 9 // 16
         self.setFixedSize(width, height)
@@ -43,6 +43,7 @@ class MainWindow(QMainWindow):
         self._update_checker = None
         self._update_dialog = None
         self._pending_update_info = None
+        self._pending_update_kind = 'version'
         self._update_notified_tag = ''
         self._video_resume_pending = False
         self._music_resume_pending = False
@@ -901,22 +902,24 @@ class MainWindow(QMainWindow):
             if manual:
                 QMessageBox.warning(self, '检查更新失败', '无法获取最新版本信息：' + chr(10) + str(error))
             return
-        from core.update import CURRENT_VERSION, is_newer
+        from core.update import CURRENT_VERSION, update_kind
         if not info:
             if manual:
                 QMessageBox.information(self, '检查更新', '暂无可用 Release。')
             return
-        if not is_newer(info.get('tag') or info.get('version'), CURRENT_VERSION):
+        kind = update_kind(info)
+        if kind == 'none':
             if manual:
                 QMessageBox.information(self, '检查更新', f'当前已经是最新版本：V{CURRENT_VERSION}（正式版）')
             return
         if manual:
-            self._show_update_dialog(info)
+            self._show_update_dialog(info, kind)
             return
         self._pending_update_info = dict(info)
-        QTimer.singleShot(1200, (lambda i=dict(info): self._show_update_toast(i)))
+        self._pending_update_kind = kind
+        QTimer.singleShot(1200, (lambda i=dict(info), k=kind: self._show_update_toast(i, k)))
 
-    def _show_update_toast(self, info):
+    def _show_update_toast(self, info, kind='version'):
         '''自动检查到新版本时先显示可点击通知，不直接弹出下载窗口。'''
 
         if not info or not info.get('asset_url'):
@@ -928,12 +931,17 @@ class MainWindow(QMainWindow):
             return
         self._update_notified_tag = tag
         self._pending_update_info = dict(info)
+        self._pending_update_kind = kind
         version = str(info.get('version') or info.get('tag') or '').strip()
         if version[:1].lower() == 'v':
             version = version[1:]
         from ui.widgets.toast import show_toast
+        if kind == 'dll':
+            text = '检测到修复了一些bug，点击下载更新！'
+        else:
+            text = f'当前检测到最新版本V{version}，点击下载更新！'
         show_toast(
-            f'当前检测到最新版本V{version}，点击下载更新！',
+            text,
             'info',
             self,
             15000,
@@ -944,9 +952,9 @@ class MainWindow(QMainWindow):
         info = self._pending_update_info
         if not info:
             return
-        self._show_update_dialog(dict(info))
+        self._show_update_dialog(dict(info), self._pending_update_kind)
 
-    def _show_update_dialog(self, info):
+    def _show_update_dialog(self, info, kind='version'):
         from ui.widgets.update_dialog import UpdateDialog
         if self._update_dialog is not None and self._update_dialog.isVisible():
             self._update_dialog.raise_()
@@ -956,7 +964,7 @@ class MainWindow(QMainWindow):
         if tag:
             self._update_notified_tag = tag
         self._pending_update_info = None
-        dialog = UpdateDialog(self, info)
+        dialog = UpdateDialog(self, info, kind)
         self._update_dialog = dialog
         try:
             accepted = dialog.exec() == dialog.Accepted

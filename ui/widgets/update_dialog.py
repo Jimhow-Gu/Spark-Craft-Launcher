@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout)
 
@@ -10,13 +11,14 @@ from ui.widgets.smooth_progress import RoundedProgressBar
 
 
 class UpdateDialog(QDialog):
-    def __init__(self, parent, info):
+    def __init__(self, parent, info, kind='version'):
         super().__init__(parent)
         self.info = dict(info or {})
+        self.update_kind = str(kind or 'version')
         self.asset_path = ''
         self.error = ''
         self._worker = None
-        self.setWindowTitle('发现新版本')
+        self.setWindowTitle('发现修复更新' if self.update_kind == 'dll' else '发现新版本')
         self.setModal(True)
         self.setMinimumWidth(520)
         self.setStyleSheet(
@@ -30,13 +32,17 @@ class UpdateDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 18)
         layout.setSpacing(12)
-        title = QLabel(f'发现新版本 {self.info.get("tag") or self.info.get("version") or ""}')
+        title = QLabel(
+            '修复了一些bug' if self.update_kind == 'dll'
+            else f'发现新版本 {self.info.get("tag") or self.info.get("version") or ""}'
+        )
         title.setStyleSheet('font-size:17px; font-weight:700;')
         layout.addWidget(title)
         name = QLabel(str(self.info.get('name') or ''))
         name.setStyleSheet('color:rgba(255,255,255,0.72); font-size:13px;')
         layout.addWidget(name)
         notes = str(self.info.get('body') or '').strip()
+        notes = re.sub(r'(?im)^\s*(?:DLL[\s_-]*BUILD|DLL版号)\s*[:=：].*$', '', notes).strip()
         if notes:
             body = QLabel(notes[:1500])
             body.setWordWrap(True)
@@ -44,7 +50,10 @@ class UpdateDialog(QDialog):
             body.setStyleSheet('color:rgba(255,255,255,0.58); font-size:12px;')
             body.setMaximumHeight(180)
             layout.addWidget(body)
-        self.status_label = QLabel('是否下载并安装此更新？')
+        self.status_label = QLabel(
+            '修复了一些bug，是否下载并安装？' if self.update_kind == 'dll'
+            else '是否下载并安装此更新？'
+        )
         self.status_label.setWordWrap(True)
         self.status_label.setStyleSheet('color:rgba(255,255,255,0.62); font-size:12px;')
         layout.addWidget(self.status_label)

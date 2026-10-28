@@ -17,8 +17,9 @@ from PySide6.QtCore import QThread, Signal
 from core.net import DownloadCancelled, DownloadError, HttpClient
 from core.paths import safe_rmtree, scl_dir
 
-CURRENT_VERSION = '1.0.6'
-VERSION_DISPLAY = 'V1.0.6（正式版）'
+CURRENT_VERSION = '1.0.7'
+VERSION_DISPLAY = 'V1.0.7（正式版）'
+EXECUTABLE_BUILD = '2'
 REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
 API_ACCELERATED = f'https://gh-proxy.com/{API_LATEST}'
@@ -54,6 +55,37 @@ def is_newer(latest_tag, current=CURRENT_VERSION):
     current_tuple = _version_tuple(current)
     length = max(len(latest), len(current_tuple))
     return latest + (0,) * (length - len(latest)) > current_tuple + (0,) * (length - len(current_tuple))
+
+
+def _parse_dll_build(body):
+    match = re.search(r'(?im)^\s*(?:DLL[\s_-]*BUILD|DLL版号)\s*[:=：]\s*(\d+)', str(body or ''))
+    try:
+        return int(match.group(1)) if match else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def update_kind(info, current=CURRENT_VERSION, current_dll=EXECUTABLE_BUILD):
+    '''返回 version / dll / none。版本号优先，版本相同时比较 DLL 构建号。'''
+
+    if not isinstance(info, dict):
+        return 'none'
+    latest = str(info.get('version') or info.get('tag') or '').strip()
+    if not latest:
+        return 'none'
+    if is_newer(latest, current):
+        return 'version'
+    if _version_tuple(latest) != _version_tuple(current):
+        return 'none'
+    try:
+        remote_dll = int(info.get('dll_build') or 0)
+    except (TypeError, ValueError):
+        remote_dll = 0
+    try:
+        local_dll = int(current_dll or 0)
+    except (TypeError, ValueError):
+        local_dll = 0
+    return 'dll' if remote_dll > local_dll else 'none'
 
 
 def fetch_latest_release(timeout=12):
@@ -92,11 +124,13 @@ def fetch_latest_release(timeout=12):
                 chosen = asset
                 break
     tag = str(data.get('tag_name') or '').strip()
+    body = str(data.get('body') or '')
     return {
         'tag': tag,
         'version': tag.lstrip('vV'),
         'name': str(data.get('name') or tag),
-        'body': str(data.get('body') or ''),
+        'body': body,
+        'dll_build': _parse_dll_build(body),
         'html_url': str(data.get('html_url') or ''),
         'published_at': str(data.get('published_at') or ''),
         'asset_name': str((chosen or {}).get('name') or ''),
@@ -259,6 +293,7 @@ def consume_updated_marker():
 
 
 __all__ = [
-    'CURRENT_VERSION', 'VERSION_DISPLAY', 'CheckUpdateWorker', 'UpdateDownloadWorker',
-    'consume_updated_marker', 'fetch_latest_release', 'is_newer', 'prepare_update',
+    'CURRENT_VERSION', 'VERSION_DISPLAY', 'EXECUTABLE_BUILD', 'CheckUpdateWorker',
+    'UpdateDownloadWorker', 'consume_updated_marker', 'fetch_latest_release',
+    'is_newer', 'update_kind', 'prepare_update',
 ]
