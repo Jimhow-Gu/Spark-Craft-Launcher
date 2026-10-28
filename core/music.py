@@ -41,7 +41,9 @@ class BackgroundMusicPlayer(QObject):
         self._files = []
         self._index = 0
         self._source_path = ''
-        self._user_paused = bool(self.config.get('background_music_paused', False))
+        # 启动器默认进入即自动播放；用户本次会话手动暂停仍有效，但下次启动重新播放。
+        self._user_paused = False
+        self.config.set('background_music_paused', False)
         self._video_music_paused = bool(self.config.get('background_video_audio', False))
         raw_volume = self.config.get('background_music_volume', 60)
         try:

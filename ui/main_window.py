@@ -47,6 +47,7 @@ class MainWindow(QMainWindow):
         self._update_notified_tag = ''
         self._video_resume_pending = False
         self._music_resume_pending = False
+        self._music_auto_started = False
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self)
@@ -850,6 +851,9 @@ class MainWindow(QMainWindow):
             self.border_overlay.raise_()
         except Exception:
             pass
+        if not self._music_auto_started:
+            self._music_auto_started = True
+            QTimer.singleShot(800, self._auto_start_music)
         try:
             self.setWindowOpacity(0.0)
             animation = QPropertyAnimation(self, b'windowOpacity', self)
@@ -862,6 +866,23 @@ class MainWindow(QMainWindow):
             animation.start()
         except Exception:
             self.setWindowOpacity(1.0)
+
+    def _auto_start_music(self):
+        '''进入启动器后自动播放背景音乐；视频音乐开启时让位给视频。'''
+
+        try:
+            if not self.music_player.has_tracks():
+                return
+            if self.central.video_audio_enabled():
+                return
+            if self.music_player.is_playing() or self.music_player.user_paused():
+                return
+            self.music_player.set_muted(False)
+            self.music_player.play()
+            self._update_media_buttons()
+            QTimer.singleShot(350, self._update_media_buttons)
+        except Exception:
+            pass
 
     def _on_startup_update_notice(self):
         try:
