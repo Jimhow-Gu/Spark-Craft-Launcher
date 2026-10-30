@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout)
 
 from core.update import UpdateDownloadWorker
+from core.paths import scl_dir
 from ui.widgets.smooth_progress import RoundedProgressBar
 
 
@@ -71,7 +72,7 @@ class UpdateDialog(QDialog):
         layout.addWidget(self.error_label)
         row = QHBoxLayout()
         row.addStretch(1)
-        self.later_btn = QPushButton('稍后')
+        self.later_btn = QPushButton('稍后更新')
         self.later_btn.clicked.connect(self.reject)
         self.download_btn = QPushButton('下载更新')
         self.download_btn.setStyleSheet('QPushButton { background:#0078d4; color:white; }')
@@ -79,6 +80,33 @@ class UpdateDialog(QDialog):
         row.addWidget(self.later_btn)
         row.addWidget(self.download_btn)
         layout.addLayout(row)
+        cached = self._find_cached_asset()
+        if cached:
+            self._set_ready(cached)
+
+    def _find_cached_asset(self):
+        name = str(self.info.get('asset_name') or '').strip()
+        if not name:
+            return ''
+        filename = re.sub(r'[^A-Za-z0-9._-]', '_', name)
+        path = scl_dir() / 'update' / 'downloads' / filename
+        if not path.is_file():
+            return ''
+        expected = int(self.info.get('asset_size') or 0)
+        if expected and path.stat().st_size != expected:
+            return ''
+        return str(path)
+
+    def _set_ready(self, path):
+        self.asset_path = str(path)
+        self.progress.show()
+        self.progress.setValue(1000)
+        self.error_label.hide()
+        self.status_label.setText('更新已下载，点击“重启安装”完成更新。也可以关闭窗口稍后更新。')
+        self.download_btn.setEnabled(True)
+        self.download_btn.setText('重启安装')
+        self.download_btn.setStyleSheet('QPushButton { background:#2e7d32; color:white; }')
+        self.later_btn.setText('稍后更新')
 
     def _on_primary_clicked(self):
         if self.asset_path:
@@ -120,14 +148,7 @@ class UpdateDialog(QDialog):
             self.status_label.setText('正在下载更新...')
 
     def _on_done(self, path):
-        self.asset_path = str(path)
-        self.progress.setValue(1000)
-        self.status_label.setText('下载完成，点击“重启”完成更新。关闭窗口也会在下次启动时替换客户端。')
-        self.error_label.hide()
-        self.download_btn.setEnabled(True)
-        self.download_btn.setText('重启')
-        self.download_btn.setStyleSheet('QPushButton { background:#2e7d32; color:white; }')
-        self.later_btn.setText('关闭')
+        self._set_ready(path)
 
     def _on_failed(self, message):
         self.error = str(message)
@@ -151,18 +172,11 @@ class UpdateDialog(QDialog):
                 worker.wait(500)
 
     def reject(self):
-        if self.asset_path:
-            # 下载完成后，关闭窗口同样视为确认更新。
-            self.accept()
-            return
+        # 关闭弹窗代表稍后更新，不在这里替换客户端。
         self._cancel_worker()
         super().reject()
 
     def closeEvent(self, event):
-        if self.asset_path:
-            self.accept()
-            event.accept()
-            return
         self._cancel_worker()
         super().closeEvent(event)
 
