@@ -48,6 +48,9 @@ class MainWindow(QMainWindow):
         self._pending_update_info = None
         self._pending_update_kind = 'version'
         self._update_notified_tag = ''
+        self._update_prepared = False
+        self._update_prepared_tag = ''
+        self._update_prepare_error = ''
         self._video_resume_pending = False
         self._music_resume_pending = False
         self._music_auto_started = False
@@ -990,13 +993,26 @@ class MainWindow(QMainWindow):
             accepted = dialog.exec() == dialog.Accepted
         finally:
             self._update_dialog = None
-        if not accepted or not dialog.asset_path:
+        if not dialog.asset_path:
             return
-        try:
-            from core.update import prepare_update
-            prepare_update(dialog.asset_path, info.get('version') or info.get('tag') or '')
-        except Exception as exc:
-            QMessageBox.critical(self, '更新失败', str(exc))
+        tag = str(info.get('tag') or info.get('version') or '')
+        if not self._update_prepared or self._update_prepared_tag != tag:
+            try:
+                from core.update import prepare_update
+                prepare_update(dialog.asset_path, info.get('version') or info.get('tag') or '')
+                self._update_prepared = True
+                self._update_prepared_tag = tag
+                self._update_prepare_error = ''
+            except Exception as exc:
+                self._update_prepare_error = str(exc)
+                if accepted:
+                    QMessageBox.critical(self, '更新失败', str(exc))
+                    return
+                from ui.widgets.toast import show_toast
+                show_toast(f'更新准备失败：{exc}', 'error', self, 5000)
+                return
+        if not accepted:
+            # 关闭弹窗只是稍后更新；更新脚本已经在后台等待启动器退出。
             return
         self._quit_for_update()
 

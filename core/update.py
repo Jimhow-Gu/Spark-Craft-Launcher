@@ -20,7 +20,7 @@ from core.paths import safe_rmtree, scl_dir
 CURRENT_VERSION = '1.0.8'
 VERSION_DISPLAY = 'V1.0.8（正式版）'
 # DLL 构建号在同一版本内递增；每次发布新大版本时重置为 1。
-EXECUTABLE_BUILD = '13'
+EXECUTABLE_BUILD = '14'
 REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
 API_ACCELERATED = f'https://gh-proxy.com/{API_LATEST}'
@@ -255,16 +255,39 @@ def prepare_update(asset_path, version):
     script = update_dir / 'apply_update.ps1'
     script_text = chr(10).join([
         'param([int]$WaitPid,[string]$NewExe,[string]$Target,[string]$WorkDir)',
+        '$LogDir = Join-Path $WorkDir "SCL\\update"',
+        'New-Item -ItemType Directory -Force -Path $LogDir | Out-Null',
+        '$Log = Join-Path $LogDir "apply_update.log"',
+        'function Write-UpdaterLog([string]$Text) {',
+        '    Add-Content -LiteralPath $Log -Value ("[" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "] " + $Text) -Encoding UTF8',
+        '}',
+        'Write-UpdaterLog "waiting for pid $WaitPid"',
         'Wait-Process -Id $WaitPid -ErrorAction SilentlyContinue',
-        'Start-Sleep -Milliseconds 600',
+        'Start-Sleep -Milliseconds 800',
         '$copied = $false',
-        'for ($i = 0; $i -lt 30; $i++) {',
-        '    try { Copy-Item -LiteralPath $NewExe -Destination $Target -Force -ErrorAction Stop; $copied = $true; break }',
-        '    catch { Start-Sleep -Milliseconds 500 }',
+        'for ($i = 0; $i -lt 60; $i++) {',
+        '    try {',
+        '        Unblock-File -LiteralPath $NewExe -ErrorAction SilentlyContinue',
+        '        Copy-Item -LiteralPath $NewExe -Destination $Target -Force -ErrorAction Stop',
+        '        $copied = $true',
+        '        Write-UpdaterLog "copy ok"',
+        '        break',
+        '    } catch {',
+        '        if ($i -eq 0 -or ($i % 10) -eq 0) { Write-UpdaterLog ("copy retry: " + $_.Exception.Message) }',
+        '        Start-Sleep -Milliseconds 500',
+        '    }',
         '}',
         'if ($copied) {',
-        '    Start-Process -FilePath $Target -WorkingDirectory $WorkDir',
+        '    Start-Sleep -Milliseconds 800',
+        '    try {',
+        '        Start-Process -FilePath $Target -WorkingDirectory $WorkDir -ErrorAction Stop',
+        '        Write-UpdaterLog "restarted"',
+        '    } catch {',
+        '        Write-UpdaterLog ("restart failed: " + $_.Exception.Message)',
+        '    }',
         '    Remove-Item -LiteralPath $NewExe -Force -ErrorAction SilentlyContinue',
+        '} else {',
+        '    Write-UpdaterLog "copy failed after retries"',
         '}',
     ]) + chr(10)
     script.write_text(script_text, encoding='utf-8-sig')
