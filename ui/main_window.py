@@ -12,6 +12,7 @@ from ui.pages.download_manager_page import DownloadManagerPage
 from ui.widgets.account_card import AccountCard
 from ui.widgets.download_status_bar import DownloadStatusBar
 from ui.widgets.painted_icons import painted_icon, set_button_icon
+from ui.widgets.media_button import MediaButton
 from ui.widgets.title_bar import WindowTitleBar
 from ui.widgets.no_wheel import WheelGuard
 from ui.widgets.background_widget import BackgroundWidget
@@ -118,17 +119,14 @@ class MainWindow(QMainWindow):
         media_layout = QHBoxLayout(media_row)
         media_layout.setContentsMargins(10, 0, 10, 2)
         media_layout.setSpacing(6)
-        media_btn_style = 'QPushButton { background:rgba(255,255,255,0.07); border:1px solid rgba(255,255,255,0.13); border-radius:6px; }QPushButton:hover { background:rgba(255,255,255,0.15); }QPushButton:disabled { background:rgba(255,255,255,0.03); border-color:rgba(255,255,255,0.06); }'
-        self.video_toggle_btn = QPushButton()
+        self.video_toggle_btn = MediaButton()
         self.video_toggle_btn.setFixedSize(30, 28)
         self.video_toggle_btn.setIconSize(QSize(16, 16))
-        self.video_toggle_btn.setStyleSheet(media_btn_style)
         self.video_toggle_btn.setToolTip('播放/暂停背景视频')
         self.video_toggle_btn.clicked.connect(self._toggle_background_video)
-        self.music_toggle_btn = QPushButton()
+        self.music_toggle_btn = MediaButton()
         self.music_toggle_btn.setFixedSize(30, 28)
         self.music_toggle_btn.setIconSize(QSize(16, 16))
-        self.music_toggle_btn.setStyleSheet(media_btn_style)
         self.music_toggle_btn.setToolTip('播放/暂停背景音乐')
         self.music_toggle_btn.clicked.connect(self._toggle_background_music)
         media_layout.addWidget(self.video_toggle_btn)
@@ -873,6 +871,8 @@ class MainWindow(QMainWindow):
         '''进入启动器后自动播放背景音乐；视频音乐开启时让位给视频。'''
 
         try:
+            if not self.music_player.autoplay_enabled():
+                return
             if not self.music_player.has_tracks():
                 return
             if self.central.video_audio_enabled():
@@ -995,38 +995,51 @@ class MainWindow(QMainWindow):
             self._update_dialog = None
         if not dialog.asset_path:
             return
-        tag = str(info.get('tag') or info.get('version') or '')
-        if not self._update_prepared or self._update_prepared_tag != tag:
-            try:
-                from core.update import prepare_update
-                prepare_update(dialog.asset_path, info.get('version') or info.get('tag') or '')
-                self._update_prepared = True
-                self._update_prepared_tag = tag
-                self._update_prepare_error = ''
-            except Exception as exc:
-                self._update_prepare_error = str(exc)
-                if accepted:
-                    QMessageBox.critical(self, '更新失败', str(exc))
-                    return
-                from ui.widgets.toast import show_toast
-                show_toast(f'更新准备失败：{exc}', 'error', self, 5000)
-                return
         if not accepted:
-            # 关闭弹窗只是稍后更新；更新脚本已经在后台等待启动器退出。
+            # 关闭弹窗只代表稍后更新；保留已下载的安装包，不启动替换。
+            self._update_prepared = False
+            self._update_prepared_tag = ''
             return
-        self._quit_for_update()
+        version = info.get('version') or info.get('tag') or ''
+        self._quit_for_update(dialog.asset_path, version)
 
-    def _quit_for_update(self):
+    def _quit_for_update(self, asset_path='', version=''):
+        '''优先在当前进程内替换 exe 并启动新版本，失败时回退到外部更新脚本。'''
+
+        self._closing = True
         try:
-            self._closing = True
             from core.single_instance import release_single_instance
             release_single_instance()
         except Exception:
             pass
-        app = QApplication.instance()
-        if app is not None:
-            app.quit()
-        QTimer.singleShot(350, (lambda: os._exit(0)))
+        if asset_path:
+            try:
+                from core.update import apply_update_inplace
+                if apply_update_inplace(asset_path, version):
+                    # 新进程已经创建；立即退出，避免旧进程继续占用 exe / 单实例锁。
+                    os._exit(0)
+            except Exception as exc:
+                self._update_prepare_error = str(exc)
+                self._update_prepared = False
+            try:
+                from core.update import prepare_update
+                prepare_update(asset_path, version)
+                self._update_prepared = True
+                self._update_prepared_tag = str(version)
+                self._update_prepare_error = ''
+            except Exception as exc:
+                self._update_prepare_error = str(exc)
+                self._closing = False
+                try:
+                    from core.single_instance import acquire_single_instance
+                    acquire_single_instance()
+                except Exception:
+                    pass
+                QMessageBox.critical(self, '更新失败', f'无法启动更新程序：{exc}')
+                return False
+        # 外部更新脚本正在等待本进程退出；直接结束进程，
+        # 避免 Qt 事件循环退出后仍有线程让窗口残留、看似“没有重启”。
+        os._exit(0)
 
     def closeEvent(self, event):
         if getattr(self, '_closing', False):

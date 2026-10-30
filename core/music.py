@@ -41,9 +41,11 @@ class BackgroundMusicPlayer(QObject):
         self._files = []
         self._index = 0
         self._source_path = ''
-        # 启动器默认进入即自动播放；用户本次会话手动暂停仍有效，但下次启动重新播放。
+        # 根据“启动自动播放”设置决定是否在启动时播放；手动暂停只影响本次会话。
         self._user_paused = False
-        self.config.set('background_music_paused', False)
+        autoplay = self.autoplay_enabled()
+        if autoplay:
+            self.config.set('background_music_paused', False)
         self._video_music_paused = bool(self.config.get('background_video_audio', False))
         raw_volume = self.config.get('background_music_volume', 60)
         try:
@@ -58,7 +60,10 @@ class BackgroundMusicPlayer(QObject):
         self._player.errorOccurred.connect(
             (lambda error, message: logger.warning(f'背景音乐播放失败: {message or error}'))
         )
-        self.reload(play=not self._user_paused and not self._video_music_paused)
+        self.reload(play=autoplay and not self._video_music_paused)
+
+    def autoplay_enabled(self):
+        return bool(self.config.get('background_music_autoplay', True))
 
     def reload(self, play=True):
         previous = self._source_path

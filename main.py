@@ -231,6 +231,14 @@ def main():
         sys.exit(0)
     logging.getLogger("Startup").info("单实例锁已获取")
 
+    # 更新时旧 exe 会被重命名为 .old；等旧进程退出后由后台线程清理。
+    try:
+        import threading
+        from core.update import cleanup_old_executable
+        threading.Thread(target=cleanup_old_executable, daemon=True).start()
+    except Exception:
+        pass
+
     # 只有首个实例才整理 SCL 运行目录，避免第二个实例移动正在使用的文件
     migrate_legacy_dirs()
     ensure_runtime_dirs()

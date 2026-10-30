@@ -510,6 +510,10 @@ class SettingsPage(QWidget):
         music_hint.setWordWrap(True)
         music_hint.setStyleSheet('color: rgba(255,255,255,0.48); font-size: 12px;')
         music_layout.addWidget(music_hint)
+        self.music_autoplay_check = ThemedCheckBox('启动自动播放')
+        self.music_autoplay_check.setToolTip('勾选后，启动器启动时自动播放 SCL/music 中的背景音乐')
+        self.music_autoplay_check.toggled.connect(self._on_music_autoplay_toggled)
+        music_layout.addWidget(self.music_autoplay_check)
         self.music_pause_check = ThemedCheckBox('后台自动暂停')
         self.music_pause_check.setToolTip('勾选后，启动器最小化或失去焦点时自动暂停背景音乐；回到前台后恢复播放')
         self.music_pause_check.toggled.connect(self._on_music_pause_toggled)
@@ -1590,6 +1594,10 @@ class SettingsPage(QWidget):
         self.config.set('background_music_pause_on_background', bool(checked))
         self.config.save()
 
+    def _on_music_autoplay_toggled(self, checked):
+        self.config.set('background_music_autoplay', bool(checked))
+        self.config.save()
+
     def _on_video_volume_changed(self, value):
         value = max(0, min(100, int(value)))
         self.bg_volume_label.setText(f'{value}%')
@@ -1653,6 +1661,11 @@ class SettingsPage(QWidget):
         self.music_volume_slider.setValue(volume)
         self.music_volume_slider.blockSignals(False)
         self.music_volume_label.setText(f'{volume}%')
+        self.music_autoplay_check.blockSignals(True)
+        self.music_autoplay_check.setChecked(
+            bool(self.config.get('background_music_autoplay', True))
+        )
+        self.music_autoplay_check.blockSignals(False)
         self.music_pause_check.blockSignals(True)
         self.music_pause_check.setChecked(
             bool(self.config.get('background_music_pause_on_background', True))

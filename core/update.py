@@ -20,7 +20,7 @@ from core.paths import safe_rmtree, scl_dir
 CURRENT_VERSION = '1.0.8'
 VERSION_DISPLAY = 'V1.0.8（正式版）'
 # DLL 构建号在同一版本内递增；每次发布新大版本时重置为 1。
-EXECUTABLE_BUILD = '16'
+EXECUTABLE_BUILD = '17'
 REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
 API_ACCELERATED = f'https://gh-proxy.com/{API_LATEST}'
@@ -242,6 +242,129 @@ def _extract_exe(asset_path):
     return target
 
 
+def write_update_log(text):
+    try:
+        log_dir = scl_dir() / 'update'
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime('%Y-%m-%d %H:%M:%S')
+        with (log_dir / 'apply_update.log').open('a', encoding='utf-8') as handle:
+            handle.write(f'[{stamp}] {text}\n')
+    except OSError:
+        pass
+
+
+def _pending_update_marker(version):
+    marker = scl_dir() / 'update' / 'pending_update.json'
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps({'version': str(version), 'time': time.time()}, ensure_ascii=False),
+        encoding='utf-8',
+    )
+    return marker
+
+
+def apply_update_inplace(asset_path, version):
+    '''在当前进程内完成替换并启动新 exe。
+
+    Windows 允许重命名正在运行的 exe，但不允许直接覆盖。先把旧 exe
+    改名为 .old，再把新文件复制到原路径，最后启动新进程。整个过程不依赖
+    PowerShell，避免旧更新脚本在部分环境下未执行导致“更新后不重启”。
+    '''
+
+    if not getattr(sys, 'frozen', False):
+        raise DownloadError('源码运行模式不支持自动替换 exe，请手动下载更新。')
+    target = Path(sys.executable).resolve()
+    if not target.is_file():
+        raise DownloadError('找不到当前启动器 exe，无法自动更新。')
+    new_exe = _extract_exe(asset_path)
+    old_exe = target.with_name(target.name + '.old')
+    write_update_log(f'inplace: target={target} new={new_exe}')
+    moved = False
+    try:
+        if old_exe.exists():
+            try:
+                old_exe.unlink()
+            except OSError:
+                pass
+        last_error = None
+        for attempt in range(12):
+            try:
+                os.replace(target, old_exe)
+                moved = True
+                break
+            except OSError as exc:
+                last_error = exc
+                time.sleep(0.2)
+        if not moved:
+            raise DownloadError(f'无法重命名当前 exe：{last_error}')
+        shutil.copy2(new_exe, target)
+        with target.open('rb') as handle:
+            magic = handle.read(2)
+        if magic != b'MZ' or target.stat().st_size != new_exe.stat().st_size:
+            raise DownloadError('更新文件写入不完整')
+        _pending_update_marker(version)
+        try:
+            new_exe.unlink()
+        except OSError:
+            pass
+        write_update_log('inplace: copy ok, launching new exe')
+        last_launch_error = None
+        for attempt in range(10):
+            try:
+                subprocess.Popen(
+                    [str(target)],
+                    cwd=str(target.parent),
+                    close_fds=True,
+                    creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0),
+                )
+                last_launch_error = None
+                break
+            except OSError as exc:
+                last_launch_error = exc
+                time.sleep(0.3)
+        if last_launch_error is not None:
+            raise DownloadError(f'无法启动新版本：{last_launch_error}')
+        write_update_log('inplace: restarted')
+        return True
+    except Exception as exc:
+        write_update_log(f'inplace failed: {exc}')
+        if moved:
+            try:
+                if target.exists():
+                    target.unlink()
+                os.replace(old_exe, target)
+                write_update_log('inplace: restored previous exe')
+            except OSError as restore_error:
+                write_update_log(f'inplace restore failed: {restore_error}')
+            try:
+                (scl_dir() / 'update' / 'pending_update.json').unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
+
+
+def cleanup_old_executable(retries=20):
+    '''启动成功后清理上一版重命名留下的 .old 文件。'''
+
+    if not getattr(sys, 'frozen', False):
+        return
+    try:
+        old_exe = Path(sys.executable).resolve().with_name(
+            Path(sys.executable).resolve().name + '.old'
+        )
+        if not old_exe.exists():
+            return
+        for _ in range(max(1, int(retries))):
+            try:
+                old_exe.unlink()
+                write_update_log('cleaned old executable')
+                return
+            except OSError:
+                time.sleep(0.25)
+    except OSError:
+        pass
+
+
 def prepare_update(asset_path, version):
     '''下载完成后启动外部更新脚本；调用方随后应退出启动器。返回更新脚本路径。'''
 
@@ -250,8 +373,7 @@ def prepare_update(asset_path, version):
     target = Path(sys.executable).resolve()
     new_exe = _extract_exe(asset_path)
     update_dir = scl_dir() / 'update'
-    marker = update_dir / 'pending_update.json'
-    marker.write_text(json.dumps({'version': str(version), 'time': time.time()}, ensure_ascii=False), encoding='utf-8')
+    _pending_update_marker(version)
     script = update_dir / 'apply_update.ps1'
     script_text = chr(10).join([
         'param([int]$WaitPid,[string]$NewExe,[string]$Target,[string]$WorkDir)',
@@ -291,16 +413,22 @@ def prepare_update(asset_path, version):
         '}',
     ]) + chr(10)
     script.write_text(script_text, encoding='utf-8-sig')
-    subprocess.Popen(
-        ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script),
-         str(os.getpid()), str(new_exe), str(target), str(target.parent)],
-        creationflags=(
-            getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-            | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
-        ),
-        close_fds=True,
-        cwd=str(target.parent),
-    )
+    write_update_log(f'prepare: target={target} new={new_exe} script={script}')
+    try:
+        subprocess.Popen(
+            ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script),
+             str(os.getpid()), str(new_exe), str(target), str(target.parent)],
+            creationflags=(
+                getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+                | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
+            ),
+            close_fds=True,
+            cwd=str(target.parent),
+        )
+        write_update_log('prepare: powershell started')
+    except OSError as exc:
+        write_update_log(f'prepare: powershell failed: {exc}')
+        raise
     return script
 
 
@@ -322,6 +450,7 @@ def consume_updated_marker():
 
 __all__ = [
     'CURRENT_VERSION', 'VERSION_DISPLAY', 'EXECUTABLE_BUILD', 'CheckUpdateWorker',
-    'UpdateDownloadWorker', 'consume_updated_marker', 'fetch_latest_release',
-    'is_newer', 'update_kind', 'prepare_update',
+    'UpdateDownloadWorker', 'apply_update_inplace', 'cleanup_old_executable',
+    'consume_updated_marker', 'fetch_latest_release', 'is_newer', 'prepare_update',
+    'update_kind', 'write_update_log',
 ]

@@ -334,10 +334,54 @@ class ThemeManager(QObject):
                 continue
 
     # ---------- 应用 ----------
+    _APP_TOOLTIP_MARK = '/*__scl_global_tooltip__*/'
+
+    def _apply_tooltip_style(self, light: bool):
+        '''全局设置原生 QToolTip 配色。
+
+        工具栏/媒体按钮等控件没有 QLabel 子控件，之前只在含 QLabel 的
+        控件样式里追加 QToolTip 规则，导致浅色模式下提示框仍然是深色。
+        '''
+
+        app = self._app
+        if app is None:
+            return
+        current = app.styleSheet()
+        base = getattr(app, '_scl_base_stylesheet', None)
+        if base is None or (
+            self._APP_TOOLTIP_MARK not in current and current != base
+        ):
+            base = (
+                current.split(self._APP_TOOLTIP_MARK, 1)[0]
+                if self._APP_TOOLTIP_MARK in current
+                else current
+            )
+            app._scl_base_stylesheet = base
+        if light:
+            tip = (
+                'QToolTip { background-color:#fbfbfb; color:#1b1b1b;'
+                ' border:1px solid #c8ccd2; padding:4px 7px; }'
+                'QToolTip QLabel { background-color:transparent; color:#1b1b1b; }'
+            )
+        else:
+            tip = (
+                'QToolTip { background-color:#20232b; color:#f0f0f0;'
+                ' border:1px solid #3a4050; padding:4px 7px; }'
+                'QToolTip QLabel { background-color:transparent; color:#f0f0f0; }'
+            )
+        self._theme_updating = True
+        try:
+            app.setStyleSheet(
+                base + chr(10) + self._APP_TOOLTIP_MARK + chr(10) + tip
+            )
+        finally:
+            self._theme_updating = False
+
     def _apply_global(self, light: bool, visible_only: bool = False):
         self._light = bool(light)
         app = self._app
         app.setPalette(self._make_palette(light))
+        self._apply_tooltip_style(light)
         CheckBoxProxyStyle.set_light_mode(light)
         try:
             from ui.widgets.painted_icons import set_light_mode
@@ -583,6 +627,12 @@ class ThemeManager(QObject):
     def _style_shown_widget(self, widget: QWidget):
         if isinstance(widget, QMenu):
             self._prepare_menu(widget)
+            return
+        if self._light and isinstance(widget, QDialog):
+            # 浅色主题下新建的弹窗需要连同子控件一起转换，
+            # 否则窗口显示后内部仍是深色文字/背景。
+            self._apply_tree(widget)
+            return
         setter = getattr(widget, 'set_light', None)
         if callable(setter):
             try:
