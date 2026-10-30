@@ -294,8 +294,12 @@ def prepare_update(asset_path, version):
     subprocess.Popen(
         ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script),
          str(os.getpid()), str(new_exe), str(target), str(target.parent)],
-        creationflags=getattr(subprocess, 'DETACHED_PROCESS', 0) | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0),
+        creationflags=(
+            getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+            | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
+        ),
         close_fds=True,
+        cwd=str(target.parent),
     )
     return script
 
