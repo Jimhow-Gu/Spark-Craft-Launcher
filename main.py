@@ -115,18 +115,9 @@ def apply_windows_window_icon(window, icon_path):
 
 
 def apply_packaged_defaults_once():
-    """打包版首次运行时恢复默认设置（保留账号与游戏目录）。"""
-    if not getattr(sys, "frozen", False):
-        return
-    config = ConfigManager()
-    marker = Path(config.config_dir) / ".packaged_defaults_v1"
-    if marker.exists():
-        return
-    config.reset_to_defaults(preserve_accounts=True, preserve_paths=True)
-    try:
-        marker.write_text("1", encoding="utf-8")
-    except OSError:
-        pass
+    """兼容旧版启动流程；更新后不再重置主题和其他用户设置。"""
+
+    return
 
 
 def launcher_base_dir() -> Path:

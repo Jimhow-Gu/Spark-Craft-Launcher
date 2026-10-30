@@ -95,6 +95,7 @@ class AboutPage(QWidget):
         gubwon_row = self._row(gubwon, 'Gubwon', 'Spark Craft Launcher 的开发者')
         self.sponsor_btn = QPushButton('赞助SCL！')
         self.sponsor_btn.setCursor(Qt.PointingHandCursor)
+        self.sponsor_btn.setFixedSize(128, 34)
         self.sponsor_btn.setStyleSheet(
             'QPushButton { background:rgba(255,255,255,0.08); color:#f0f0f0;'
             ' border:1px solid rgba(255,255,255,0.18); border-radius:7px; padding:6px 14px; }'
@@ -110,6 +111,7 @@ class AboutPage(QWidget):
         scl_row = self._row(scl, 'Spark Craft Launcher', f'当前版本: {_VERSION_TEXT}')
         self.check_update_btn = QPushButton('检查更新')
         self.check_update_btn.setCursor(Qt.PointingHandCursor)
+        self.check_update_btn.setFixedSize(128, 34)
         self.check_update_btn.setStyleSheet(
             'QPushButton { background:rgba(255,255,255,0.08); color:#f0f0f0;'
             ' border:1px solid rgba(255,255,255,0.18); border-radius:7px; padding:6px 14px; }'

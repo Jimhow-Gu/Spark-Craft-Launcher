@@ -102,7 +102,6 @@ class SettingsPage(QWidget):
         self.theme_combo.addItem('跟随系统', 'system')
         self.theme_combo.setMinimumWidth(220)
         self.theme_combo.setStyleSheet('\n            QComboBox {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.1);\n                border-radius: 6px;\n                color: #f0f0f0;\n                padding: 4px 8px;\n            }\n            QComboBox::drop-down { border: none; }\n            QComboBox QAbstractItemView { background: #2a2a2a; color: #f0f0f0; border: 1px solid rgba(255,255,255,0.1); }\n        ')
-        self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
         self.theme_combo.activated.connect(self._on_theme_activated)
         theme_row.addWidget(theme_label)
         theme_row.addWidget(self.theme_combo, 1)
@@ -690,11 +689,11 @@ class SettingsPage(QWidget):
             'QTabWidget::pane { border:none; background:transparent; }'
             'QTabWidget::tab-bar { border:none; background:transparent; left:0px; }'
             'QTabBar { border:none; background:transparent; }'
-            'QTabBar::tab { background:rgba(255,255,255,0.06); color:#f0f0f0;'
-            ' border:none; padding:8px 22px; margin-right:6px; margin-bottom:8px;'
+            'QTabBar::tab { background:rgba(255,255,255,0.11); color:#f0f0f0;'
+            ' border:1px solid rgba(255,255,255,0.16); padding:8px 22px; margin-right:6px; margin-bottom:8px;'
             ' border-radius:8px; font-size:11pt; }'
-            'QTabBar::tab:selected { background:#0078d4; color:white; }'
-            'QTabBar::tab:hover { background:rgba(255,255,255,0.13); }'
+            'QTabBar::tab:selected { background:#0078d4; color:white; border-color:#0078d4; }'
+            'QTabBar::tab:hover { background:rgba(255,255,255,0.18); }'
         )
         self.settings_tabs.addTab(self.startup_scroll, '启动')
         self.settings_tabs.setTabIcon(0, painted_icon('play', 16, '#aab4c0'))
@@ -1566,7 +1565,14 @@ class SettingsPage(QWidget):
         self.config.save()
         # 延后到下拉框点击事件处理完毕后再应用主题，
         # 避免重设样式打断弹窗导致“点两次才选上”
-        QTimer.singleShot(0, lambda t=str(theme): self.theme_changed.emit(t))
+        self._theme_apply_token = getattr(self, '_theme_apply_token', 0) + 1
+        token = self._theme_apply_token
+        QTimer.singleShot(150, lambda t=str(theme), k=token: self._apply_theme_delayed(t, k))
+
+    def _apply_theme_delayed(self, theme, token):
+        if token != getattr(self, '_theme_apply_token', 0):
+            return
+        self.theme_changed.emit(str(theme))
 
     def _on_theme_activated(self, index):
         self._on_theme_changed(index)
