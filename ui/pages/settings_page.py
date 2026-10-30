@@ -689,11 +689,11 @@ class SettingsPage(QWidget):
             'QTabWidget::pane { border:none; background:transparent; }'
             'QTabWidget::tab-bar { border:none; background:transparent; left:0px; }'
             'QTabBar { border:none; background:transparent; }'
-            'QTabBar::tab { background:rgba(255,255,255,0.11); color:#f0f0f0;'
-            ' border:1px solid rgba(255,255,255,0.16); padding:8px 22px; margin-right:6px; margin-bottom:8px;'
+            'QTabBar::tab { background:rgba(255,255,255,0.16); color:#f0f0f0;'
+            ' border:1px solid rgba(255,255,255,0.24); padding:8px 22px; margin-right:6px; margin-bottom:8px;'
             ' border-radius:8px; font-size:11pt; }'
             'QTabBar::tab:selected { background:#0078d4; color:white; border-color:#0078d4; }'
-            'QTabBar::tab:hover { background:rgba(255,255,255,0.18); }'
+            'QTabBar::tab:hover { background:rgba(255,255,255,0.24); }'
         )
         self.settings_tabs.addTab(self.startup_scroll, '启动')
         self.settings_tabs.setTabIcon(0, painted_icon('play', 16, '#aab4c0'))
