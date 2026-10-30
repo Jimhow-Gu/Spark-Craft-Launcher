@@ -14,6 +14,8 @@ class MediaButton(QPushButton):
         'QPushButton:pressed { background:rgba(255,255,255,0.22); }'
         'QPushButton:disabled { background:rgba(255,255,255,0.03);'
         ' border-color:rgba(255,255,255,0.07); }'
+        'QToolTip, QToolTip QLabel { background-color:#20232b; color:#f0f0f0;'
+        ' border:1px solid #3a4050; padding:4px 7px; }'
     )
     _LIGHT_STYLE = (
         'QPushButton { background:rgba(0,0,0,0.06);'
@@ -23,6 +25,8 @@ class MediaButton(QPushButton):
         'QPushButton:pressed { background:rgba(0,0,0,0.18); }'
         'QPushButton:disabled { background:rgba(0,0,0,0.03);'
         ' border-color:rgba(0,0,0,0.09); }'
+        'QToolTip, QToolTip QLabel { background-color:#fbfbfb; color:#1b1b1b;'
+        ' border:1px solid #c8ccd2; padding:4px 7px; }'
     )
 
     def __init__(self, parent=None):

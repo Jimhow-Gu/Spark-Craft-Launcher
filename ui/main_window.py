@@ -994,6 +994,9 @@ class MainWindow(QMainWindow):
         finally:
             self._update_dialog = None
         if not dialog.asset_path:
+            if accepted:
+                from ui.widgets.toast import show_toast
+                show_toast('更新安装包不可用，请重新下载更新。', 'error', self, 6000)
             return
         if not accepted:
             # 关闭弹窗只代表稍后更新；保留已下载的安装包，不启动替换。
@@ -1001,6 +1004,13 @@ class MainWindow(QMainWindow):
             self._update_prepared_tag = ''
             return
         version = info.get('version') or info.get('tag') or ''
+        try:
+            from core.update import write_update_log
+            write_update_log(
+                f'ui: restart requested asset={dialog.asset_path} version={version}'
+            )
+        except Exception:
+            pass
         self._quit_for_update(dialog.asset_path, version)
 
     def _quit_for_update(self, asset_path='', version=''):
@@ -1021,6 +1031,11 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 self._update_prepare_error = str(exc)
                 self._update_prepared = False
+                try:
+                    from core.update import write_update_log
+                    write_update_log(f'ui: inplace failed, trying external updater: {exc}')
+                except Exception:
+                    pass
             try:
                 from core.update import prepare_update
                 prepare_update(asset_path, version)

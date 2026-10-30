@@ -20,7 +20,7 @@ from core.paths import safe_rmtree, scl_dir
 CURRENT_VERSION = '1.0.8'
 VERSION_DISPLAY = 'V1.0.8（正式版）'
 # DLL 构建号在同一版本内递增；每次发布新大版本时重置为 1。
-EXECUTABLE_BUILD = '17'
+EXECUTABLE_BUILD = '18'
 REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
 API_ACCELERATED = f'https://gh-proxy.com/{API_LATEST}'
@@ -263,6 +263,24 @@ def _pending_update_marker(version):
     return marker
 
 
+def _resolve_update_exe(asset_path):
+    '''返回 (可用的更新 exe, 是否为临时解压文件)。
+
+    下载附件本身就是 exe 时直接使用，避免再次复制大文件；
+    zip 附件才解压到 SCL/update 下。
+    '''
+
+    path = Path(asset_path)
+    if not path.is_file():
+        raise DownloadError('更新安装包不存在，请重新下载更新。')
+    if path.suffix.lower() == '.exe':
+        with path.open('rb') as handle:
+            if handle.read(2) != b'MZ':
+                raise DownloadError('下载的更新文件不是有效的 exe')
+        return path, False
+    return _extract_exe(path), True
+
+
 def apply_update_inplace(asset_path, version):
     '''在当前进程内完成替换并启动新 exe。
 
@@ -276,16 +294,25 @@ def apply_update_inplace(asset_path, version):
     target = Path(sys.executable).resolve()
     if not target.is_file():
         raise DownloadError('找不到当前启动器 exe，无法自动更新。')
-    new_exe = _extract_exe(asset_path)
+    write_update_log(
+        f'inplace: start target={target} asset={asset_path} version={version}'
+    )
     old_exe = target.with_name(target.name + '.old')
-    write_update_log(f'inplace: target={target} new={new_exe}')
     moved = False
+    extracted = False
     try:
+        new_exe, extracted = _resolve_update_exe(asset_path)
+        write_update_log(f'inplace: resolved new={new_exe}')
+        if new_exe.resolve() == target:
+            raise DownloadError('更新包与当前启动器相同，无需更新。')
         if old_exe.exists():
             try:
                 old_exe.unlink()
             except OSError:
-                pass
+                # 上一次残留的 .old 仍被占用时换一个名字，避免本次更新失败。
+                old_exe = target.with_name(
+                    f'{target.name}.{os.getpid()}.old'
+                )
         last_error = None
         for attempt in range(12):
             try:
@@ -303,10 +330,11 @@ def apply_update_inplace(asset_path, version):
         if magic != b'MZ' or target.stat().st_size != new_exe.stat().st_size:
             raise DownloadError('更新文件写入不完整')
         _pending_update_marker(version)
-        try:
-            new_exe.unlink()
-        except OSError:
-            pass
+        if extracted:
+            try:
+                new_exe.unlink()
+            except OSError:
+                pass
         write_update_log('inplace: copy ok, launching new exe')
         last_launch_error = None
         for attempt in range(10):
@@ -322,6 +350,14 @@ def apply_update_inplace(asset_path, version):
             except OSError as exc:
                 last_launch_error = exc
                 time.sleep(0.3)
+        if last_launch_error is not None:
+            # Popen 失败时再走 ShellExecute，部分安全软件只拦截前者。
+            try:
+                os.startfile(str(target))
+                last_launch_error = None
+                write_update_log('inplace: started via ShellExecute')
+            except OSError as exc:
+                last_launch_error = exc
         if last_launch_error is not None:
             raise DownloadError(f'无法启动新版本：{last_launch_error}')
         write_update_log('inplace: restarted')
@@ -349,18 +385,18 @@ def cleanup_old_executable(retries=20):
     if not getattr(sys, 'frozen', False):
         return
     try:
-        old_exe = Path(sys.executable).resolve().with_name(
-            Path(sys.executable).resolve().name + '.old'
-        )
-        if not old_exe.exists():
+        target = Path(sys.executable).resolve()
+        candidates = list(target.parent.glob(target.name + '*.old'))
+        if not candidates:
             return
-        for _ in range(max(1, int(retries))):
-            try:
-                old_exe.unlink()
-                write_update_log('cleaned old executable')
-                return
-            except OSError:
-                time.sleep(0.25)
+        for old_exe in candidates:
+            for _ in range(max(1, int(retries))):
+                try:
+                    old_exe.unlink()
+                    write_update_log(f'cleaned old executable {old_exe.name}')
+                    break
+                except OSError:
+                    time.sleep(0.25)
     except OSError:
         pass
 
@@ -373,7 +409,7 @@ def prepare_update(asset_path, version):
     target = Path(sys.executable).resolve()
     new_exe = _extract_exe(asset_path)
     update_dir = scl_dir() / 'update'
-    _pending_update_marker(version)
+    marker = _pending_update_marker(version)
     script = update_dir / 'apply_update.ps1'
     script_text = chr(10).join([
         'param([int]$WaitPid,[string]$NewExe,[string]$Target,[string]$WorkDir)',
@@ -428,6 +464,10 @@ def prepare_update(asset_path, version):
         write_update_log('prepare: powershell started')
     except OSError as exc:
         write_update_log(f'prepare: powershell failed: {exc}')
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError:
+            pass
         raise
     return script
 

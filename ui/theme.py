@@ -205,8 +205,10 @@ def _light_qss(qss: str) -> str:
             'gridline-color',
         ):
             continue
-        open_brace = text.rfind('{', 0, match.start())
-        close_brace = text.find('}', match.start())
+        # 用属性本身的位置查找所属规则，避免把上一条规则的强调色
+        # 误当成当前规则的背景，导致按钮背景保持深色而文字变深。
+        open_brace = text.rfind('{', 0, match.start('prop'))
+        close_brace = text.find('}', match.start('prop'))
         block = text[open_brace + 1:close_brace if close_brace >= 0 else len(text)]
         accent_background = _block_has_accent_background(block)
         value = match.group('value')
@@ -541,14 +543,15 @@ class ThemeManager(QObject):
                     widget._theme_light_style = target
             else:
                 target = original
-            if 'QLabel' in target:
-                tip_bg, tip_fg = ('#fbfbfb', '#1b1b1b') if light else ('#20232b', '#f0f0f0')
-                final = target + self._TOOLTIP_MARK + (
-                    chr(10) + 'QToolTip, QToolTip QLabel { background-color:' + tip_bg + ';'
-                    ' color:' + tip_fg + '; }'
-                )
-            else:
-                final = target
+            # 控件自身的样式表会覆盖应用级 QToolTip 规则。只要控件有样式，
+            # 就把提示框规则一起挂到该样式表上，复选框、按钮、分组框内的
+            # 提示才不会在浅色主题下变成透明/深色。
+            tip_bg, tip_fg = ('#fbfbfb', '#1b1b1b') if light else ('#20232b', '#f0f0f0')
+            final = target + self._TOOLTIP_MARK + (
+                chr(10) + 'QToolTip, QToolTip QLabel { background-color:' + tip_bg + ';'
+                ' color:' + tip_fg + '; border:1px solid '
+                + ('#c8ccd2' if light else '#3a4050') + '; padding:4px 7px; }'
+            )
             if widget.styleSheet() != final:
                 self._theme_updating = True
                 try:
