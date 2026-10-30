@@ -31,9 +31,9 @@ class WindowTitleBar(QFrame):
             logo_path = Path(__file__).resolve().parent.parent / 'imgs' / 'sparkler.png'
         if logo_path.is_file():
             try:
-                pixmap = QPixmap(str(logo_path)).scaled(
-                    22, 22, Qt.KeepAspectRatio, Qt.SmoothTransformation
-                )
+                from ui.widgets.settings_widgets import hidpi_pixmap, trim_transparent
+                pixmap = trim_transparent(QPixmap(str(logo_path)))
+                pixmap = hidpi_pixmap(pixmap, 22, 22, smooth=True, keep_aspect=True)
                 if not pixmap.isNull():
                     logo_label.setPixmap(pixmap)
             except Exception:
