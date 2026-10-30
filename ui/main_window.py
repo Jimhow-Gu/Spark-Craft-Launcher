@@ -381,7 +381,7 @@ class MainWindow(QMainWindow):
         self.music_toggle_btn.setEnabled(has_music)
         set_button_icon(
             self.music_toggle_btn,
-            'music_off' if audible else 'music',
+            'music' if audible else 'music_off',
             16,
             '#e6edf3',
         )

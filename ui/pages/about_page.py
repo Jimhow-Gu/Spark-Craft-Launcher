@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl, Signal
-from PySide6.QtGui import QPainter, QPixmap
+from PySide6.QtGui import QDesktopServices, QPainter, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
@@ -92,7 +92,19 @@ class AboutPage(QWidget):
             scl.setPixmap(rounded_pixmap(
                 hidpi_pixmap(trim_transparent(QPixmap(str(scl_logo))), 44, 44)
             ))
-        layout.addLayout(self._row(gubwon, 'Gubwon', 'Spark Craft Launcher 的开发者'))
+        gubwon_row = self._row(gubwon, 'Gubwon', 'Spark Craft Launcher 的开发者')
+        self.sponsor_btn = QPushButton('赞助SCL！')
+        self.sponsor_btn.setCursor(Qt.PointingHandCursor)
+        self.sponsor_btn.setStyleSheet(
+            'QPushButton { background:rgba(255,255,255,0.08); color:#f0f0f0;'
+            ' border:1px solid rgba(255,255,255,0.18); border-radius:7px; padding:6px 14px; }'
+            'QPushButton:hover { background:rgba(0,120,212,0.72); }'
+        )
+        self.sponsor_btn.clicked.connect(
+            (lambda: QDesktopServices.openUrl(QUrl('https://ifdian.net/a/200811GJH')))
+        )
+        gubwon_row.addWidget(self.sponsor_btn)
+        layout.addLayout(gubwon_row)
         layout.addLayout(self._row(deepseek, 'DeepSeek', 'Spark Craft Launcher 的协助开发者'))
         layout.addLayout(self._row(zhipu, '智谱AI', 'Spark Craft Launcher 的协助开发者'))
         scl_row = self._row(scl, 'Spark Craft Launcher', f'当前版本: {_VERSION_TEXT}')
