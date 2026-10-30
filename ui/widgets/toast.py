@@ -8,6 +8,13 @@ from core.app_font import ui_font
 _LEVEL_STYLE = {'info': {'background': 'rgba(18,19,22,246)', 'border': 'rgba(255,255,255,0.20)', 'accent': '#e8e8e8', 'mark': 'i', 'duration': 4200, 'text': '#f3f4f6', 'close': 'rgba(255,255,255,0.70)', 'close_hover': '#ffffff', 'mark_text': '#111111', 'track': (255, 255, 255, 30), 'shadow': 160}, 'warning': {'background': 'rgba(18,19,22,246)', 'border': 'rgba(251,191,36,0.48)', 'accent': '#fbbf24', 'mark': '!', 'duration': 5000, 'text': '#f3f4f6', 'close': 'rgba(255,255,255,0.70)', 'close_hover': '#ffffff', 'mark_text': '#111111', 'track': (255, 255, 255, 30), 'shadow': 160}, 'success': {'background': 'rgba(18,66,40,246)', 'border': 'rgba(74,222,128,0.58)', 'accent': '#4ade80', 'mark': '✓', 'duration': 3600, 'text': '#f3f4f6', 'close': 'rgba(255,255,255,0.70)', 'close_hover': '#ffffff', 'mark_text': '#111111', 'track': (255, 255, 255, 30), 'shadow': 160}, 'error': {'background': 'rgba(84,24,26,246)', 'border': 'rgba(248,113,113,0.62)', 'accent': '#f87171', 'mark': '×', 'duration': 5600, 'text': '#f3f4f6', 'close': 'rgba(255,255,255,0.70)', 'close_hover': '#ffffff', 'mark_text': '#111111', 'track': (255, 255, 255, 30), 'shadow': 160}}
 _LIGHT_LEVEL_STYLE = {'info': {'background': 'rgba(255,255,255,250)', 'border': 'rgba(0,0,0,0.14)', 'accent': '#0078d4', 'mark': 'i', 'duration': 4200, 'text': '#1b1b1b', 'close': 'rgba(0,0,0,0.55)', 'close_hover': '#1b1b1b', 'mark_text': '#ffffff', 'track': (0, 0, 0, 26), 'shadow': 55}, 'warning': {'background': 'rgba(255,248,232,250)', 'border': 'rgba(217,142,4,0.48)', 'accent': '#d98e04', 'mark': '!', 'duration': 5000, 'text': '#4d3a0a', 'close': 'rgba(0,0,0,0.55)', 'close_hover': '#1b1b1b', 'mark_text': '#ffffff', 'track': (0, 0, 0, 26), 'shadow': 55}, 'success': {'background': 'rgba(237,249,240,250)', 'border': 'rgba(46,158,91,0.45)', 'accent': '#2e9e5b', 'mark': '✓', 'duration': 3600, 'text': '#14532d', 'close': 'rgba(0,0,0,0.55)', 'close_hover': '#1b1b1b', 'mark_text': '#ffffff', 'track': (0, 0, 0, 26), 'shadow': 55}, 'error': {'background': 'rgba(253,238,238,250)', 'border': 'rgba(209,52,56,0.42)', 'accent': '#d13438', 'mark': '×', 'duration': 5600, 'text': '#7a1f1f', 'close': 'rgba(0,0,0,0.55)', 'close_hover': '#1b1b1b', 'mark_text': '#ffffff', 'track': (0, 0, 0, 26), 'shadow': 55}}
 
+
+for _styles in (_LEVEL_STYLE, _LIGHT_LEVEL_STYLE):
+    _update_style = dict(_styles['success'])
+    _update_style['mark'] = '↑'
+    _update_style['duration'] = 15000
+    _styles['update'] = _update_style
+
 def _compact_text(text, limit=240):
     value = ' '.join(str(text or '').split())
     if len(value) > limit:

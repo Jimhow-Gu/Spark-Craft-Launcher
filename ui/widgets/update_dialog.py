@@ -75,12 +75,21 @@ class UpdateDialog(QDialog):
         self.later_btn.clicked.connect(self.reject)
         self.download_btn = QPushButton('下载更新')
         self.download_btn.setStyleSheet('QPushButton { background:#0078d4; color:white; }')
-        self.download_btn.clicked.connect(self._start_download)
+        self.download_btn.clicked.connect(self._on_primary_clicked)
         row.addWidget(self.later_btn)
         row.addWidget(self.download_btn)
         layout.addLayout(row)
 
+    def _on_primary_clicked(self):
+        if self.asset_path:
+            self.accept()
+            return
+        self._start_download()
+
     def _start_download(self):
+        if self.asset_path:
+            self.accept()
+            return
         if self._worker is not None and self._worker.isRunning():
             return
         self.download_btn.setEnabled(False)
@@ -112,7 +121,13 @@ class UpdateDialog(QDialog):
 
     def _on_done(self, path):
         self.asset_path = str(path)
-        self.accept()
+        self.progress.setValue(1000)
+        self.status_label.setText('下载完成，点击“重启”完成更新。关闭窗口也会在下次启动时替换客户端。')
+        self.error_label.hide()
+        self.download_btn.setEnabled(True)
+        self.download_btn.setText('重启')
+        self.download_btn.setStyleSheet('QPushButton { background:#2e7d32; color:white; }')
+        self.later_btn.setText('关闭')
 
     def _on_failed(self, message):
         self.error = str(message)
@@ -136,10 +151,18 @@ class UpdateDialog(QDialog):
                 worker.wait(500)
 
     def reject(self):
+        if self.asset_path:
+            # 下载完成后，关闭窗口同样视为确认更新。
+            self.accept()
+            return
         self._cancel_worker()
         super().reject()
 
     def closeEvent(self, event):
+        if self.asset_path:
+            self.accept()
+            event.accept()
+            return
         self._cancel_worker()
         super().closeEvent(event)
 

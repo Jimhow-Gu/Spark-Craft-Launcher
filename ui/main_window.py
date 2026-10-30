@@ -962,7 +962,7 @@ class MainWindow(QMainWindow):
             text = f'当前检测到最新版本V{version}，点击下载更新！'
         show_toast(
             text,
-            'success',
+            'update',
             self,
             15000,
             self._open_pending_update,
