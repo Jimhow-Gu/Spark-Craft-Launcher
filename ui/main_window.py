@@ -162,7 +162,7 @@ class MainWindow(QMainWindow):
         self.media_row = media_row
         left_layout.addWidget(media_row)
         self.status_label = QLabel(f'V{CURRENT_VERSION}')
-        self.status_label.setStyleSheet('color:#9a9a9a; font-size:9px; background:transparent;')
+        self.status_label.setStyleSheet('color:#a8a8a8; font-size:10px; font-weight:500; background:transparent;')
         self.status_label.setAlignment(Qt.AlignCenter)
         self.status_label.setToolTip(
             f'{BUILD_LABEL}' + chr(10) +

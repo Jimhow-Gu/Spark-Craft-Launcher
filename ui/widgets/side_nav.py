@@ -50,7 +50,8 @@ class SideNavDelegate(QStyledItemDelegate):
                 painter.setOpacity(self._text_opacity)
                 painter.setPen(QColor('#8b929d' if not self.light else '#707783'))
                 font = QFont(option.font)
-                font.setPointSizeF(8.2)
+                font.setPointSizeF(9.0)
+                font.setWeight(QFont.Medium)
                 painter.setFont(font)
                 painter.drawText(
                     rect.adjusted(33, 0, -8, 0),
@@ -95,7 +96,8 @@ class SideNavDelegate(QStyledItemDelegate):
         if not self.collapsed:
             text = str(index.data(Qt.DisplayRole) or '')
             font = QFont(option.font)
-            font.setPointSizeF(10.3)
+            font.setPointSizeF(10.5)
+            font.setWeight(QFont.Medium)
             painter.setFont(font)
             metrics = QFontMetrics(font)
             text_rect = rect.adjusted(62.0, 0, -8.0, 0)
