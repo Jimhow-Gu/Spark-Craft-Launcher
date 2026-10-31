@@ -25,7 +25,7 @@ class AdvancedOptionsPanel(QWidget):
         layout.addWidget(self._label('Java 虚拟机参数'))
         self.jvm_edit = QPlainTextEdit()
         self.jvm_edit.setMinimumHeight(80)
-        self.jvm_edit.setStyleSheet('\n            QPlainTextEdit {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.12);\n                border-radius: 6px; color: #f0f0f0;\n                font-family: Consolas, monospace; font-size: 12px;\n                padding: 6px;\n            }\n        ')
+        self.jvm_edit.setStyleSheet('\n            QPlainTextEdit {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.12);\n                border-radius: 6px; color: #f0f0f0;\n                font-size: 12px;\n                padding: 6px;\n            }\n        ')
         self._jvm_timer = QTimer(self)
         self._jvm_timer.setSingleShot(True)
         self._jvm_timer.setInterval(500)

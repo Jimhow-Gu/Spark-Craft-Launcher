@@ -372,7 +372,7 @@ class GameSettingsPage(QWidget):
         self.mem_slider.setEnabled(True)
         self.mem_value_label = QLabel('2G')
         self.mem_value_label.setFixedWidth(60)
-        self.mem_value_label.setStyleSheet('color: #f0f0f0; font-weight: bold;')
+        self.mem_value_label.setStyleSheet('color: #f0f0f0; font-weight:900;')
         slider_layout.addWidget(self.mem_slider, 1)
         slider_layout.addWidget(self.mem_value_label)
         mem_layout.addLayout(slider_layout)
@@ -450,7 +450,7 @@ class GameSettingsPage(QWidget):
         self.global_settings_btn.setCursor(Qt.PointingHandCursor)
         self.global_settings_btn.setStyleSheet(
             'QPushButton { background:#0078d4; color:white; border:none;'
-            ' border-radius:8px; padding:8px 32px; font-size:13px; font-weight:600; }'
+            ' border-radius:8px; padding:8px 32px; font-size:13px; font-weight:900; }'
             'QPushButton:hover { background:#1084e0; }'
             'QPushButton:pressed { background:#006cbd; }'
         )
@@ -575,7 +575,7 @@ class GameSettingsPage(QWidget):
                 install_btn.setStyleSheet(
                     'QPushButton { background:#0078d4; color:white; border:none;'
                     ' border-radius:8px; padding:10px 36px; font-size:14px;'
-                    ' font-weight:600; }'
+                    ' font-weight:900; }'
                     'QPushButton:hover { background:#1084e0; }'
                     'QPushButton:pressed { background:#006cbd; }'
                 )
@@ -660,7 +660,7 @@ class GameSettingsPage(QWidget):
         list_layout.setContentsMargins(20, 14, 20, 16)
         list_layout.setSpacing(4)
         list_title = QLabel('导出内容列表')
-        list_title.setStyleSheet('color:rgba(255,255,255,0.85); font-size:14px; font-weight:600;')
+        list_title.setStyleSheet('color:rgba(255,255,255,0.85); font-size:14px; font-weight:900;')
         list_layout.addWidget(list_title)
         list_layout.addSpacing(4)
 
@@ -757,7 +757,7 @@ class GameSettingsPage(QWidget):
         self._export_start_btn.setCursor(Qt.PointingHandCursor)
         self._export_start_btn.setStyleSheet(
             'QPushButton { background:#0078d4; color:white; border:none;'
-            ' border-radius:9px; padding:10px 44px; font-size:15px; font-weight:600; }'
+            ' border-radius:9px; padding:10px 44px; font-size:15px; font-weight:900; }'
             'QPushButton:hover { background:#1084e0; }'
             'QPushButton:pressed { background:#006cbd; }'
             'QPushButton:disabled { background:rgba(128,128,128,0.25); color:#8a8f98; }'

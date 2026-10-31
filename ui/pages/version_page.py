@@ -314,7 +314,7 @@ class VersionPage(QWidget):
         self.add_game_dir_btn = QPushButton('+')
         self.add_game_dir_btn.setToolTip('添加游戏文件夹')
         self.add_game_dir_btn.setFixedSize(34, 32)
-        self.add_game_dir_btn.setStyleSheet('QPushButton { background:#3a3a3a; color:white; border:none; border-radius:6px; padding:0; font-size:18px; font-weight:600; } QPushButton:hover { background:#4a4a4a; }')
+        self.add_game_dir_btn.setStyleSheet('QPushButton { background:#3a3a3a; color:white; border:none; border-radius:6px; padding:0; font-size:18px; font-weight:900; } QPushButton:hover { background:#4a4a4a; }')
         self.add_game_dir_btn.clicked.connect(self._on_add_game_dir)
         header.addWidget(self.add_game_dir_btn)
         self.remove_game_dir_btn = QPushButton('✕')

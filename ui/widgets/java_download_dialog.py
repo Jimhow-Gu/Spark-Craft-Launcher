@@ -30,7 +30,7 @@ class JavaDownloadDialog(QDialog):
         layout.setContentsMargins(24, 20, 24, 18)
         layout.setSpacing(12)
         title = QLabel(f'正在下载并安装 Java {self.feature}')
-        title.setStyleSheet('font-size:16px; font-weight:600;')
+        title.setStyleSheet('font-size:16px; font-weight:900;')
         layout.addWidget(title)
         self.status_label = QLabel(f'正在查找 Java {self.feature} 下载地址...')
         self.status_label.setWordWrap(True)

@@ -39,7 +39,7 @@ class UpdateDialog(QDialog):
             '修复了一些bug' if self.update_kind == 'dll'
             else f'发现新版本 {self.info.get("tag") or self.info.get("version") or ""}'
         )
-        title.setStyleSheet('font-size:17px; font-weight:700;')
+        title.setStyleSheet('font-size:17px; font-weight:900;')
         layout.addWidget(title)
         name = QLabel(str(self.info.get('name') or ''))
         name.setStyleSheet('color:rgba(255,255,255,0.72); font-size:13px;')

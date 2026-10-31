@@ -36,5 +36,12 @@ def load_ui_fonts():
     return _UI_FONT_FAMILY
 
 def ui_font(size, weight=QFont.Normal):
-    return QFont(_UI_FONT_FAMILY or 'Segoe UI', size, weight)
+    # 统一使用 HarmonyOS Sans SC Black，忽略调用处的粗细参数。
+    font = QFont(_UI_FONT_FAMILY or 'Segoe UI', size)
+    font.setWeight(QFont.Black)
+    try:
+        font.setStyleName('Black')
+    except Exception:
+        pass
+    return font
 

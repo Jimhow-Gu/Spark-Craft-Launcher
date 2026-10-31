@@ -84,7 +84,7 @@ class Toast(QFrame):
         icon = QLabel(style['mark'])
         icon.setFixedSize(24, 24)
         icon.setAlignment(Qt.AlignCenter)
-        icon.setStyleSheet(f'background:{style["accent"]}; color:{style["mark_text"]}; border-radius:12px; font-size:15px; font-weight:800;')
+        icon.setStyleSheet(f'background:{style["accent"]}; color:{style["mark_text"]}; border-radius:12px; font-size:15px; font-weight:900;')
         row.addWidget(icon, 0, Qt.AlignTop)
         full_text = str(text or '').strip()
         label = QLabel(_compact_text(full_text))

@@ -29,7 +29,7 @@ class ModpackImportPage(QWidget):
         self.back_btn = back
         title = QLabel('导入整合包')
         title.setFont(ui_font(20, QFont.DemiBold))
-        title.setStyleSheet('color:#f0f0f0; font-size:20px; font-weight:600;')
+        title.setStyleSheet('color:#f0f0f0; font-size:20px; font-weight:900;')
         top.addWidget(back)
         top.addWidget(title)
         top.addStretch(1)
@@ -42,7 +42,7 @@ class ModpackImportPage(QWidget):
         card_layout.setContentsMargins(18, 16, 18, 16)
         card_layout.setSpacing(8)
         name = QLabel(info.name or self.path.stem)
-        name.setStyleSheet('color:#f0f0f0; font-size:17px; font-weight:600;')
+        name.setStyleSheet('color:#f0f0f0; font-size:17px; font-weight:900;')
         card_layout.addWidget(name)
         loader = f'{info.loader_id or "原版"} {info.loader_version}'.strip()
         details = QLabel(f'Minecraft：{info.mc_version}\n加载器：{loader}\n文件数：{info.file_count}\n来源：{self.path}')

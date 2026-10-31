@@ -368,7 +368,7 @@ class ModRowWidget(QWidget):
         layout.addLayout(text, 1)
         if not info.get('enabled', True):
             self.setStyleSheet('background: rgba(255,255,255,0.02);')
-            title.setStyleSheet('color:rgba(255,255,255,0.55); font-size:13px; font-weight:600;')
+            title.setStyleSheet('color:rgba(255,255,255,0.55); font-size:13px; font-weight:900;')
             return
         self.setStyleSheet('background: transparent;')
 

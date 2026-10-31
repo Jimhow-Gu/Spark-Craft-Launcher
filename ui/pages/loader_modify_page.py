@@ -246,7 +246,7 @@ class _VersionRowWidget(QWidget):
 
         if selected:
             check = QLabel('✓')
-            check.setStyleSheet('color:#67b7ff; font-size:14px; font-weight:700; background:transparent;')
+            check.setStyleSheet('color:#67b7ff; font-size:14px; font-weight:900; background:transparent;')
             check.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             layout.addWidget(check, 0, Qt.AlignVCenter)
 
@@ -1425,9 +1425,9 @@ class LoaderModifyPage(QWidget):
             parts['state'].setText(state_text)
             parts['state'].setStyleSheet(state_style)
             parts['name'].setStyleSheet(
-                'color:rgba(255,255,255,0.90); font-weight:600; background:transparent;'
+                'color:rgba(255,255,255,0.90); font-weight:900; background:transparent;'
                 if not disabled else
-                'color:rgba(255,255,255,0.36); font-weight:600; background:transparent;'
+                'color:rgba(255,255,255,0.36); font-weight:900; background:transparent;'
             )
             parts['remove'].setVisible(bool(selected) and not disabled)
             parts['arrow'].setVisible(can_expand)

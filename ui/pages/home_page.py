@@ -155,7 +155,7 @@ class VersionItemWidget(QWidget):
             except Exception:
                 nickname = self.version_id
         self.name_label = QLabel(nickname)
-        self.name_label.setStyleSheet('color: rgba(255,255,255,0.92); font-weight: 600;')
+        self.name_label.setStyleSheet('color: rgba(255,255,255,0.92); font-weight:900;')
         self.description_label = QLabel(self._version_description())
         self.description_label.setStyleSheet('color: rgba(255,255,255,0.48); font-size: 11px;')
         name_box.addWidget(self.name_label)
@@ -396,7 +396,7 @@ class HomePage(QWidget):
         card_layout.setSpacing(16)
         label_row = QHBoxLayout()
         version_label = QLabel('当前版本')
-        version_label.setStyleSheet('color: rgba(255,255,255,0.8); font-size: 14px; font-weight: 600;')
+        version_label.setStyleSheet('color: rgba(255,255,255,0.8); font-size: 14px; font-weight:900;')
         label_row.addWidget(version_label)
         label_row.addStretch(1)
         card_layout.addLayout(label_row)
@@ -408,7 +408,7 @@ class HomePage(QWidget):
         self.login_notice_label = QLabel('')
         self.login_notice_label.setWordWrap(True)
         self.login_notice_label.setStyleSheet(
-            'color:#f0b35a; font-size:12px; font-weight:600;'
+            'color:#f0b35a; font-size:12px; font-weight:900;'
             ' background:rgba(240,160,48,0.14);'
             ' border-left:3px solid #f0a030; border-radius:5px;'
             ' padding:6px 10px;'
@@ -560,7 +560,7 @@ class HomePage(QWidget):
         self.selector_download_btn.setCursor(Qt.PointingHandCursor)
         self.selector_download_btn.setStyleSheet(
             'QPushButton { background:#0078d4; color:white; border:none;'
-            ' border-radius:9px; padding:9px 34px; font-size:14px; font-weight:600; }'
+            ' border-radius:9px; padding:9px 34px; font-size:14px; font-weight:900; }'
             'QPushButton:hover { background:#1084e0; }'
             'QPushButton:pressed { background:#006cbd; }'
         )

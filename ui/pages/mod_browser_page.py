@@ -737,7 +737,7 @@ class CollapsibleSection(QWidget):
         self._toggle.setText(text)
         self._toggle.setCursor(Qt.PointingHandCursor)
         if highlighted:
-            self._toggle.setStyleSheet('\n                QToolButton {\n                    text-align: left; padding: 8px 10px; border: none;\n                    border-left: 3px solid #0078d4; border-radius: 6px;\n                    background: rgba(0,120,212,0.18); color: #8ec5ff;\n                    font-weight: 600; font-size: 13px;\n                }\n                QToolButton:hover { background: rgba(0,120,212,0.28); }\n            ')
+            self._toggle.setStyleSheet('\n                QToolButton {\n                    text-align: left; padding: 8px 10px; border: none;\n                    border-left: 3px solid #0078d4; border-radius: 6px;\n                    background: rgba(0,120,212,0.18); color: #8ec5ff;\n                    font-weight:900; font-size: 13px;\n                }\n                QToolButton:hover { background: rgba(0,120,212,0.28); }\n            ')
         else:
             self._toggle.setStyleSheet('\n                QToolButton {\n                    text-align: left; padding: 8px 10px; border: none;\n                    border-radius: 6px; background: rgba(255,255,255,0.045);\n                    color: rgba(255,255,255,0.85); font-size: 13px;\n                }\n                QToolButton:hover { background: rgba(255,255,255,0.09); }\n            ')
         outer.addWidget(self._toggle)
@@ -1060,7 +1060,7 @@ class ProjectFilesDialog(QDialog):
         dep_layout.setContentsMargins(10, 8, 10, 8)
         dep_layout.setSpacing(6)
         self.dep_title = QLabel('此模组的前置模组')
-        self.dep_title.setStyleSheet('color:rgba(255,255,255,0.78); font-size:13px; font-weight:600;')
+        self.dep_title.setStyleSheet('color:rgba(255,255,255,0.78); font-size:13px; font-weight:900;')
         dep_layout.addWidget(self.dep_title)
         self.dep_list_layout = QVBoxLayout()
         self.dep_list_layout.setSpacing(5)

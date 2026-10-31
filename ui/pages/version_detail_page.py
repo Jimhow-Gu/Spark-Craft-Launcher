@@ -358,7 +358,7 @@ class VersionDetailPage(QWidget):
         top_bar_layout.addLayout(name_box, 1)
         layout.addLayout(top_bar_layout)
         self._warning_tip_label = QLabel('如果不安装 Fabric API，大多数 Mod 都会无法使用!')
-        self._warning_tip_label.setStyleSheet('\n            QLabel {\n                background: rgba(255,180,180,0.25);\n                color: #ff4444;\n                padding: 8px 12px;\n                border-left: 4px solid #ff3333;\n                font-size: 13px;\n                font-weight: bold;\n            }\n        ')
+        self._warning_tip_label.setStyleSheet('\n            QLabel {\n                background: rgba(255,180,180,0.25);\n                color: #ff4444;\n                padding: 8px 12px;\n                border-left: 4px solid #ff3333;\n                font-size: 13px;\n                font-weight:900;\n            }\n        ')
         self._warning_tip_label.setVisible(False)
         layout.addWidget(self._warning_tip_label)
         layout.addSpacerItem(QSpacerItem(0, 10, QSizePolicy.Minimum, QSizePolicy.Fixed))
@@ -885,7 +885,7 @@ class VersionDetailPage(QWidget):
             self.compat_warning_label.setText('OptiFine 与 NeoForge 不兼容，请取消其中一个加载器。')
             self.compat_warning_label.setStyleSheet(
                 'QLabel { background: rgba(214,60,60,0.92); color:#fff; border-left:3px solid #ff4444;'
-                ' padding:7px 10px; border-radius:4px; font-size:12px; font-weight:600; }'
+                ' padding:7px 10px; border-radius:4px; font-size:12px; font-weight:900; }'
             )
             self.compat_warning_label.show()
         elif fabric_selected and opti_selected:

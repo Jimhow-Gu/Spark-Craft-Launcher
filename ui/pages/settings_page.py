@@ -177,7 +177,7 @@ class SettingsPage(QWidget):
         self.mem_slider.valueChanged.connect(self._on_mem_slider_changed)
         self.mem_value_label = QLabel('2G')
         self.mem_value_label.setFixedWidth(60)
-        self.mem_value_label.setStyleSheet('color: #f0f0f0; font-weight: bold;')
+        self.mem_value_label.setStyleSheet('color: #f0f0f0; font-weight:900;')
         slider_row.addWidget(self.mem_slider, 1)
         slider_row.addWidget(self.mem_value_label)
         mem_group_layout.addLayout(slider_row)
@@ -211,7 +211,7 @@ class SettingsPage(QWidget):
         self.thread_slider.setStyleSheet('\n            QSlider::groove:horizontal {\n                background: #444; height: 8px; border-radius: 4px;\n            }\n            QSlider::handle:horizontal {\n                background: #0078d4; width: 18px; margin: -5px 0;\n                border-radius: 9px;\n            }\n        ')
         self.thread_value_label = QLabel('64')
         self.thread_value_label.setFixedWidth(50)
-        self.thread_value_label.setStyleSheet('color: #f0f0f0; font-weight: bold;')
+        self.thread_value_label.setStyleSheet('color: #f0f0f0; font-weight:900;')
         self.thread_slider.valueChanged.connect(self._on_threads_changed)
         thread_row.addWidget(self.thread_slider, 1)
         thread_row.addWidget(self.thread_value_label)
@@ -229,7 +229,7 @@ class SettingsPage(QWidget):
         self.speed_limit_label = QLabel('无限制')
         self.speed_limit_label.setMinimumWidth(90)
         self.speed_limit_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.speed_limit_label.setStyleSheet('color:#f0f0f0; font-weight:bold;')
+        self.speed_limit_label.setStyleSheet('color:#f0f0f0; font-weight:900;')
         self.speed_limit_slider.valueChanged.connect(self._on_speed_limit_changed)
         speed_row.addWidget(speed_label)
         speed_row.addWidget(self.speed_limit_slider, 1)
@@ -683,7 +683,7 @@ class SettingsPage(QWidget):
         self.version_settings_btn.setCursor(Qt.PointingHandCursor)
         self.version_settings_btn.setStyleSheet(
             'QPushButton { background:#0078d4; color:white; border:none;'
-            ' border-radius:8px; padding:8px 32px; font-size:13px; font-weight:600; }'
+            ' border-radius:8px; padding:8px 32px; font-size:13px; font-weight:900; }'
             'QPushButton:hover { background:#1084e0; }'
             'QPushButton:pressed { background:#006cbd; }'
         )
@@ -887,7 +887,7 @@ class SettingsPage(QWidget):
         group_layout.setContentsMargins(24, 18, 24, 18)
         group_layout.setSpacing(12)
         title_label = QLabel(title)
-        title_label.setStyleSheet('color: rgba(255,255,255,0.85); font-size: 15px; font-weight: 600;')
+        title_label.setStyleSheet('color: rgba(255,255,255,0.85); font-size: 15px; font-weight:900;')
         group_layout.addWidget(title_label)
         return group
 

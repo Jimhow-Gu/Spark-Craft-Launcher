@@ -37,6 +37,7 @@ a = Analysis(
     datas=[
         ("ui/imgs", "ui/imgs"),
         ("font/HarmonyOS_Sans_SC_Regular.ttf", "font"),
+        ("font/HarmonyOS_Sans_SC_Black.ttf", "font"),
         ("font/HarmonyOS_Sans_SC_Bold.ttf", "font"),
     ],
     hiddenimports=hiddenimports,

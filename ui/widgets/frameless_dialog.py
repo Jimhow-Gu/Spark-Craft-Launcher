@@ -49,7 +49,7 @@ class _DialogTitleBar(QWidget):
         layout.setSpacing(8)
         self.title_label = QLabel(title)
         self.title_label.setFont(ui_font(12))
-        self.title_label.setStyleSheet('color:#f0f0f0; font-weight:600; background:transparent;')
+        self.title_label.setStyleSheet('color:#f0f0f0; font-weight:900; background:transparent;')
         layout.addWidget(self.title_label)
         layout.addStretch(1)
         close = QPushButton('✕')
