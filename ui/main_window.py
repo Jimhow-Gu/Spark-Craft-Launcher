@@ -1329,6 +1329,7 @@ class MainWindow(QMainWindow):
             self._update_notified_tag = tag
         self._pending_update_info = None
         dialog = UpdateDialog(self, info, kind)
+        dialog.download_completed.connect(self._on_update_downloaded)
         self._update_dialog = dialog
         try:
             accepted = dialog.exec() == dialog.Accepted
@@ -1353,6 +1354,41 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self._quit_for_update(dialog.asset_path, version)
+
+    def _on_update_downloaded(self, asset_path, version):
+        '''下载完成即自动安装，不再依赖用户点击重启按钮或弹窗保持打开。'''
+
+        asset_path = str(asset_path or '')
+        if not asset_path:
+            return
+        try:
+            from core.update import write_update_log
+            write_update_log(
+                f'ui: download complete, auto install asset={asset_path} version={version}'
+            )
+        except Exception:
+            pass
+        try:
+            from ui.widgets.toast import show_toast
+            show_toast('更新已下载，正在自动重启安装...', 'update', self, 4000)
+        except Exception:
+            pass
+        QTimer.singleShot(
+            800,
+            lambda path=asset_path, ver=str(version or ''): self._auto_install_update(path, ver),
+        )
+
+    def _auto_install_update(self, asset_path, version):
+        if getattr(self, '_closing', False):
+            return
+        try:
+            from core.update import write_update_log
+            write_update_log(
+                f'ui: auto install starting asset={asset_path} version={version}'
+            )
+        except Exception:
+            pass
+        self._quit_for_update(asset_path, version)
 
     def _quit_for_update(self, asset_path='', version=''):
         '''优先在当前进程内替换 exe 并启动新版本，失败时回退到外部更新脚本。'''

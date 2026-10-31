@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QTextBrowser, QVBoxLayout)
 
 from core.update import UpdateDownloadWorker
@@ -12,6 +12,7 @@ from ui.widgets.smooth_progress import RoundedProgressBar
 
 
 class UpdateDialog(QDialog):
+    download_completed = Signal(str, str)
     def __init__(self, parent, info, kind='version'):
         super().__init__(parent)
         self.info = dict(info or {})
@@ -19,10 +20,6 @@ class UpdateDialog(QDialog):
         self.asset_path = ''
         self.error = ''
         self._worker = None
-        self._auto_restart_timer = QTimer(self)
-        self._auto_restart_timer.setSingleShot(True)
-        self._auto_restart_timer.setInterval(1800)
-        self._auto_restart_timer.timeout.connect(self._auto_restart)
         self.setWindowTitle('发现修复更新' if self.update_kind == 'dll' else '发现新版本')
         self.setModal(True)
         self.setMinimumWidth(520)
@@ -108,7 +105,7 @@ class UpdateDialog(QDialog):
             return ''
         return str(path)
 
-    def _set_ready(self, path, auto_restart=False):
+    def _set_ready(self, path):
         self.asset_path = str(path)
         self.progress.show()
         self.progress.setValue(1000)
@@ -118,8 +115,6 @@ class UpdateDialog(QDialog):
         self.download_btn.setText('重启安装')
         self.download_btn.setStyleSheet('QPushButton { background:#2e7d32; color:white; }')
         self.later_btn.setText('稍后更新')
-        if auto_restart:
-            self._auto_restart_timer.start()
 
     def _on_primary_clicked(self):
         if self.asset_path:
@@ -161,10 +156,11 @@ class UpdateDialog(QDialog):
             self.status_label.setText('正在下载更新...')
 
     def _on_done(self, path):
-        self._set_ready(path, auto_restart=True)
+        self._set_ready(path)
+        version = str(self.info.get('version') or self.info.get('tag') or '')
+        self.download_completed.emit(str(path), version)
 
     def _on_failed(self, message):
-        self._auto_restart_timer.stop()
         self.error = str(message)
         self.error_label.setText(str(message))
         self.error_label.show()
@@ -177,16 +173,6 @@ class UpdateDialog(QDialog):
     def _on_finished(self):
         self._worker = None
 
-    def _auto_restart(self):
-        if not self.isVisible() or not self.asset_path:
-            return
-        if self._worker is not None and self._worker.isRunning():
-            return
-        self.status_label.setText('更新已下载，正在自动重启安装...')
-        self.download_btn.setEnabled(False)
-        self.download_btn.setText('正在重启...')
-        self.accept()
-
     def _cancel_worker(self):
         worker = self._worker
         if worker is not None and worker.isRunning():
@@ -197,12 +183,10 @@ class UpdateDialog(QDialog):
 
     def reject(self):
         # 关闭弹窗代表稍后更新，不在这里替换客户端。
-        self._auto_restart_timer.stop()
         self._cancel_worker()
         super().reject()
 
     def closeEvent(self, event):
-        self._auto_restart_timer.stop()
         self._cancel_worker()
         super().closeEvent(event)
 
