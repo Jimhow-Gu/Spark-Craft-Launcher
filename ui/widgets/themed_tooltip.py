@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, QTimer, Qt
+from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, QTimer, Qt, QEasingCurve, QPropertyAnimation
 from PySide6.QtGui import QColor, QCursor, QPainter, QPalette, QPen
-from PySide6.QtWidgets import QApplication, QLabel, QWidget
+from PySide6.QtWidgets import QApplication, QGraphicsOpacityEffect, QLabel, QWidget
 
 from core.app_font import ui_font
 
@@ -39,6 +39,10 @@ class ThemedToolTip(QLabel):
         self._background = QColor('#20232b')
         self._foreground = QColor('#f0f0f0')
         self._border = QColor('#3a4050')
+        self._opacity_effect = QGraphicsOpacityEffect(self)
+        self._opacity_effect.setOpacity(1.0)
+        self.setGraphicsEffect(self._opacity_effect)
+        self._fade_anim = None
         self.hide()
 
     def _apply_style(self, light: bool):
@@ -70,7 +74,7 @@ class ThemedToolTip(QLabel):
     def show_text(self, text: str, global_pos: QPoint | None = None):
         text = str(text or '')
         if not text:
-            self.hide()
+            self.hide_animated()
             return
         app = QApplication.instance()
         palette = app.palette() if app is not None else self.palette()
@@ -100,8 +104,41 @@ class ThemedToolTip(QLabel):
         x = max(bounds.left() + 4, x)
         y = max(bounds.top() + 4, y)
         self.move(x, y)
+        if self._fade_anim is not None:
+            try:
+                self._fade_anim.stop()
+            except RuntimeError:
+                pass
+            self._fade_anim = None
+        start_opacity = self._opacity_effect.opacity() if self.isVisible() else 0.0
         self.show()
         self.raise_()
+        self._opacity_effect.setOpacity(start_opacity)
+        animation = QPropertyAnimation(self._opacity_effect, b'opacity', self)
+        animation.setDuration(90)
+        animation.setStartValue(start_opacity)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(QEasingCurve.OutCubic)
+        self._fade_anim = animation
+        animation.start()
+
+    def hide_animated(self):
+        if not self.isVisible():
+            return
+        if self._fade_anim is not None:
+            try:
+                self._fade_anim.stop()
+            except RuntimeError:
+                pass
+            self._fade_anim = None
+        animation = QPropertyAnimation(self._opacity_effect, b'opacity', self)
+        animation.setDuration(70)
+        animation.setStartValue(self._opacity_effect.opacity())
+        animation.setEndValue(0.0)
+        animation.setEasingCurve(QEasingCurve.OutCubic)
+        animation.finished.connect(self.hide)
+        self._fade_anim = animation
+        animation.start()
 
 
 class ThemedToolTipFilter(QObject):
@@ -116,9 +153,7 @@ class ThemedToolTipFilter(QObject):
         self._hide_timer.timeout.connect(self._hide)
 
     def _hide(self):
-        tip = ThemedToolTip.instance()
-        if tip.isVisible():
-            tip.hide()
+        ThemedToolTip.instance().hide_animated()
 
     def eventFilter(self, obj, event):
         event_type = event.type()

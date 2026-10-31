@@ -2,7 +2,8 @@
 
 from pathlib import Path
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QVBoxLayout)
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation
+from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QVBoxLayout, QWidget)
 
 from ui.widgets.login_icons import login_icon
 
@@ -22,7 +23,11 @@ class AccountCard(QFrame):
         self.avatar.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.avatar.all_failed.connect(self.avatar_failed)
         layout.addWidget(self.avatar)
-        text_layout = QVBoxLayout()
+        self._text_panel = QWidget(self)
+        self._text_panel.setStyleSheet('background:transparent;')
+        self._text_panel.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        text_layout = QVBoxLayout(self._text_panel)
+        text_layout.setContentsMargins(0, 0, 0, 0)
         text_layout.setSpacing(1)
         self.name_label = QLabel('未设置昵称')
         self.name_label.setStyleSheet('color:#f0f0f0; font-size:14px; background:transparent;')
@@ -42,20 +47,29 @@ class AccountCard(QFrame):
         self.mode_row.addStretch(1)
         text_layout.addWidget(self.name_label)
         text_layout.addLayout(self.mode_row)
-        layout.addLayout(text_layout, 1)
+        layout.addWidget(self._text_panel, 1)
         self._layout = layout
         self._text_layout = text_layout
+        self._text_effect = QGraphicsOpacityEffect(self._text_panel)
+        self._text_effect.setOpacity(1.0)
+        self._text_panel.setGraphicsEffect(self._text_effect)
+        self._text_anim = None
         self._compact = False
         self._mode_text = ''
         self._mode_kind = 'offline'
 
-    def set_compact(self, compact: bool = True, expanded_width: int = 210):
+    def set_compact(self, compact: bool = True, expanded_width: int = 210, animate: bool = True):
         compact = bool(compact)
         self._compact = compact
+        if self._text_anim is not None:
+            try:
+                self._text_anim.stop()
+            except RuntimeError:
+                pass
+            self._text_anim = None
         if compact:
-            self.name_label.hide()
-            self.mode_label.hide()
-            self.mode_icon.hide()
+            self._text_panel.hide()
+            self._text_effect.setOpacity(1.0)
             self._layout.setContentsMargins(6, 6, 6, 6)
             self._layout.setSpacing(0)
             self._layout.setStretch(0, 0)
@@ -67,7 +81,7 @@ class AccountCard(QFrame):
                 ' border-radius:27px; }'
             )
             return
-        self.name_label.show()
+        self._text_panel.show()
         has_mode = bool(self._mode_text)
         self.mode_label.setVisible(has_mode)
         self.mode_icon.setVisible(has_mode)
@@ -81,6 +95,17 @@ class AccountCard(QFrame):
             ' border:1px solid rgba(255,255,255,0.08); border-radius:8px; }'
             'QFrame#AccountCard:hover { background:rgba(255,255,255,0.12); }'
         )
+        if animate:
+            self._text_effect.setOpacity(0.0)
+            animation = QPropertyAnimation(self._text_effect, b'opacity', self)
+            animation.setDuration(150)
+            animation.setStartValue(0.0)
+            animation.setEndValue(1.0)
+            animation.setEasingCurve(QEasingCurve.OutCubic)
+            self._text_anim = animation
+            animation.start()
+        else:
+            self._text_effect.setOpacity(1.0)
 
     def set_avatar_only(self, avatar_only: bool = True):
         self.set_compact(bool(avatar_only))

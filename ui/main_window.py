@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QListWidgetItem, QLabel, QMessageBox, QApplication, QSizeGrip, QGraphicsColorizeEffect, QPushButton, QGraphicsOpacityEffect, QFrame)
-from PySide6.QtCore import (Qt, QPropertyAnimation, QVariantAnimation, QEasingCurve, QTimer, QSize, QEvent, QRect)
+from PySide6.QtCore import (Qt, QPoint, QPropertyAnimation, QVariantAnimation, QEasingCurve, QTimer, QSize, QEvent, QRect)
 from PySide6.QtGui import QColor, QCursor, QFont, QPixmap
 import os
 from pathlib import Path
@@ -87,6 +87,7 @@ class MainWindow(QMainWindow):
         self._sidebar_expanded = False
         self._sidebar_anim = None
         self._sidebar_spacer_anim = None
+        self._media_button_anims = []
         self._sidebar_collapse_timer = QTimer(self)
         self._sidebar_collapse_timer.setSingleShot(True)
         self._sidebar_collapse_timer.setInterval(140)
@@ -145,32 +146,21 @@ class MainWindow(QMainWindow):
         self._add_nav_item('设置', 3, None, 'gear')
         self._add_nav_item('关于', 4, None, 'info')
         left_layout.addWidget(self.nav_list, 1)
-        rail_footer = QWidget()
-        rail_footer.setFixedWidth(self._sidebar_collapsed_width)
-        rail_footer.setStyleSheet('background:transparent;')
-        rail_footer_layout = QVBoxLayout(rail_footer)
-        rail_footer_layout.setContentsMargins(0, 0, 0, 2)
-        rail_footer_layout.setSpacing(2)
         media_row = QWidget()
-        self._media_layout = QHBoxLayout(media_row)
-        self._media_layout.setContentsMargins(0, 0, 0, 0)
-        self._media_layout.setSpacing(6)
-        self._media_layout.addStretch(1)
-        self.video_toggle_btn = MediaButton()
+        media_row.setFixedHeight(28)
+        media_row.setStyleSheet('background:transparent;')
+        self.video_toggle_btn = MediaButton(media_row)
         self.video_toggle_btn.setFixedSize(30, 28)
         self.video_toggle_btn.setIconSize(QSize(16, 16))
         self.video_toggle_btn.setToolTip('播放/暂停背景视频')
         self.video_toggle_btn.clicked.connect(self._toggle_background_video)
-        self.music_toggle_btn = MediaButton()
+        self.music_toggle_btn = MediaButton(media_row)
         self.music_toggle_btn.setFixedSize(30, 28)
         self.music_toggle_btn.setIconSize(QSize(16, 16))
         self.music_toggle_btn.setToolTip('播放/暂停背景音乐')
         self.music_toggle_btn.clicked.connect(self._toggle_background_music)
-        self._media_layout.addWidget(self.video_toggle_btn)
-        self._media_layout.addWidget(self.music_toggle_btn)
-        self._media_layout.addStretch(1)
         self.media_row = media_row
-        rail_footer_layout.addWidget(media_row)
+        left_layout.addWidget(media_row)
         self.status_label = QLabel(f'V{CURRENT_VERSION}')
         self.status_label.setStyleSheet('color:#9a9a9a; font-size:9px; background:transparent;')
         self.status_label.setAlignment(Qt.AlignCenter)
@@ -180,7 +170,10 @@ class MainWindow(QMainWindow):
             f'资源包序号：{RESOURCE_PACK_SEQUENCE}' + chr(10) +
             f'可执行程序/DLL 构建号：{EXECUTABLE_BUILD}'
         )
-        left_layout.addWidget(rail_footer, 0, Qt.AlignLeft)
+        self._version_effect = QGraphicsOpacityEffect(self.status_label)
+        self._version_effect.setOpacity(1.0)
+        self.status_label.setGraphicsEffect(self._version_effect)
+        self._version_anim = None
         left_layout.addWidget(self.status_label)
         self.central.video_state_changed.connect((lambda _playing: self._update_media_buttons()))
         self.music_player.state_changed.connect(self._update_media_buttons)
@@ -314,6 +307,29 @@ class MainWindow(QMainWindow):
         self._sidebar_spacer_anim = animation
         animation.start()
 
+    def _set_version_label(self, expanded: bool, animate: bool=True):
+        text = BUILD_LABEL if expanded else f'V{CURRENT_VERSION}'
+        if self.status_label.text() == text:
+            return
+        if self._version_anim is not None:
+            try:
+                self._version_anim.stop()
+            except RuntimeError:
+                pass
+            self._version_anim = None
+        self.status_label.setText(text)
+        if not animate:
+            self._version_effect.setOpacity(1.0)
+            return
+        self._version_effect.setOpacity(0.0)
+        animation = QPropertyAnimation(self._version_effect, b'opacity', self)
+        animation.setDuration(150)
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(QEasingCurve.OutCubic)
+        self._version_anim = animation
+        animation.start()
+
     def _set_sidebar_expanded(self, expanded: bool, animate: bool=True):
         expanded = bool(expanded)
         if self._sidebar_anim is not None:
@@ -335,12 +351,21 @@ class MainWindow(QMainWindow):
             target_width, animate and self.isVisible(),
             190 if expanded else 160,
         )
-        self.nav_list.set_collapsed(not expanded)
-        self.status_label.setText(
-            BUILD_LABEL if expanded else f'V{CURRENT_VERSION}'
+        self._animate_media_buttons(
+            target_width,
+            190 if expanded else 160,
+            animate and self.isVisible(),
+        )
+        self.nav_list.animate_expanded(
+            expanded, 190 if expanded else 160,
+            animate and self.isVisible(),
+        )
+        self._set_version_label(
+            expanded, animate and self.isVisible()
         )
         self.account_card.set_compact(
-            not expanded, self._sidebar_expanded_width - 20
+            not expanded, self._sidebar_expanded_width - 20,
+            animate and self.isVisible(),
         )
         if expanded:
             self.title_bar.set_title_visible(
@@ -359,6 +384,7 @@ class MainWindow(QMainWindow):
                 0, 0, target_width, self.central.height()
             )
             self.left_panel.raise_()
+            self._position_media_buttons(target_width)
             if not expanded:
                 self.title_bar.set_title_visible(
                     getattr(self, '_title_available', True)
@@ -387,10 +413,68 @@ class MainWindow(QMainWindow):
             0, 0, target_width, self.central.height()
         )
         self.left_panel.raise_()
+        self._position_media_buttons(target_width)
         if not expanded:
             self.title_bar.set_title_visible(
                 getattr(self, '_title_available', True), animate=True
             )
+
+    def _media_button_targets(self, width):
+        total = max(0, int(width))
+        buttons = [
+            button for button in (self.video_toggle_btn, self.music_toggle_btn)
+            if button.isVisible()
+        ]
+        if not buttons:
+            return []
+        button_w = 30
+        if len(buttons) == 1:
+            return [(buttons[0], max(0, (total - button_w) // 2))]
+        collapsed = self._sidebar_collapsed_width
+        expanded = self._sidebar_expanded_width
+        progress = 0.0
+        if expanded > collapsed:
+            progress = max(0.0, min(1.0, (total - collapsed) / (expanded - collapsed)))
+        pair_width = button_w * 2 + 6
+        start = (collapsed - pair_width) // 2
+        x1_collapsed = start
+        x2_collapsed = start + button_w + 6
+        x1_expanded = expanded // 4 - button_w // 2
+        x2_expanded = expanded * 3 // 4 - button_w // 2
+        return [
+            (buttons[0], int(x1_collapsed + (x1_expanded - x1_collapsed) * progress)),
+            (buttons[1], int(x2_collapsed + (x2_expanded - x2_collapsed) * progress)),
+        ]
+
+    def _position_media_buttons(self, width=None):
+        if not hasattr(self, 'media_row'):
+            return
+        total = width if width is not None else self.left_panel.width()
+        for button, x in self._media_button_targets(total):
+            button.move(x, 0)
+
+    def _animate_media_buttons(self, target_width, duration=190, animate=True):
+        if not hasattr(self, 'media_row'):
+            return
+        for animation in self._media_button_anims:
+            try:
+                animation.stop()
+            except RuntimeError:
+                pass
+        self._media_button_anims = []
+        targets = self._media_button_targets(target_width)
+        if not animate or not self.isVisible():
+            for button, x in targets:
+                button.move(x, 0)
+            return
+        for button, x in targets:
+            animation = QPropertyAnimation(button, b'pos', self)
+            animation.setDuration(int(duration))
+            animation.setStartValue(button.pos())
+            animation.setEndValue(QPoint(x, 0))
+            animation.setEasingCurve(QEasingCurve.OutCubic)
+            animation.start()
+            self._media_button_anims.append(animation)
 
     def _update_sidebar_geometry(self):
         try:
@@ -404,6 +488,7 @@ class MainWindow(QMainWindow):
             )
             self.left_panel.setGeometry(0, 0, width, self.central.height())
             self.left_panel.raise_()
+            self._position_media_buttons(width)
             if self._sidebar_spacer_anim is None:
                 self.sidebar_spacer.setFixedWidth(width)
         except RuntimeError:
@@ -614,6 +699,7 @@ class MainWindow(QMainWindow):
         self.music_toggle_btn.setToolTip('暂停背景音乐' if audible else '播放背景音乐')
         if hasattr(self, 'media_row'):
             self.media_row.setVisible(video_available or has_music)
+            self._position_media_buttons()
 
     def _toggle_background_video(self):
         self.central.toggle_video()

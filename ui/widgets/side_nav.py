@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, QSize, Qt
+from PySide6.QtCore import Property, QRectF, QSize, Qt, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QListWidget, QStyle, QStyledItemDelegate
 
@@ -17,6 +17,18 @@ class SideNavDelegate(QStyledItemDelegate):
         super().__init__(parent)
         self.collapsed = True
         self.light = False
+        self._text_opacity = 0.0
+
+    def get_text_opacity(self):
+        return self._text_opacity
+
+    def set_text_opacity(self, value):
+        self._text_opacity = max(0.0, min(1.0, float(value)))
+        parent = self.parent()
+        if parent is not None:
+            parent.viewport().update()
+
+    textOpacity = Property(float, get_text_opacity, set_text_opacity)
 
     def set_collapsed(self, collapsed: bool):
         self.collapsed = bool(collapsed)
@@ -35,6 +47,7 @@ class SideNavDelegate(QStyledItemDelegate):
                 y = int(rect.center().y())
                 painter.drawLine(int(rect.left()) + 22, y, int(rect.right()) - 22, y)
             else:
+                painter.setOpacity(self._text_opacity)
                 painter.setPen(QColor('#8b929d' if not self.light else '#707783'))
                 font = QFont(option.font)
                 font.setPointSizeF(8.2)
@@ -89,6 +102,7 @@ class SideNavDelegate(QStyledItemDelegate):
             text = metrics.elidedText(
                 text, Qt.ElideRight, max(0, int(text_rect.width()))
             )
+            painter.setOpacity(self._text_opacity)
             painter.setPen(
                 QColor('#ffffff') if selected
                 else QColor('#202124' if self.light else '#e8ebf1')
@@ -146,7 +160,48 @@ class SideNavList(QListWidget):
 
     def set_collapsed(self, collapsed: bool):
         self._delegate.set_collapsed(collapsed)
+        self._delegate.set_text_opacity(0.0 if collapsed else 1.0)
         self.viewport().update()
+
+    def animate_expanded(self, expanded: bool, duration=190, animate=True):
+        animation = getattr(self, '_text_anim', None)
+        if animation is not None:
+            try:
+                animation.stop()
+            except RuntimeError:
+                pass
+            self._text_anim = None
+        if expanded:
+            self._delegate.set_collapsed(False)
+            if not animate:
+                self._delegate.set_text_opacity(1.0)
+                return
+            animation = QPropertyAnimation(
+                self._delegate, b'textOpacity', self
+            )
+            animation.setDuration(int(duration))
+            animation.setStartValue(self._delegate.get_text_opacity())
+            animation.setEndValue(1.0)
+            animation.setEasingCurve(QEasingCurve.OutCubic)
+            self._text_anim = animation
+            animation.start()
+            return
+        if not animate:
+            self._delegate.set_text_opacity(0.0)
+            self._delegate.set_collapsed(True)
+            return
+        animation = QPropertyAnimation(
+            self._delegate, b'textOpacity', self
+        )
+        animation.setDuration(int(duration))
+        animation.setStartValue(self._delegate.get_text_opacity())
+        animation.setEndValue(0.0)
+        animation.setEasingCurve(QEasingCurve.OutCubic)
+        animation.finished.connect(
+            lambda: self._delegate.set_collapsed(True)
+        )
+        self._text_anim = animation
+        animation.start()
 
     def set_light(self, light: bool):
         self._delegate.set_light(light)
