@@ -346,25 +346,22 @@ class MainWindow(QMainWindow):
             not expanded, self._sidebar_expanded_width - 20,
             animate and self.isVisible(),
         )
+        # 侧栏移动过程中先隐藏标题，等面板完全停稳后再淡入，避免拖影。
+        self._set_sidebar_brand_visible(False, animate=False)
         if expanded:
-            self.title_bar.set_title_visible(
-                False, animate=bool(animate and self.isVisible())
-            )
-            self._set_sidebar_brand_visible(
-                bool(getattr(self, '_title_available', True)),
-                animate=bool(animate and self.isVisible()),
-            )
-        else:
-            self._set_sidebar_brand_visible(
-                False, animate=bool(animate and self.isVisible())
-            )
+            self.title_bar.set_title_visible(False, animate=False)
         if not animate or not self.isVisible():
             self.left_panel.setGeometry(
                 0, 0, target_width, self.central.height()
             )
             self.left_panel.raise_()
             self._position_media_buttons(target_width)
-            if not expanded:
+            if expanded:
+                self._set_sidebar_brand_visible(
+                    bool(getattr(self, '_title_available', True)),
+                    animate=False,
+                )
+            else:
                 self.title_bar.set_title_visible(
                     getattr(self, '_title_available', True)
                 )
@@ -409,7 +406,12 @@ class MainWindow(QMainWindow):
         self._position_media_buttons(target_width)
         self.left_panel.update()
         self.body.update()
-        if not expanded:
+        if expanded:
+            self._set_sidebar_brand_visible(
+                bool(getattr(self, '_title_available', True)),
+                animate=True,
+            )
+        else:
             self.title_bar.set_title_visible(
                 getattr(self, '_title_available', True), animate=True
             )

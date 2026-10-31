@@ -20,7 +20,7 @@ from core.paths import safe_rmtree, scl_dir
 CURRENT_VERSION = '1.0.8'
 VERSION_DISPLAY = 'V1.0.8（正式版）'
 # DLL 构建号在同一版本内递增；每次发布新大版本时重置为 1。
-EXECUTABLE_BUILD = '26'
+EXECUTABLE_BUILD = '27'
 REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
 API_ACCELERATED = f'https://gh-proxy.com/{API_LATEST}'
