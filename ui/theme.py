@@ -277,8 +277,15 @@ class ThemeManager(QObject):
             return
         if light == self._light and theme == self._theme:
             return
-        if not animate or not self._window.isVisible():
-            self._apply_now(light, defer_hidden=False)
+        if not self._window.isVisible():
+            # 启动阶段窗口还没显示：只应用全局调色板，具体控件等到
+            # showEvent 后一次性处理可见区域，避免启动时重排上千个控件。
+            self._light = bool(light)
+            self._apply_global(light, visible_only=True)
+            self._theme = theme
+            return
+        if not animate:
+            self._apply_now(light, defer_hidden=True)
             self._theme = theme
             return
 
@@ -336,54 +343,31 @@ class ThemeManager(QObject):
                 continue
 
     # ---------- 应用 ----------
-    _APP_TOOLTIP_MARK = '/*__scl_global_tooltip__*/'
+    def style_visible_widgets(self):
+        '''窗口首次显示后补应用当前主题，隐藏页面仍按需在显示时处理。'''
 
-    def _apply_tooltip_style(self, light: bool):
-        '''全局设置原生 QToolTip 配色。
-
-        工具栏/媒体按钮等控件没有 QLabel 子控件，之前只在含 QLabel 的
-        控件样式里追加 QToolTip 规则，导致浅色模式下提示框仍然是深色。
-        '''
-
-        app = self._app
-        if app is None:
+        if not self._theme:
             return
-        current = app.styleSheet()
-        base = getattr(app, '_scl_base_stylesheet', None)
-        if base is None or (
-            self._APP_TOOLTIP_MARK not in current and current != base
-        ):
-            base = (
-                current.split(self._APP_TOOLTIP_MARK, 1)[0]
-                if self._APP_TOOLTIP_MARK in current
-                else current
-            )
-            app._scl_base_stylesheet = base
-        if light:
-            tip = (
-                'QToolTip { background-color:#fbfbfb; color:#1b1b1b;'
-                ' border:1px solid #c8ccd2; padding:4px 7px; }'
-                'QToolTip QLabel { background-color:transparent; color:#1b1b1b; }'
-            )
-        else:
-            tip = (
-                'QToolTip { background-color:#20232b; color:#f0f0f0;'
-                ' border:1px solid #3a4050; padding:4px 7px; }'
-                'QToolTip QLabel { background-color:transparent; color:#f0f0f0; }'
-            )
-        self._theme_updating = True
+        self._apply_now(self._light, defer_hidden=True)
+
+    def style_widget_tree(self, widget):
+        '''页面首次显示时补应用主题（隐藏页面不会在切换主题时被遍历）。'''
+
+        if not self._theme or widget is None:
+            return
         try:
-            app.setStyleSheet(
-                base + chr(10) + self._APP_TOOLTIP_MARK + chr(10) + tip
-            )
-        finally:
-            self._theme_updating = False
+            self._apply_tree(widget)
+        except RuntimeError:
+            pass
 
     def _apply_global(self, light: bool, visible_only: bool = False):
         self._light = bool(light)
         app = self._app
-        app.setPalette(self._make_palette(light))
-        self._apply_tooltip_style(light)
+        self._theme_updating = True
+        try:
+            app.setPalette(self._make_palette(light))
+        finally:
+            self._theme_updating = False
         CheckBoxProxyStyle.set_light_mode(light)
         try:
             from ui.widgets.painted_icons import set_light_mode
@@ -515,15 +499,11 @@ class ThemeManager(QObject):
         palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor('#8a8f99'))
         return palette
 
-    _TOOLTIP_MARK = chr(10) + '/*__theme_tooltip__*/'
-
     def _style_widget(self, widget: QWidget, light: bool):
         try:
             if widget.property('_theme_ignore'):
                 return
             current = widget.styleSheet()
-            if self._TOOLTIP_MARK in current:
-                current = current.split(self._TOOLTIP_MARK, 1)[0]
             original = getattr(widget, '_theme_original_style', None)
             cached_light = getattr(widget, '_theme_light_style', None)
             if original is None:
@@ -543,15 +523,7 @@ class ThemeManager(QObject):
                     widget._theme_light_style = target
             else:
                 target = original
-            # 控件自身的样式表会覆盖应用级 QToolTip 规则。只要控件有样式，
-            # 就把提示框规则一起挂到该样式表上，复选框、按钮、分组框内的
-            # 提示才不会在浅色主题下变成透明/深色。
-            tip_bg, tip_fg = ('#fbfbfb', '#1b1b1b') if light else ('#20232b', '#f0f0f0')
-            final = target + self._TOOLTIP_MARK + (
-                chr(10) + 'QToolTip, QToolTip QLabel { background-color:' + tip_bg + ';'
-                ' color:' + tip_fg + '; border:1px solid '
-                + ('#c8ccd2' if light else '#3a4050') + '; padding:4px 7px; }'
-            )
+            final = target
             if widget.styleSheet() != final:
                 self._theme_updating = True
                 try:

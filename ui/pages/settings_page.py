@@ -96,15 +96,34 @@ class SettingsPage(QWidget):
         theme_label = QLabel('界面主题')
         theme_label.setFixedWidth(90)
         theme_label.setStyleSheet('color: rgba(255,255,255,0.7);')
-        self.theme_combo = PersistentComboBox()
-        self.theme_combo.addItem('深色模式', 'dark')
-        self.theme_combo.addItem('浅色模式', 'light')
-        self.theme_combo.addItem('跟随系统', 'system')
-        self.theme_combo.setMinimumWidth(220)
-        self.theme_combo.setStyleSheet('\n            QComboBox {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.1);\n                border-radius: 6px;\n                color: #f0f0f0;\n                padding: 4px 8px;\n            }\n            QComboBox::drop-down { border: none; }\n            QComboBox QAbstractItemView { background: #2a2a2a; color: #f0f0f0; border: 1px solid rgba(255,255,255,0.1); }\n        ')
-        self.theme_combo.activated.connect(self._on_theme_activated)
+        self.theme_group = QButtonGroup(self)
+        self.theme_group.setExclusive(True)
+        self.theme_buttons = {}
+        theme_button_style = (
+            'QPushButton { background:rgba(255,255,255,0.06); color:#f0f0f0;'
+            ' border:1px solid rgba(255,255,255,0.14); border-radius:6px;'
+            ' padding:6px 16px; }'
+            'QPushButton:hover { background:rgba(255,255,255,0.12); }'
+            'QPushButton:checked { background:#0078d4; color:white;'
+            ' border-color:#0078d4; }'
+        )
         theme_row.addWidget(theme_label)
-        theme_row.addWidget(self.theme_combo, 1)
+        for key, label in (
+            ('dark', '深色模式'),
+            ('light', '浅色模式'),
+            ('system', '跟随系统'),
+        ):
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setStyleSheet(theme_button_style)
+            button.clicked.connect(
+                lambda checked, value=key: self._on_theme_selected(value)
+            )
+            self.theme_group.addButton(button)
+            self.theme_buttons[key] = button
+            theme_row.addWidget(button)
+        theme_row.addStretch(1)
         theme_layout.addLayout(theme_row)
         layout.addWidget(theme_group)
         java_group = self._create_group('Java 列表')
@@ -1263,10 +1282,12 @@ class SettingsPage(QWidget):
     def _load_settings(self):
         self._refresh_dir_list()
         theme = str(self.config.get('theme', 'dark') or 'dark')
-        theme_index = self.theme_combo.findData(theme)
-        self.theme_combo.blockSignals(True)
-        self.theme_combo.setCurrentIndex(theme_index if theme_index >= 0 else 0)
-        self.theme_combo.blockSignals(False)
+        if theme not in self.theme_buttons:
+            theme = 'system'
+        for key, button in self.theme_buttons.items():
+            button.blockSignals(True)
+            button.setChecked(key == theme)
+            button.blockSignals(False)
         java_list = self.launch_mgr.peek_cached_java_list()
         if java_list is None:
             self.java_combo.blockSignals(True)
@@ -1558,28 +1579,25 @@ class SettingsPage(QWidget):
         self._apply_title_mode_visibility()
         self._update_background_count()
 
-    def _on_theme_changed(self, index):
-        if index < 0:
-            return
-        theme = self.theme_combo.itemData(index) or 'system'
-        if str(theme) == str(self.config.get('theme', 'system') or 'system'):
-            return
+    def _on_theme_selected(self, theme):
+        theme = str(theme or 'system')
+        if theme not in self.theme_buttons:
+            theme = 'system'
+        for key, button in self.theme_buttons.items():
+            button.blockSignals(True)
+            button.setChecked(key == theme)
+            button.blockSignals(False)
         self.config.set('theme', theme, auto_save=False)
         self.config.set('theme_user_set', True, auto_save=False)
         self.config.save()
-        # 延后到下拉框点击事件处理完毕后再应用主题，
-        # 避免重设样式打断弹窗导致“点两次才选上”
         self._theme_apply_token = getattr(self, '_theme_apply_token', 0) + 1
         token = self._theme_apply_token
-        QTimer.singleShot(150, lambda t=str(theme), k=token: self._apply_theme_delayed(t, k))
+        QTimer.singleShot(30, lambda t=str(theme), k=token: self._apply_theme_delayed(t, k))
 
     def _apply_theme_delayed(self, theme, token):
         if token != getattr(self, '_theme_apply_token', 0):
             return
         self.theme_changed.emit(str(theme))
-
-    def _on_theme_activated(self, index):
-        self._on_theme_changed(index)
 
     def _on_video_music_toggled(self, checked):
         self.config.set('background_video_audio', bool(checked))

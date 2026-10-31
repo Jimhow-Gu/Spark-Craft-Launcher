@@ -2,12 +2,14 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QPoint
-from PySide6.QtGui import (QColor, QPainter, QPainterPath, QPixmap)
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton)
+from PySide6.QtCore import Qt, QPoint, QEasingCurve, QPropertyAnimation
+from PySide6.QtGui import (QColor, QFont, QImage, QPainter, QPainterPath, QPixmap)
+from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QPushButton)
+
+from core.app_font import ui_font
 
 class WindowTitleBar(QFrame):
-    HEIGHT = 38
+    HEIGHT = 56
     def __init__(self, window, parent=None):
         super().__init__(parent)
         self._window = window
@@ -15,6 +17,7 @@ class WindowTitleBar(QFrame):
         self._dragging = False
         self._title_text = ''
         self._light = False
+        self._logo_pixmap = None
         self.setFixedHeight(self.HEIGHT)
         self.setObjectName('WindowTitleBar')
         self.setFrameShape(QFrame.NoFrame)
@@ -22,10 +25,14 @@ class WindowTitleBar(QFrame):
         self.setStyleSheet('\n            QFrame#WindowTitleBar { background: transparent; border: none; }\n            QLabel { background:transparent; }\n        ')
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 0, 6, 0)
+        self._layout = layout
         layout.setSpacing(6)
         logo_label = QLabel()
         logo_label.setFixedSize(22, 22)
         logo_label.setAlignment(Qt.AlignCenter)
+        logo_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.logo_label = logo_label
+        logo_label.hide()
         logo_path = Path(__file__).resolve().parent.parent / 'imgs' / 'sparkler_alpha.png'
         if not logo_path.is_file():
             logo_path = Path(__file__).resolve().parent.parent / 'imgs' / 'sparkler.png'
@@ -35,11 +42,21 @@ class WindowTitleBar(QFrame):
                 pixmap = trim_transparent(QPixmap(str(logo_path)))
                 pixmap = hidpi_pixmap(pixmap, 22, 22, smooth=True, keep_aspect=True)
                 if not pixmap.isNull():
-                    logo_label.setPixmap(pixmap)
+                    self._logo_pixmap = pixmap
+                    self._update_logo()
             except Exception:
                 logo_label.clear()
         layout.addWidget(logo_label)
-        layout.addSpacing(2)
+        layout.addSpacing(8)
+        self.title_label = QLabel('Spark Craft Launcher')
+        self.title_label.setFont(ui_font(13, QFont.DemiBold))
+        self.title_label.setStyleSheet('color:#88DDDD; background:transparent;')
+        self.title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._title_effect = QGraphicsOpacityEffect(self.title_label)
+        self._title_effect.setOpacity(1.0)
+        self.title_label.setGraphicsEffect(self._title_effect)
+        self._title_anim = None
+        layout.addWidget(self.title_label)
         layout.addStretch(1)
         self.min_btn = QPushButton('—')
         self.min_btn.setFixedSize(38, 28)
@@ -80,10 +97,93 @@ class WindowTitleBar(QFrame):
 
     def set_light(self, light: bool):
         self._light = bool(light)
+        self._update_logo()
         self.update()
 
+    def _update_logo(self):
+        '''浅色标题栏下把偏白的 logo 压暗，避免与浅色背景融在一起。'''
+
+        pixmap = self._logo_pixmap
+        if pixmap is None or pixmap.isNull():
+            return
+        if not self._light:
+            self.logo_label.setPixmap(pixmap)
+            return
+        image = pixmap.toImage().convertToFormat(QImage.Format_ARGB32)
+        for y in range(image.height()):
+            for x in range(image.width()):
+                color = image.pixelColor(x, y)
+                if color.alpha() <= 0:
+                    continue
+                high = max(color.red(), color.green(), color.blue())
+                low = min(color.red(), color.green(), color.blue())
+                if high - low <= 35 and high >= 120:
+                    color.setRgb(52, 59, 72, color.alpha())
+                elif high >= 190:
+                    color.setRgb(
+                        int(color.red() * 0.68),
+                        int(color.green() * 0.68),
+                        int(color.blue() * 0.68),
+                        color.alpha(),
+                    )
+                image.setPixelColor(x, y, color)
+        self.logo_label.setPixmap(QPixmap.fromImage(image))
+
+    def set_left_margin(self, pixels: int):
+        self._layout.setContentsMargins(int(pixels), 0, 6, 0)
+
     def set_title(self, text: str, color: str='#6db6ff'):
-        self._title_text = text or 'PMGL'
+        self._title_text = text or 'Spark Craft Launcher'
+        self.title_label.setPixmap(QPixmap())
+        self.title_label.setText(self._title_text)
+        self.title_label.setStyleSheet(
+            f'color:{color}; background:transparent;'
+        )
+        self.title_label.show()
+
+    def set_title_image(self, path: str):
+        pixmap = QPixmap(str(path or ''))
+        if pixmap.isNull():
+            return False
+        pixmap = pixmap.scaledToHeight(
+            22, Qt.SmoothTransformation
+        )
+        self.title_label.setText('')
+        self.title_label.setPixmap(pixmap)
+        self.title_label.show()
+        return True
+
+    def set_title_visible(self, visible: bool, animate: bool=False):
+        visible = bool(visible)
+        if self._title_anim is not None:
+            try:
+                self._title_anim.stop()
+            except RuntimeError:
+                pass
+            self._title_anim = None
+        if not animate:
+            self._title_effect.setOpacity(1.0 if visible else 0.0)
+            self.title_label.setVisible(visible)
+            return
+        if visible:
+            self.title_label.show()
+        animation = QPropertyAnimation(
+            self._title_effect, b'opacity', self
+        )
+        animation.setDuration(120 if visible else 90)
+        animation.setStartValue(self._title_effect.opacity())
+        animation.setEndValue(1.0 if visible else 0.0)
+        animation.setEasingCurve(QEasingCurve.OutCubic)
+        if not visible:
+            animation.finished.connect(
+                lambda: self.title_label.hide()
+            )
+        else:
+            animation.finished.connect(
+                lambda: self._title_effect.setOpacity(1.0)
+            )
+        self._title_anim = animation
+        animation.start()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:

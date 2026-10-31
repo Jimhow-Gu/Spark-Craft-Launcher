@@ -298,12 +298,15 @@ def refresh_button_icon(button):
     return True
 
 
-def painted_icon(name, size=20, color='#e6edf3', stroke=1.8):
-    '''返回自绘 QIcon；name 支持 play/pause/music/music_off/shirt/pencil/switch/cape/close。'''
+def painted_icon(name, size=20, color='#e6edf3', stroke=1.8, light_safe=False):
+    '''返回自绘 QIcon；name 支持 play/pause/music/music_off/shirt/pencil/switch/cape/close。
 
-    if _LIGHT_MODE:
+    light_safe=True 表示颜色已经是为当前主题选好的，不再做浅色换算。
+    '''
+
+    if _LIGHT_MODE and not light_safe:
         color = _light_color(color)
-    key = str(name), int(size), str(color), float(stroke)
+    key = str(name), int(size), str(color), float(stroke), bool(light_safe)
     cached = _CACHE.get(key)
     if cached is not None:
         return cached

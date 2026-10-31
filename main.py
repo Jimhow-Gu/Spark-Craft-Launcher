@@ -195,6 +195,8 @@ def main():
     from ui.widgets.text_context_menu import TextContextMenuFilter
     app._text_context_menu = TextContextMenuFilter(app)
     app.installEventFilter(app._text_context_menu)
+    from ui.widgets.themed_tooltip import install_themed_tooltips
+    app._themed_tooltip_filter = install_themed_tooltips(app)
     app.aboutToQuit.connect(JavaScanService.instance().shutdown)
     app.aboutToQuit.connect(release_single_instance)
     app.setApplicationName("Spark Craft Launcher")

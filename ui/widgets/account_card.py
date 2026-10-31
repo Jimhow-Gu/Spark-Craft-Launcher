@@ -4,6 +4,8 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QVBoxLayout)
 
+from ui.widgets.login_icons import login_icon
+
 class AccountCard(QFrame):
     clicked = Signal()
     avatar_failed = Signal()
@@ -28,14 +30,73 @@ class AccountCard(QFrame):
         self.mode_label = QLabel('离线登录')
         self.mode_label.setStyleSheet('color:rgba(255,255,255,0.52); font-size:11px; background:transparent;')
         self.mode_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.mode_icon = QLabel()
+        self.mode_icon.setFixedSize(14, 14)
+        self.mode_icon.setStyleSheet('background:transparent;')
+        self.mode_icon.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.mode_row = QHBoxLayout()
+        self.mode_row.setContentsMargins(0, 0, 0, 0)
+        self.mode_row.setSpacing(3)
+        self.mode_row.addWidget(self.mode_icon)
+        self.mode_row.addWidget(self.mode_label)
+        self.mode_row.addStretch(1)
         text_layout.addWidget(self.name_label)
-        text_layout.addWidget(self.mode_label)
+        text_layout.addLayout(self.mode_row)
         layout.addLayout(text_layout, 1)
+        self._layout = layout
+        self._text_layout = text_layout
+        self._compact = False
+        self._mode_text = ''
+        self._mode_kind = 'offline'
 
-    def set_account(self, name, mode, urls=None, skin_path=None, head_path=None, avatar_cache=None):
+    def set_compact(self, compact: bool = True, expanded_width: int = 210):
+        compact = bool(compact)
+        self._compact = compact
+        if compact:
+            self.name_label.hide()
+            self.mode_label.hide()
+            self.mode_icon.hide()
+            self._layout.setContentsMargins(6, 6, 6, 6)
+            self._layout.setSpacing(0)
+            self._layout.setStretch(0, 0)
+            self._layout.setStretch(1, 0)
+            self.setFixedSize(54, 54)
+            self.setStyleSheet(
+                'QFrame#AccountCard { background:transparent; border:none; }'
+                'QFrame#AccountCard:hover { background:rgba(255,255,255,0.08);'
+                ' border-radius:27px; }'
+            )
+            return
+        self.name_label.show()
+        has_mode = bool(self._mode_text)
+        self.mode_label.setVisible(has_mode)
+        self.mode_icon.setVisible(has_mode)
+        self._layout.setContentsMargins(14, 6, 8, 6)
+        self._layout.setSpacing(4)
+        self._layout.setStretch(0, 0)
+        self._layout.setStretch(1, 1)
+        self.setFixedSize(max(120, int(expanded_width)), 54)
+        self.setStyleSheet(
+            'QFrame#AccountCard { background:rgba(255,255,255,0.07);'
+            ' border:1px solid rgba(255,255,255,0.08); border-radius:8px; }'
+            'QFrame#AccountCard:hover { background:rgba(255,255,255,0.12); }'
+        )
+
+    def set_avatar_only(self, avatar_only: bool = True):
+        self.set_compact(bool(avatar_only))
+
+    def set_account(
+        self, name, mode, urls=None, skin_path=None, head_path=None,
+        avatar_cache=None, mode_kind='offline',
+    ):
         self.name_label.setText(name or '未登录')
-        self.mode_label.setText(mode or '')
-        self.mode_label.setVisible(bool(mode))
+        self._mode_text = str(mode or '')
+        self._mode_kind = str(mode_kind or 'offline')
+        self.mode_label.setText(self._mode_text)
+        self.mode_icon.setPixmap(login_icon(self._mode_kind, 14))
+        if not self._compact:
+            self.mode_label.setVisible(bool(self._mode_text))
+            self.mode_icon.setVisible(bool(self._mode_text))
         if head_path:
             self.avatar.set_head_file(head_path)
             return

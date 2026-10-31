@@ -1,6 +1,6 @@
-from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QListWidget, QListWidgetItem, QLabel, QMessageBox, QApplication, QSizeGrip, QGraphicsColorizeEffect, QPushButton, QGraphicsOpacityEffect, QFrame)
-from PySide6.QtCore import (Qt, QPropertyAnimation, QEasingCurve, QTimer, QSize, QEvent)
-from PySide6.QtGui import QFont, QColor, QCursor, QPixmap
+from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QListWidgetItem, QLabel, QMessageBox, QApplication, QSizeGrip, QGraphicsColorizeEffect, QPushButton, QGraphicsOpacityEffect, QFrame)
+from PySide6.QtCore import (Qt, QPropertyAnimation, QVariantAnimation, QEasingCurve, QTimer, QSize, QEvent, QRect)
+from PySide6.QtGui import QColor, QCursor, QFont, QPixmap
 import os
 from pathlib import Path
 from core.app_font import ui_font
@@ -11,16 +11,19 @@ from ui.pages.about_page import AboutPage
 from ui.pages.download_manager_page import DownloadManagerPage
 from ui.widgets.account_card import AccountCard
 from ui.widgets.download_status_bar import DownloadStatusBar
-from ui.widgets.painted_icons import painted_icon, set_button_icon
+from ui.widgets.painted_icons import set_button_icon
 from ui.widgets.media_button import MediaButton
 from ui.widgets.title_bar import WindowTitleBar
 from ui.widgets.no_wheel import WheelGuard
 from ui.widgets.background_widget import BackgroundWidget
 from ui.widgets.window_border import WindowBorderOverlay
 from ui.widgets.side_panel import SidePanel
+from ui.widgets.side_nav import SideNavList, NAV_HEADER_ROLE, NAV_ICON_ROLE
+from ui.widgets.brand_logo import BrandLogo
 from ui.theme import ThemeManager
 from core.download_manager import DownloadManager
 from core.build_info import BUILD_LABEL, RELEASE_BUILD, RESOURCE_PACK_SEQUENCE, EXECUTABLE_BUILD
+from core.update import CURRENT_VERSION
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -78,30 +81,57 @@ class MainWindow(QMainWindow):
         self.size_grip.setFixedSize(16, 16)
         self.size_grip.setStyleSheet('background:transparent;')
         self.size_grip.hide()
-        self.left_panel = SidePanel()
-        self.left_panel.setFixedWidth(210)
+        self._sidebar_collapsed_width = 90
+        self._sidebar_expanded_width = 180
+        self.title_bar.set_left_margin(self._sidebar_collapsed_width + 12)
+        self._sidebar_expanded = False
+        self._sidebar_anim = None
+        self._sidebar_spacer_anim = None
+        self._sidebar_collapse_timer = QTimer(self)
+        self._sidebar_collapse_timer.setSingleShot(True)
+        self._sidebar_collapse_timer.setInterval(140)
+        self._sidebar_collapse_timer.timeout.connect(self._collapse_sidebar)
+
+        # 侧栏默认是图标轨道；鼠标进入时以覆盖层方式展开，
+        # 不改变右侧页面宽度，避免展开动画触发布局抖动。
+        self.left_panel = SidePanel(self.central)
         self.left_panel.setStyleSheet('background: transparent;')
+        self.left_panel.setGeometry(
+            0, 0, self._sidebar_collapsed_width, self.central.height()
+        )
         left_layout = QVBoxLayout(self.left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
+        self._sidebar_header = QWidget()
+        self._sidebar_header.setFixedHeight(56)
+        self._sidebar_header.setStyleSheet('background:transparent;')
+        self._sidebar_header_layout = QHBoxLayout(self._sidebar_header)
+        self._sidebar_header_layout.setContentsMargins(31, 0, 0, 0)
+        self._sidebar_header_layout.setSpacing(8)
+        self.brand_logo = BrandLogo(28)
+        self._sidebar_header_layout.addWidget(self.brand_logo)
         self.brand_label = QLabel('Spark Craft Launcher')
-        self.brand_label.setFont(ui_font(16, QFont.DemiBold))
-        self.brand_label.setStyleSheet('color: #88DDDD; padding: 10px 16px 2px 16px; background: transparent;')
+        self.brand_label.setFont(ui_font(12, QFont.DemiBold))
+        self.brand_label.setStyleSheet('color:#88DDDD; background:transparent;')
         self.brand_label.setWordWrap(True)
-        left_layout.addWidget(self.brand_label)
-        self.account_header = QLabel('账户')
-        self.account_header.setStyleSheet('color:#b9b9b9; font-size:12px; padding:2px 16px 2px 16px; border-bottom:1px solid rgba(255,255,255,0.18); background:transparent;')
-        left_layout.addWidget(self.account_header)
+        self.brand_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.brand_label.setMaximumWidth(162)
+        self.brand_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._sidebar_brand_effect = QGraphicsOpacityEffect(self.brand_label)
+        self._sidebar_brand_effect.setOpacity(0.0)
+        self.brand_label.setGraphicsEffect(self._sidebar_brand_effect)
+        self._sidebar_brand_anim = None
+        self.brand_label.hide()
+        self._sidebar_header_layout.addWidget(self.brand_label, 1)
+        self._sidebar_header_layout.addStretch(0)
+        left_layout.addWidget(self._sidebar_header)
         self.account_card = AccountCard()
+        self.account_card.set_avatar_only(True)
         self.account_card.clicked.connect((lambda: self._switch_page(2)))
         self._avatar_fail_toast_shown = False
         self.account_card.avatar_failed.connect(self._on_avatar_failed)
-        left_layout.addWidget(self.account_card)
-        self.nav_list = QListWidget()
-        self.nav_list.setSpacing(0)
-        self.nav_list.setIconSize(QSize(18, 18))
-        self.nav_list.setViewportMargins(6, 1, 6, 1)
-        self.nav_list.setStyleSheet('\n        QListWidget{background: transparent; border:none; outline:none;}\n        QListWidget::item{padding:3px 10px; border-radius:7px; font-size:11pt;\n                          background:transparent; border:none;}\n        QListWidget::item:hover{background:rgba(255,255,255,0.11);}\n        QListWidget::item:selected{background:rgba(0,120,212,0.90); color:white;}\n        QListWidget::item:disabled{background:transparent; border:none;\n                                   border-bottom:1px solid rgba(255,255,255,0.14);\n                                   padding:4px 8px 2px 8px; font-size:8pt;\n                                   color:rgba(255,255,255,0.45);}\n        ')
+        left_layout.addWidget(self.account_card, 0, Qt.AlignHCenter)
+        self.nav_list = SideNavList()
         self._add_nav_item('启动', 0, None, 'play')
         self._add_nav_header('游戏版本')
         self._add_nav_item('下载', 1, 'available', 'download')
@@ -115,10 +145,17 @@ class MainWindow(QMainWindow):
         self._add_nav_item('设置', 3, None, 'gear')
         self._add_nav_item('关于', 4, None, 'info')
         left_layout.addWidget(self.nav_list, 1)
+        rail_footer = QWidget()
+        rail_footer.setFixedWidth(self._sidebar_collapsed_width)
+        rail_footer.setStyleSheet('background:transparent;')
+        rail_footer_layout = QVBoxLayout(rail_footer)
+        rail_footer_layout.setContentsMargins(0, 0, 0, 2)
+        rail_footer_layout.setSpacing(2)
         media_row = QWidget()
-        media_layout = QHBoxLayout(media_row)
-        media_layout.setContentsMargins(10, 0, 10, 2)
-        media_layout.setSpacing(6)
+        self._media_layout = QHBoxLayout(media_row)
+        self._media_layout.setContentsMargins(0, 0, 0, 0)
+        self._media_layout.setSpacing(6)
+        self._media_layout.addStretch(1)
         self.video_toggle_btn = MediaButton()
         self.video_toggle_btn.setFixedSize(30, 28)
         self.video_toggle_btn.setIconSize(QSize(16, 16))
@@ -129,25 +166,25 @@ class MainWindow(QMainWindow):
         self.music_toggle_btn.setIconSize(QSize(16, 16))
         self.music_toggle_btn.setToolTip('播放/暂停背景音乐')
         self.music_toggle_btn.clicked.connect(self._toggle_background_music)
-        media_layout.addWidget(self.video_toggle_btn)
-        media_layout.addWidget(self.music_toggle_btn)
-        media_layout.addStretch(1)
+        self._media_layout.addWidget(self.video_toggle_btn)
+        self._media_layout.addWidget(self.music_toggle_btn)
+        self._media_layout.addStretch(1)
         self.media_row = media_row
-        left_layout.addWidget(media_row)
+        rail_footer_layout.addWidget(media_row)
+        self.status_label = QLabel(f'V{CURRENT_VERSION}')
+        self.status_label.setStyleSheet('color:#9a9a9a; font-size:9px; background:transparent;')
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setToolTip(
+            f'{BUILD_LABEL}' + chr(10) +
+            f'Release 构建号：{RELEASE_BUILD}' + chr(10) +
+            f'资源包序号：{RESOURCE_PACK_SEQUENCE}' + chr(10) +
+            f'可执行程序/DLL 构建号：{EXECUTABLE_BUILD}'
+        )
+        left_layout.addWidget(rail_footer, 0, Qt.AlignLeft)
+        left_layout.addWidget(self.status_label)
         self.central.video_state_changed.connect((lambda _playing: self._update_media_buttons()))
         self.music_player.state_changed.connect(self._update_media_buttons)
         QTimer.singleShot(0, self._update_media_buttons)
-        self.status_label = QLabel(BUILD_LABEL)
-        self.status_label.setStyleSheet('color: #9a9a9a; font-size: 10px; padding: 0 6px 4px 14px; background: transparent;')
-        self.status_label.setAlignment(Qt.AlignLeft | Qt.AlignBottom)
-        self.status_label.setWordWrap(True)
-        self.status_label.setToolTip(
-            f'{BUILD_LABEL}\n'
-            f'Release 构建号：{RELEASE_BUILD}\n'
-            f'资源包序号：{RESOURCE_PACK_SEQUENCE}\n'
-            f'可执行程序/DLL 构建号：{EXECUTABLE_BUILD}'
-        )
-        left_layout.addWidget(self.status_label)
         self.page_stack = QStackedWidget()
         self.page_stack.setFrameShape(QFrame.NoFrame)
         self.page_stack.setStyleSheet('QStackedWidget { border: none; background: transparent; }')
@@ -161,8 +198,14 @@ class MainWindow(QMainWindow):
         self.right_layout.setSpacing(0)
         self.right_layout.addWidget(self.page_stack, 1)
         self.right_layout.addWidget(self.download_bar)
-        self.main_layout.addWidget(self.left_panel)
+        self.sidebar_spacer = QWidget()
+        self.sidebar_spacer.setFixedWidth(self._sidebar_collapsed_width)
+        self.sidebar_spacer.setStyleSheet('background: transparent;')
+        self.main_layout.addWidget(self.sidebar_spacer)
         self.main_layout.addWidget(self.right_panel, 1)
+        self.left_panel.raise_()
+        self._set_sidebar_expanded(False, animate=False)
+        QTimer.singleShot(0, self._update_sidebar_geometry)
         self._download_return_widget = None
         self.game_settings_page = None
         self._wheel_guard = WheelGuard(self)
@@ -178,22 +221,193 @@ class MainWindow(QMainWindow):
     def _add_nav_header(self, text):
         item = QListWidgetItem(text)
         item.setFlags(Qt.NoItemFlags)
-        item.setForeground(QColor(135, 135, 135))
-        font = item.font()
-        font.setPointSize(8)
-        item.setFont(font)
-        item.setSizeHint(QSize(0, 18))
+        item.setData(NAV_HEADER_ROLE, True)
         self.nav_list.addItem(item)
 
     def _add_nav_item(self, text, page_index, section, icon_name=None):
         item = QListWidgetItem(text)
         item.setData(Qt.UserRole, (page_index, section))
-        if icon_name:
-            item.setIcon(painted_icon(icon_name, 18, '#9aa3af'))
+        item.setData(NAV_ICON_ROLE, icon_name or '')
         self.nav_list.addItem(item)
 
     def _on_nav_clicked(self, item):
         self._on_page_changed(item)
+
+    def _is_sidebar_widget(self, widget):
+        try:
+            return bool(
+                isinstance(widget, QWidget)
+                and (
+                    widget is self.left_panel
+                    or self.left_panel.isAncestorOf(widget)
+                )
+            )
+        except RuntimeError:
+            return False
+
+    def _set_sidebar_brand_visible(self, visible: bool, animate: bool=True):
+        label = getattr(self, 'brand_label', None)
+        effect = getattr(self, '_sidebar_brand_effect', None)
+        if label is None or effect is None:
+            return
+        if self._sidebar_brand_anim is not None:
+            try:
+                self._sidebar_brand_anim.stop()
+            except RuntimeError:
+                pass
+            self._sidebar_brand_anim = None
+        if not animate:
+            effect.setOpacity(1.0 if visible else 0.0)
+            label.setVisible(visible)
+            return
+        if visible:
+            label.show()
+        animation = QPropertyAnimation(effect, b'opacity', self)
+        animation.setDuration(120 if visible else 90)
+        animation.setStartValue(effect.opacity())
+        animation.setEndValue(1.0 if visible else 0.0)
+        animation.setEasingCurve(QEasingCurve.OutCubic)
+        if not visible:
+            animation.finished.connect(label.hide)
+        else:
+            animation.finished.connect(lambda: effect.setOpacity(1.0))
+        self._sidebar_brand_anim = animation
+        animation.start()
+
+    def _expand_sidebar(self):
+        self._sidebar_collapse_timer.stop()
+        if self._sidebar_expanded:
+            return
+        self._set_sidebar_expanded(True)
+
+    def _collapse_sidebar(self):
+        if not self._sidebar_expanded:
+            return
+        try:
+            if self.left_panel.rect().contains(
+                self.left_panel.mapFromGlobal(QCursor.pos())
+            ):
+                return
+        except RuntimeError:
+            return
+        self._set_sidebar_expanded(False)
+
+    def _animate_sidebar_spacer(self, target_width: int, animate: bool=True, duration: int=190):
+        current = self.sidebar_spacer.width()
+        if self._sidebar_spacer_anim is not None:
+            try:
+                self._sidebar_spacer_anim.stop()
+            except RuntimeError:
+                pass
+            self._sidebar_spacer_anim = None
+        if not animate or not self.isVisible():
+            self.sidebar_spacer.setFixedWidth(int(target_width))
+            return
+        animation = QVariantAnimation(self)
+        animation.setDuration(int(duration))
+        animation.setStartValue(current)
+        animation.setEndValue(int(target_width))
+        animation.setEasingCurve(QEasingCurve.OutCubic)
+        animation.valueChanged.connect(
+            lambda value: self.sidebar_spacer.setFixedWidth(int(value))
+        )
+        self._sidebar_spacer_anim = animation
+        animation.start()
+
+    def _set_sidebar_expanded(self, expanded: bool, animate: bool=True):
+        expanded = bool(expanded)
+        if self._sidebar_anim is not None:
+            try:
+                self._sidebar_anim.stop()
+            except RuntimeError:
+                pass
+            self._sidebar_anim = None
+        self._sidebar_expanded = expanded
+        try:
+            self.left_panel.set_expanded(expanded)
+        except AttributeError:
+            pass
+        target_width = (
+            self._sidebar_expanded_width
+            if expanded else self._sidebar_collapsed_width
+        )
+        self._animate_sidebar_spacer(
+            target_width, animate and self.isVisible(),
+            190 if expanded else 160,
+        )
+        self.nav_list.set_collapsed(not expanded)
+        self.status_label.setText(
+            BUILD_LABEL if expanded else f'V{CURRENT_VERSION}'
+        )
+        self.account_card.set_compact(
+            not expanded, self._sidebar_expanded_width - 20
+        )
+        if expanded:
+            self.title_bar.set_title_visible(
+                False, animate=bool(animate and self.isVisible())
+            )
+            self._set_sidebar_brand_visible(
+                bool(getattr(self, '_title_available', True)),
+                animate=bool(animate and self.isVisible()),
+            )
+        else:
+            self._set_sidebar_brand_visible(
+                False, animate=bool(animate and self.isVisible())
+            )
+        if not animate or not self.isVisible():
+            self.left_panel.setGeometry(
+                0, 0, target_width, self.central.height()
+            )
+            self.left_panel.raise_()
+            if not expanded:
+                self.title_bar.set_title_visible(
+                    getattr(self, '_title_available', True)
+                )
+            return
+        animation = QPropertyAnimation(self.left_panel, b'geometry', self)
+        animation.setDuration(190 if expanded else 160)
+        animation.setStartValue(self.left_panel.geometry())
+        animation.setEndValue(
+            QRect(0, 0, target_width, self.central.height())
+        )
+        animation.setEasingCurve(QEasingCurve.OutCubic)
+        animation.finished.connect(
+            lambda value=expanded: self._on_sidebar_anim_finished(value)
+        )
+        self._sidebar_anim = animation
+        animation.start()
+
+    def _on_sidebar_anim_finished(self, expanded: bool):
+        self._sidebar_anim = None
+        target_width = (
+            self._sidebar_expanded_width
+            if expanded else self._sidebar_collapsed_width
+        )
+        self.left_panel.setGeometry(
+            0, 0, target_width, self.central.height()
+        )
+        self.left_panel.raise_()
+        if not expanded:
+            self.title_bar.set_title_visible(
+                getattr(self, '_title_available', True), animate=True
+            )
+
+    def _update_sidebar_geometry(self):
+        try:
+            if self._sidebar_anim is not None:
+                self._sidebar_anim.stop()
+                self._sidebar_anim = None
+            width = (
+                self._sidebar_expanded_width
+                if self._sidebar_expanded
+                else self._sidebar_collapsed_width
+            )
+            self.left_panel.setGeometry(0, 0, width, self.central.height())
+            self.left_panel.raise_()
+            if self._sidebar_spacer_anim is None:
+                self.sidebar_spacer.setFixedWidth(width)
+        except RuntimeError:
+            pass
 
     def _select_nav(self, page_index, section=None):
         if page_index == 2:
@@ -240,29 +454,39 @@ class MainWindow(QMainWindow):
             mode = 'text'
             image = ''
         try:
+            self._title_available = mode != 'none'
             if mode == 'none':
+                self.brand_label.clear()
                 self.brand_label.hide()
+                self.title_bar.set_title_visible(False)
                 return
-            if mode == 'image':
-                pixmap = QPixmap(image) if image else QPixmap()
+            if mode == 'image' and image:
+                pixmap = QPixmap(image)
                 if not pixmap.isNull():
                     self.brand_label.setText('')
                     self.brand_label.setPixmap(
-                        pixmap.scaled(
-                            178, 42, Qt.KeepAspectRatio, Qt.SmoothTransformation
-                        )
+                        pixmap.scaledToHeight(20, Qt.SmoothTransformation)
                     )
-                    self.brand_label.setStyleSheet(
-                        'padding: 8px 16px 2px 16px; background: transparent;'
+                    self.brand_label.setStyleSheet('background:transparent;')
+                    self.title_bar.set_title_image(image)
+                    self.title_bar.set_title_visible(
+                        not self._sidebar_expanded
                     )
-                    self.brand_label.show()
+                    if self._sidebar_expanded:
+                        self._set_sidebar_brand_visible(True, animate=False)
                     return
-            brand_text = 'Spark Craft Launcher' if mode == 'default' else title
+                brand_text = 'Spark Craft Launcher'
+            else:
+                brand_text = 'Spark Craft Launcher' if mode == 'default' else title
             self.brand_label.setPixmap(QPixmap())
             self.brand_label.setText(brand_text)
-            self.brand_label.setStyleSheet(f'color: {color}; padding: 10px 16px 2px 16px; background: transparent;')
-            self.brand_label.show()
-            self.title_bar.set_title(title, color)
+            self.brand_label.setStyleSheet(
+                f'color:{color}; background:transparent;'
+            )
+            self.title_bar.set_title(brand_text, color)
+            self.title_bar.set_title_visible(not self._sidebar_expanded)
+            if self._sidebar_expanded:
+                self._set_sidebar_brand_visible(True, animate=False)
         except Exception:
             pass
 
@@ -291,6 +515,7 @@ class MainWindow(QMainWindow):
         self._page_animation = None
         self._page_fade_overlay = None
         self.page_stack.currentChanged.connect(self._animate_page_change)
+        self.page_stack.currentChanged.connect(self._style_current_page)
         try:
             self.settings_page.background_changed.connect(self._refresh_background)
             self.settings_page.background_refresh.connect((lambda: self._refresh_background(force=True)))
@@ -484,6 +709,12 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, '导入整合包失败', str(exc))
 
     def eventFilter(self, obj, event):
+        if event.type() == QEvent.Enter:
+            if self._is_sidebar_widget(obj):
+                self._expand_sidebar()
+        elif event.type() == QEvent.Leave:
+            if self._is_sidebar_widget(obj):
+                self._sidebar_collapse_timer.start()
         if event.type() in (QEvent.DragEnter, QEvent.DragMove):
             if self._modpack_paths_from_mime(event.mimeData()):
                 event.acceptProposedAction()
@@ -546,13 +777,15 @@ class MainWindow(QMainWindow):
         login_type = config.get('login_type', 'offline')
         name = ''
         mode = ''
+        mode_kind = 'offline'
         urls = []
         skin_path = None
         head_path = None
         if login_type == 'microsoft':
             account = config.get('microsoft_account') or {}
             name = account.get('name') or ''
-            mode = '正版账号'
+            mode = '正版登录'
+            mode_kind = 'microsoft'
             if name:
                 try:
                     from core.skin import microsoft_skin_cache_path
@@ -571,7 +804,14 @@ class MainWindow(QMainWindow):
         elif login_type == 'thirdparty':
             account = config.get('thirdparty_account') or {}
             name = account.get('name') or ''
-            mode = '第三方登录'
+            server_name = str(account.get('server_name') or '')
+            account_api = str(account.get('api') or '')
+            if 'littleskin.cn' in account_api.lower() or 'littleskin' in server_name.lower():
+                mode = 'LittleSkin 登录'
+                mode_kind = 'littleskin'
+            else:
+                mode = server_name or '第三方登录'
+                mode_kind = 'thirdparty'
             try:
                 from core.skin import thirdparty_skin_cache_path
                 cached = thirdparty_skin_cache_path(account.get('uuid', ''), name)
@@ -590,6 +830,7 @@ class MainWindow(QMainWindow):
         else:
             name = config.get('player_name', '') or ''
             mode = '离线登录' if name else ''
+            mode_kind = 'offline'
             head_path = None
             if name:
                 try:
@@ -616,7 +857,8 @@ class MainWindow(QMainWindow):
         except Exception:
             avatar_cache = None
         self.account_card.set_account(
-            name or '未登录', mode, urls, skin_path, head_path, avatar_cache
+            name or '未登录', mode, urls, skin_path, head_path, avatar_cache,
+            mode_kind=mode_kind,
         )
 
     def _on_version_selected(self, version_id):
@@ -739,6 +981,15 @@ class MainWindow(QMainWindow):
         if page_index == 1 and section:
             self.version_page.show_section(section)
 
+    def _style_current_page(self, _index=None):
+        manager = getattr(self, 'theme_manager', None)
+        if manager is None:
+            return
+        widget = self.page_stack.currentWidget()
+        if widget is None:
+            return
+        QTimer.singleShot(0, lambda w=widget: manager.style_widget_tree(w))
+
     def _animate_page_change(self, index: int):
         '''页面切换时用暗色遮罩淡出，避免页面半透明时透出背景视频。'''
 
@@ -840,6 +1091,7 @@ class MainWindow(QMainWindow):
             self.border_overlay.raise_()
         except Exception:
             pass
+        self._update_sidebar_geometry()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -851,6 +1103,9 @@ class MainWindow(QMainWindow):
             self.border_overlay.raise_()
         except Exception:
             pass
+        self._update_sidebar_geometry()
+        if hasattr(self, 'theme_manager'):
+            QTimer.singleShot(0, self.theme_manager.style_visible_widgets)
         if not self._music_auto_started:
             self._music_auto_started = True
             QTimer.singleShot(800, self._auto_start_music)
