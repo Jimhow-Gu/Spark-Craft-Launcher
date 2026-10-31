@@ -233,6 +233,21 @@ def main():
         sys.exit(0)
     logging.getLogger("Startup").info("单实例锁已获取")
 
+    # 兜底：如果上次下载完更新但重启按钮没有生效，下次启动直接安装。
+    try:
+        from core.update import (
+            apply_downloaded_update_on_startup,
+            downloaded_update_available,
+        )
+        if downloaded_update_available():
+            logging.getLogger("Startup").info("发现已下载更新，尝试启动时安装")
+            release_single_instance()
+            if apply_downloaded_update_on_startup():
+                os._exit(0)
+            acquire_single_instance()
+    except Exception:
+        pass
+
     # 更新时旧 exe 会被重命名为 .old；等旧进程退出后由后台线程清理。
     try:
         import threading

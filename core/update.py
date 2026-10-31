@@ -20,7 +20,7 @@ from core.paths import safe_rmtree, scl_dir
 CURRENT_VERSION = '1.0.8'
 VERSION_DISPLAY = 'V1.0.8（正式版）'
 # DLL 构建号在同一版本内递增；每次发布新大版本时重置为 1。
-EXECUTABLE_BUILD = '19'
+EXECUTABLE_BUILD = '20'
 REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
 API_ACCELERATED = f'https://gh-proxy.com/{API_LATEST}'
@@ -204,6 +204,10 @@ class UpdateDownloadWorker(QThread):
                         progress=(lambda done, total: self.progress.emit(int(done), int(total))),
                         cancel=(lambda: self._cancelled),
                     )
+                    try:
+                        write_downloaded_update(self.info, dest)
+                    except Exception:
+                        pass
                     self.done.emit(str(dest))
                     return
                 except DownloadCancelled:
@@ -253,6 +257,21 @@ def write_update_log(text):
         pass
 
 
+def _clean_child_environment():
+    '''去掉 PyInstaller onefile 的临时目录变量，避免新进程复用即将删除的 _MEI。'''
+
+    env = os.environ.copy()
+    for key in list(env):
+        upper = key.upper()
+        if (
+            upper.startswith('_PYI_')
+            or upper.startswith('_MEIPASS')
+            or upper.startswith('PYINSTALLER_')
+        ):
+            env.pop(key, None)
+    return env
+
+
 def _pending_update_marker(version):
     marker = scl_dir() / 'update' / 'pending_update.json'
     marker.parent.mkdir(parents=True, exist_ok=True)
@@ -261,6 +280,89 @@ def _pending_update_marker(version):
         encoding='utf-8',
     )
     return marker
+
+
+DOWNLOADED_MARKER = 'downloaded_update.json'
+
+
+def _downloaded_marker_path():
+    return scl_dir() / 'update' / DOWNLOADED_MARKER
+
+
+def write_downloaded_update(info, asset_path):
+    '''记录已下载完成的更新，供下次启动兜底自动安装。'''
+
+    info = dict(info or {})
+    path = Path(asset_path)
+    if not path.is_file():
+        return
+    marker = _downloaded_marker_path()
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps({
+            'version': str(info.get('version') or info.get('tag') or '').lstrip('vV'),
+            'tag': str(info.get('tag') or ''),
+            'dll_build': int(info.get('dll_build') or 0),
+            'asset_path': str(path),
+            'asset_size': path.stat().st_size,
+            'time': time.time(),
+        }, ensure_ascii=False),
+        encoding='utf-8',
+    )
+
+
+def _read_downloaded_update():
+    marker = _downloaded_marker_path()
+    if not marker.is_file():
+        return None
+    try:
+        data = json.loads(marker.read_text(encoding='utf-8'))
+        path = Path(str(data.get('asset_path') or ''))
+        if not path.is_file():
+            return None
+        expected = int(data.get('asset_size') or 0)
+        if expected and path.stat().st_size != expected:
+            return None
+        return data
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def downloaded_update_available():
+    return _read_downloaded_update() is not None
+
+
+def clear_downloaded_update():
+    try:
+        _downloaded_marker_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def apply_downloaded_update_on_startup():
+    '''启动时安装已下载完成的更新；失败则继续正常启动。'''
+
+    data = _read_downloaded_update()
+    if not data:
+        return False
+    try:
+        if update_kind(data, current=CURRENT_VERSION, current_dll=EXECUTABLE_BUILD) == 'none':
+            clear_downloaded_update()
+            return False
+    except Exception:
+        clear_downloaded_update()
+        return False
+    asset = Path(str(data.get('asset_path') or ''))
+    version = str(data.get('version') or data.get('tag') or '')
+    write_update_log(f'startup: applying downloaded update {version} from {asset}')
+    try:
+        if apply_update_inplace(asset, version):
+            clear_downloaded_update()
+            return True
+    except Exception as exc:
+        write_update_log(f'startup: apply downloaded update failed: {exc}')
+        clear_downloaded_update()
+    return False
 
 
 def _resolve_update_exe(asset_path):
@@ -343,6 +445,7 @@ def apply_update_inplace(asset_path, version):
                     [str(target)],
                     cwd=str(target.parent),
                     close_fds=True,
+                    env=_clean_child_environment(),
                     creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0),
                 )
                 last_launch_error = None
@@ -353,7 +456,19 @@ def apply_update_inplace(asset_path, version):
         if last_launch_error is not None:
             # Popen 失败时再走 ShellExecute，部分安全软件只拦截前者。
             try:
-                os.startfile(str(target))
+                saved = {}
+                for key in list(os.environ):
+                    upper = key.upper()
+                    if (
+                        upper.startswith('_PYI_')
+                        or upper.startswith('_MEIPASS')
+                        or upper.startswith('PYINSTALLER_')
+                    ):
+                        saved[key] = os.environ.pop(key)
+                try:
+                    os.startfile(str(target))
+                finally:
+                    os.environ.update(saved)
                 last_launch_error = None
                 write_update_log('inplace: started via ShellExecute')
             except OSError as exc:
@@ -361,6 +476,7 @@ def apply_update_inplace(asset_path, version):
         if last_launch_error is not None:
             raise DownloadError(f'无法启动新版本：{last_launch_error}')
         write_update_log('inplace: restarted')
+        clear_downloaded_update()
         return True
     except Exception as exc:
         write_update_log(f'inplace failed: {exc}')
@@ -460,6 +576,7 @@ def prepare_update(asset_path, version):
             ),
             close_fds=True,
             cwd=str(target.parent),
+            env=_clean_child_environment(),
         )
         write_update_log('prepare: powershell started')
     except OSError as exc:
@@ -490,7 +607,9 @@ def consume_updated_marker():
 
 __all__ = [
     'CURRENT_VERSION', 'VERSION_DISPLAY', 'EXECUTABLE_BUILD', 'CheckUpdateWorker',
-    'UpdateDownloadWorker', 'apply_update_inplace', 'cleanup_old_executable',
-    'consume_updated_marker', 'fetch_latest_release', 'is_newer', 'prepare_update',
-    'update_kind', 'write_update_log',
+    'UpdateDownloadWorker', 'apply_downloaded_update_on_startup',
+    'apply_update_inplace', 'cleanup_old_executable', 'clear_downloaded_update',
+    'consume_updated_marker', 'downloaded_update_available',
+    'fetch_latest_release', 'is_newer', 'prepare_update', 'update_kind',
+    'write_downloaded_update', 'write_update_log',
 ]
