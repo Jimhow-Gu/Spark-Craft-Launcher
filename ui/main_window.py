@@ -771,7 +771,8 @@ class MainWindow(QMainWindow):
         if not self._media_backgrounded or self.isMinimized():
             return
         self._media_backgrounded = False
-        if self._video_resume_pending and not self._music_resume_pending:
+        # 视频和音乐可以同时处于“后台暂停”状态，视频恢复不能依赖音乐状态。
+        if self._video_resume_pending:
             self.central.play_video()
         if self._music_resume_pending and not self.central.video_audio_enabled():
             try:
@@ -830,7 +831,8 @@ class MainWindow(QMainWindow):
             if self.isMinimized():
                 self._pause_background_media()
             elif QApplication.applicationState() == Qt.ApplicationActive:
-                self._resume_background_media()
+                # 等窗口状态真正切换完成后再恢复，避免 isMinimized 仍为 True。
+                QTimer.singleShot(0, self._resume_background_media)
         super().changeEvent(event)
 
     def _apply_ui_depth(self):
