@@ -174,6 +174,9 @@ class WindowTitleBar(QFrame):
         animation.setStartValue(self._title_effect.opacity())
         animation.setEndValue(1.0 if visible else 0.0)
         animation.setEasingCurve(QEasingCurve.OutCubic)
+        animation.valueChanged.connect(
+            lambda _value: (self.title_label.update(), self.update())
+        )
         if not visible:
             animation.finished.connect(
                 lambda: self.title_label.hide()

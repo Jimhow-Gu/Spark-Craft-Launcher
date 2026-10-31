@@ -170,10 +170,6 @@ class MainWindow(QMainWindow):
             f'资源包序号：{RESOURCE_PACK_SEQUENCE}' + chr(10) +
             f'可执行程序/DLL 构建号：{EXECUTABLE_BUILD}'
         )
-        self._version_effect = QGraphicsOpacityEffect(self.status_label)
-        self._version_effect.setOpacity(1.0)
-        self.status_label.setGraphicsEffect(self._version_effect)
-        self._version_anim = None
         left_layout.addWidget(self.status_label)
         self.central.video_state_changed.connect((lambda _playing: self._update_media_buttons()))
         self.music_player.state_changed.connect(self._update_media_buttons)
@@ -302,33 +298,19 @@ class MainWindow(QMainWindow):
         animation.setEndValue(int(target_width))
         animation.setEasingCurve(QEasingCurve.OutCubic)
         animation.valueChanged.connect(
-            lambda value: self.sidebar_spacer.setFixedWidth(int(value))
+            lambda value: (
+                self.sidebar_spacer.setFixedWidth(int(value)),
+                self.body.update(),
+                self.left_panel.update(),
+            )
         )
         self._sidebar_spacer_anim = animation
         animation.start()
 
     def _set_version_label(self, expanded: bool, animate: bool=True):
-        text = BUILD_LABEL if expanded else f'V{CURRENT_VERSION}'
-        if self.status_label.text() == text:
-            return
-        if self._version_anim is not None:
-            try:
-                self._version_anim.stop()
-            except RuntimeError:
-                pass
-            self._version_anim = None
-        self.status_label.setText(text)
-        if not animate:
-            self._version_effect.setOpacity(1.0)
-            return
-        self._version_effect.setOpacity(0.0)
-        animation = QPropertyAnimation(self._version_effect, b'opacity', self)
-        animation.setDuration(150)
-        animation.setStartValue(0.0)
-        animation.setEndValue(1.0)
-        animation.setEasingCurve(QEasingCurve.OutCubic)
-        self._version_anim = animation
-        animation.start()
+        self.status_label.setText(
+            BUILD_LABEL if expanded else f'V{CURRENT_VERSION}'
+        )
 
     def _set_sidebar_expanded(self, expanded: bool, animate: bool=True):
         expanded = bool(expanded)
@@ -356,10 +338,7 @@ class MainWindow(QMainWindow):
             190 if expanded else 160,
             animate and self.isVisible(),
         )
-        self.nav_list.animate_expanded(
-            expanded, 190 if expanded else 160,
-            animate and self.isVisible(),
-        )
+        self.nav_list.set_collapsed(not expanded)
         self._set_version_label(
             expanded, animate and self.isVisible()
         )
@@ -397,11 +376,25 @@ class MainWindow(QMainWindow):
             QRect(0, 0, target_width, self.central.height())
         )
         animation.setEasingCurve(QEasingCurve.OutCubic)
+        animation.valueChanged.connect(self._on_sidebar_geometry_frame)
         animation.finished.connect(
             lambda value=expanded: self._on_sidebar_anim_finished(value)
         )
         self._sidebar_anim = animation
         animation.start()
+
+    def _on_sidebar_geometry_frame(self, rect):
+        try:
+            width = rect.width()
+        except AttributeError:
+            width = self.left_panel.width()
+        self.left_panel.update()
+        try:
+            self.media_row.update()
+        except RuntimeError:
+            pass
+        # 收起时旧侧栏区域会重新露出，主动刷新页面区域，避免残影。
+        self.body.update(QRect(0, 0, max(width, self._sidebar_expanded_width), self.central.height()))
 
     def _on_sidebar_anim_finished(self, expanded: bool):
         self._sidebar_anim = None
@@ -414,6 +407,8 @@ class MainWindow(QMainWindow):
         )
         self.left_panel.raise_()
         self._position_media_buttons(target_width)
+        self.left_panel.update()
+        self.body.update()
         if not expanded:
             self.title_bar.set_title_visible(
                 getattr(self, '_title_available', True), animate=True
@@ -452,6 +447,11 @@ class MainWindow(QMainWindow):
         total = width if width is not None else self.left_panel.width()
         for button, x in self._media_button_targets(total):
             button.move(x, 0)
+        try:
+            self.media_row.update()
+            self.left_panel.update()
+        except RuntimeError:
+            pass
 
     def _animate_media_buttons(self, target_width, duration=190, animate=True):
         if not hasattr(self, 'media_row'):
@@ -473,6 +473,12 @@ class MainWindow(QMainWindow):
             animation.setStartValue(button.pos())
             animation.setEndValue(QPoint(x, 0))
             animation.setEasingCurve(QEasingCurve.OutCubic)
+            animation.valueChanged.connect(
+                lambda _value: (self.media_row.update(), self.left_panel.update())
+            )
+            animation.finished.connect(
+                lambda: (self.media_row.update(), self.left_panel.update())
+            )
             animation.start()
             self._media_button_anims.append(animation)
 
