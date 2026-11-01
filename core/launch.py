@@ -56,6 +56,22 @@ def _library_applies(lib: dict) -> bool:
             allowed = True
     return allowed
 
+def chinese_lang_code(base_version) -> str:
+    '''返回当前 Minecraft 版本使用的简体中文语言代码。
+
+    1.13+ 的 options.txt 使用小写 zh_cn；旧版本仍然认 zh_CN。
+    高版本首次启动时如果写成 zh_CN，游戏会回退到英文。
+    '''
+
+    match = re.search(r'(\d+)\.(\d+)', str(base_version or '').strip())
+    if match:
+        try:
+            if (int(match.group(1)), int(match.group(2))) >= (1, 13):
+                return 'zh_cn'
+        except ValueError:
+            pass
+    return 'zh_CN'
+
 def parse_placeholder(text: str, ctx: dict) -> str:
     if not text:
         return ''
@@ -970,17 +986,23 @@ class LaunchManager:
             except Exception:
                 force_chinese = True
             if force_chinese:
+                try:
+                    lang_code = chinese_lang_code(
+                        self._get_base_mc_version(final_id)
+                    )
+                except Exception:
+                    lang_code = 'zh_cn'
                 lang_fixed = False
                 for i, arg in enumerate(command):
                     if arg == '--lang' and i + 1 < len(command):
-                        command[i + 1] = 'zh_CN'
+                        command[i + 1] = lang_code
                         lang_fixed = True
                         break
                 if not lang_fixed:
                     for i, arg in enumerate(command):
                         if arg == '--username' and i + 1 < len(command):
                             command.insert(i + 2, '--lang')
-                            command.insert(i + 3, 'zh_CN')
+                            command.insert(i + 3, lang_code)
                             break
             if self.is_version_isolated(final_id):
                 self._migrate_legacy_isolated_dir(final_id)
@@ -1411,7 +1433,12 @@ class LaunchWorker(QThread):
             logger.warning('无法获取版本 ID，跳过自动设置中文')
             return
         launch_mgr = LaunchManager()
-        version_settings = launch_mgr.get_version_settings(self.version_id)
+        try:
+            lang_code = chinese_lang_code(
+                launch_mgr._get_base_mc_version(self.version_id)
+            )
+        except Exception:
+            lang_code = 'zh_cn'
         game_dir = None
         for i, arg in enumerate(self.command):
             if arg == '--gameDir' and i + 1 < len(self.command):
@@ -1436,16 +1463,16 @@ class LaunchWorker(QThread):
                     if line.split(':', 1)[0].strip() == 'lang':
                         current_lang = line.split(':', 1)[1].strip()
                         break
-            if marker_path.exists() and current_lang == 'zh_CN':
+            if marker_path.exists() and current_lang == lang_code:
                 return
             found = False
             for index, line in enumerate(lines):
                 if line.split(':', 1)[0].strip() == 'lang':
-                    lines[index] = 'lang:zh_CN'
+                    lines[index] = f'lang:{lang_code}'
                     found = True
                     break
             if not found:
-                lines.append('lang:zh_CN')
+                lines.append(f'lang:{lang_code}')
             options_path.write_text(chr(10).join(lines) + chr(10), encoding='utf-8')
             marker_path.write_text('1', encoding='utf-8')
             logger.info(f'已设置/校正中文语言: {options_path}')

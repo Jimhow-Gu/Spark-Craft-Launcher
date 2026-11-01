@@ -6,6 +6,7 @@ from PySide6.QtCore import (QRect, QRectF, Qt, QUrl, Signal)
 from PySide6.QtGui import (QColor, QImage, QLinearGradient, QPainter, QPainterPath, QPixmap)
 from PySide6.QtWidgets import (QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene, QWidget)
 from core.background import (VIDEO_EXTENSIONS, current_image, get_settings)
+from ui.design import WINDOW_DARK, WINDOW_LIGHT
 
 class BackgroundWidget(QWidget):
     video_state_changed = Signal(bool)
@@ -23,9 +24,24 @@ class BackgroundWidget(QWidget):
         self._video_image = None
         self._video_path = ''
         self._video_volume = 0.7
+        self._video_source_cache = None
+        self._video_source_key = None
+        self._video_auto_cache = None
+        self._video_auto_key = None
+        self._freeze_updates = False
         self._light = False
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setAutoFillBackground(False)
+
+    def freeze_video_updates(self, freeze: bool):
+        '''侧栏动画期间冻结视频帧更新，避免每帧重绘 1080p 视频拖慢动画。'''
+
+        freeze = bool(freeze)
+        if freeze == self._freeze_updates:
+            return
+        self._freeze_updates = freeze
+        if not freeze:
+            self.update()
 
     def set_light(self, light: bool):
         self._light = bool(light)
@@ -201,6 +217,7 @@ class BackgroundWidget(QWidget):
         self._video_audio = None
         self._video_image = None
         self._video_path = ''
+        self._invalidate_video_cache()
         if sink is not None:
             try:
                 sink.videoFrameChanged.disconnect(self._on_video_frame)
@@ -215,13 +232,20 @@ class BackgroundWidget(QWidget):
                 pass
         self.video_state_changed.emit(False)
 
+    def _invalidate_video_cache(self):
+        self._video_source_cache = None
+        self._video_source_key = None
+        self._video_auto_cache = None
+        self._video_auto_key = None
+
     def _on_video_frame(self, frame):
-        if self._video_player is None:
+        if self._video_player is None or self._freeze_updates:
             return
         try:
             image = frame.toImage()
             if not image.isNull():
                 self._video_image = image
+                self._invalidate_video_cache()
                 self.update()
             return
         except Exception:
@@ -248,7 +272,32 @@ class BackgroundWidget(QWidget):
     def resizeEvent(self, event):
         self._scaled = None
         self._scaled_key = None
+        self._video_auto_cache = None
+        self._video_auto_key = None
         super().resizeEvent(event)
+
+    def _video_source_pixmap(self, blur: int) -> QPixmap:
+        if self._video_image is None:
+            return QPixmap()
+        key = (self._video_image.cacheKey(), int(blur))
+        if self._video_source_cache is not None and self._video_source_key == key:
+            return self._video_source_cache
+        source = QPixmap.fromImage(self._video_image)
+        source = self._blur_video_frame(source, blur)
+        self._video_source_cache = source
+        self._video_source_key = key
+        return source
+
+    def _video_auto_pixmap(self, source: QPixmap, size) -> QPixmap:
+        key = (source.cacheKey(), int(size.width()), int(size.height()))
+        if self._video_auto_cache is not None and self._video_auto_key == key:
+            return self._video_auto_cache
+        scaled = source.scaled(
+            size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation
+        )
+        self._video_auto_cache = scaled
+        self._video_auto_key = key
+        return scaled
 
     def _scaled_source(self) -> QPixmap:
         if self._source is None:
@@ -304,11 +353,11 @@ class BackgroundWidget(QWidget):
         clip_path = QPainterPath()
         clip_path.addRoundedRect(QRectF(rect), 14, 14)
         painter.setClipPath(clip_path)
-        painter.fillRect(rect, QColor('#eef0f2' if self._light else '#171717'))
+        painter.fillRect(rect, QColor(WINDOW_LIGHT if self._light else WINDOW_DARK))
         settings = get_settings()
-        if self._video_image is not None:
-            source = QPixmap.fromImage(self._video_image)
-            source = self._blur_video_frame(source, settings['blur'])
+        video_source = self._video_image is not None
+        if video_source:
+            source = self._video_source_pixmap(settings['blur'])
         elif self._source is not None:
             source = self._scaled_source()
             source = self._blur_pixmap(source, settings['blur'])
@@ -319,7 +368,10 @@ class BackgroundWidget(QWidget):
         painter.setOpacity(opacity)
         mode = settings['fit']
         if mode == 'auto':
-            scaled = source.scaled(rect.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            if video_source:
+                scaled = self._video_auto_pixmap(source, rect.size())
+            else:
+                scaled = source.scaled(rect.size(), Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
             sx = max(0, (scaled.width() - rect.width()) // 2)
             sy = max(0, (scaled.height() - rect.height()) // 2)
             painter.drawPixmap(rect.topLeft(), scaled, QRect(sx, sy, rect.width(), rect.height()))
@@ -341,18 +393,18 @@ class BackgroundWidget(QWidget):
                 painter.drawPixmap(x, y, scaled)
         painter.setOpacity(1.0)
         if self._light:
-            painter.fillRect(rect, QColor(245, 246, 248, 38))
+            painter.fillRect(rect, QColor(248, 251, 251, 50))
             if settings['overlay']:
                 gradient = QLinearGradient(0, 0, 0, rect.height())
-                gradient.setColorAt(0, QColor(245, 246, 248, 22))
-                gradient.setColorAt(1, QColor(238, 241, 244, 78))
+                gradient.setColorAt(0, QColor(248, 251, 251, 28))
+                gradient.setColorAt(1, QColor(230, 243, 243, 92))
                 painter.fillRect(rect, gradient)
         else:
-            painter.fillRect(rect, QColor(8, 10, 14, 85))
+            painter.fillRect(rect, QColor(18, 23, 23, 92))
             if settings['overlay']:
                 gradient = QLinearGradient(0, 0, 0, rect.height())
-                gradient.setColorAt(0, QColor(10, 12, 18, 100))
-                gradient.setColorAt(1, QColor(10, 12, 18, 165))
+                gradient.setColorAt(0, QColor(18, 23, 23, 108))
+                gradient.setColorAt(1, QColor(15, 76, 76, 150))
                 painter.fillRect(rect, gradient)
         painter.end()
 

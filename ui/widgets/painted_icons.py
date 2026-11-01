@@ -4,15 +4,33 @@ from __future__ import annotations
 import math
 from typing import Dict, Tuple
 from PySide6.QtCore import (QPointF, QRectF, Qt)
-from PySide6.QtGui import (QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF)
-_CACHE: 'Dict[Tuple[str, int, str, float], QIcon]' = {}
+from PySide6.QtGui import (QColor, QGuiApplication, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF)
+_CACHE: 'Dict[Tuple[str, int, str, float, float], QIcon]' = {}
+
+
+def _device_pixel_ratio():
+    '''图标按物理像素绘制，避免高分屏下先画 24px 再被系统放大导致发糊。'''
+
+    try:
+        app = QGuiApplication.instance()
+        screen = app.primaryScreen() if app is not None else None
+        ratio = float(screen.devicePixelRatio()) if screen is not None else 1.0
+        return max(1.0, ratio)
+    except Exception:
+        return 1.0
+
 
 def _new_painter(size):
-    pixmap = QPixmap(size, size)
+    dpr = _device_pixel_ratio()
+    physical = max(1, int(round(size * dpr)))
+    pixmap = QPixmap(physical, physical)
+    pixmap.setDevicePixelRatio(dpr)
     pixmap.fill(Qt.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing, True)
     painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+    # QPainter 会把逻辑坐标按 devicePixelRatio 映射到物理像素；
+    # 这里只需按逻辑尺寸缩放，不能再乘一次 DPR，否则图标会放大并裁切。
     painter.scale(size / 24.0, size / 24.0)
     return pixmap, painter
 
@@ -306,7 +324,10 @@ def painted_icon(name, size=20, color='#e6edf3', stroke=1.8, light_safe=False):
 
     if _LIGHT_MODE and not light_safe:
         color = _light_color(color)
-    key = str(name), int(size), str(color), float(stroke), bool(light_safe)
+    key = (
+        str(name), int(size), str(color), float(stroke), bool(light_safe),
+        round(_device_pixel_ratio(), 2),
+    )
     cached = _CACHE.get(key)
     if cached is not None:
         return cached

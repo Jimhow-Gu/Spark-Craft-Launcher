@@ -137,7 +137,7 @@ class MemoryUsageBar(QWidget):
         used_w = width * self._used
         alloc_w = width * self._alloc
         if used_w > 0.5:
-            painter.setBrush(QColor('#3f8ae0'))
+            painter.setBrush(QColor('#88DDDD'))
             painter.drawRoundedRect(
                 QRectF(0, 0, max(used_w, radius * 2), rect.height()), radius, radius
             )

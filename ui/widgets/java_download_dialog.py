@@ -22,7 +22,7 @@ class JavaDownloadDialog(QDialog):
             'QDialog { background:#1f2229; }'
             'QLabel { color:#f0f0f0; background:transparent; }'
             'QProgressBar { background:rgba(255,255,255,0.12); border:none; border-radius:6px; height:12px; text-align:center; color:transparent; }'
-            'QProgressBar::chunk { background:#0078d4; border-radius:6px; }'
+            'QProgressBar::chunk { background:#88DDDD; border-radius:6px; }'
             'QPushButton { background:#3a3d47; color:#f0f0f0; border:none; border-radius:7px; padding:7px 18px; }'
             'QPushButton:hover { background:#4a4d57; }'
         )
@@ -51,7 +51,7 @@ class JavaDownloadDialog(QDialog):
         self.cancel_btn = QPushButton('取消')
         self.cancel_btn.clicked.connect(self.reject)
         self.close_btn = QPushButton('关闭')
-        self.close_btn.setStyleSheet('QPushButton { background:#0078d4; color:white; }')
+        self.close_btn.setStyleSheet('QPushButton { background:#88DDDD; color:white; }')
         self.close_btn.clicked.connect(self.accept)
         self.close_btn.hide()
         row.addWidget(self.cancel_btn)

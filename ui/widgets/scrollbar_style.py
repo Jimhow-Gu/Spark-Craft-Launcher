@@ -3,17 +3,101 @@
 from __future__ import annotations
 from PySide6.QtCore import QEvent, QObject
 from PySide6.QtWidgets import QApplication, QScrollBar
-_SCROLLBAR_STYLE = '\nQScrollBar:vertical {\n    background: #1a1c22;\n    width: 10px;\n    margin: 2px 2px 2px 0;\n    border: none;\n    border-radius: 5px;\n}\nQScrollBar::handle:vertical {\n    background: #6f7a8c;\n    min-height: 30px;\n    border-radius: 4px;\n}\nQScrollBar::handle:vertical:hover {\n    background: #8d9ab0;\n}\nQScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {\n    height: 0px; width: 0px; background: transparent;\n}\nQScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {\n    background: transparent;\n}\nQScrollBar:horizontal {\n    background: #1a1c22;\n    height: 10px;\n    margin: 0px 2px 2px 2px;\n    border: none;\n    border-radius: 5px;\n}\nQScrollBar::handle:horizontal {\n    background: #6f7a8c;\n    min-width: 30px;\n    border-radius: 4px;\n}\nQScrollBar::handle:horizontal:hover {\n    background: #8d9ab0;\n}\nQScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {\n    height: 0px; width: 0px; background: transparent;\n}\nQScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {\n    background: transparent;\n}\n'
-_LIGHT_SCROLLBAR_STYLE = '\nQScrollBar:vertical {\n    background: #e6e8ec;\n    width: 10px;\n    margin: 2px 2px 2px 0;\n    border: none;\n    border-radius: 5px;\n}\nQScrollBar::handle:vertical {\n    background: #b8bfc9;\n    min-height: 30px;\n    border-radius: 4px;\n}\nQScrollBar::handle:vertical:hover {\n    background: #99a2af;\n}\nQScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {\n    height: 0px; width: 0px; background: transparent;\n}\nQScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {\n    background: transparent;\n}\nQScrollBar:horizontal {\n    background: #e6e8ec;\n    height: 10px;\n    margin: 0px 2px 2px 2px;\n    border: none;\n    border-radius: 5px;\n}\nQScrollBar::handle:horizontal {\n    background: #b8bfc9;\n    min-width: 30px;\n    border-radius: 4px;\n}\nQScrollBar::handle:horizontal:hover {\n    background: #99a2af;\n}\nQScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {\n    height: 0px; width: 0px; background: transparent;\n}\nQScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {\n    background: transparent;\n}\n'
+_SCROLLBAR_STYLE = """
+QScrollBar:vertical {
+    background: transparent;
+    width: 9px;
+    margin: 3px 2px 3px 0;
+    border: none;
+}
+QScrollBar::handle:vertical {
+    background: rgba(136,221,221,0.30);
+    min-height: 34px;
+    border-radius: 4px;
+}
+QScrollBar::handle:vertical:hover {
+    background: rgba(136,221,221,0.56);
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px; width: 0px; background: transparent;
+}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: transparent;
+}
+QScrollBar:horizontal {
+    background: transparent;
+    height: 9px;
+    margin: 0px 3px 2px 3px;
+    border: none;
+}
+QScrollBar::handle:horizontal {
+    background: rgba(136,221,221,0.30);
+    min-width: 34px;
+    border-radius: 4px;
+}
+QScrollBar::handle:horizontal:hover {
+    background: rgba(136,221,221,0.56);
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    height: 0px; width: 0px; background: transparent;
+}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+    background: transparent;
+}
+"""
+_LIGHT_SCROLLBAR_STYLE = """
+QScrollBar:vertical {
+    background: transparent;
+    width: 9px;
+    margin: 3px 2px 3px 0;
+    border: none;
+}
+QScrollBar::handle:vertical {
+    background: rgba(64,153,153,0.28);
+    min-height: 34px;
+    border-radius: 4px;
+}
+QScrollBar::handle:vertical:hover {
+    background: rgba(64,153,153,0.48);
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px; width: 0px; background: transparent;
+}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: transparent;
+}
+QScrollBar:horizontal {
+    background: transparent;
+    height: 9px;
+    margin: 0px 3px 2px 3px;
+    border: none;
+}
+QScrollBar::handle:horizontal {
+    background: rgba(64,153,153,0.28);
+    min-width: 34px;
+    border-radius: 4px;
+}
+QScrollBar::handle:horizontal:hover {
+    background: rgba(64,153,153,0.48);
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    height: 0px; width: 0px; background: transparent;
+}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+    background: transparent;
+}
+"""
 
 
 def _style_scrollbar(scrollbar: QScrollBar, light: bool):
     try:
+        # 先标记忽略，再设置样式：setStyleSheet 会同步触发 StyleChange，
+        # ThemeManager 若先于标记执行会把滚动条样式当成页面 QSS 清空。
+        scrollbar.setProperty('_scl_scrollbar_styled', True)
+        scrollbar.setProperty('_theme_ignore', True)
         scrollbar.setStyleSheet(
             _LIGHT_SCROLLBAR_STYLE if light else _SCROLLBAR_STYLE
         )
-        scrollbar.setProperty('_scl_scrollbar_styled', True)
-        scrollbar.setProperty('_theme_ignore', True)
     except RuntimeError:
         pass
 

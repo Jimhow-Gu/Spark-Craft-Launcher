@@ -34,7 +34,7 @@ class _LoaderCard(QFrame):
         self.setObjectName('LoaderCard')
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setStyleSheet('\n            QFrame#LoaderCard {\n                background: rgba(18,20,26,0.58);\n                border: 1px solid rgba(255,255,255,0.14);\n                border-radius: 8px;\n            }\n            QFrame#LoaderCard:hover {\n                background: rgba(28,31,40,0.72);\n                border-color: rgba(122,160,255,0.42);\n            }\n            QFrame#LoaderCard QLabel {\n                background: transparent;\n                border: none;\n            }\n        ')
+        self.setStyleSheet('\n            QFrame#LoaderCard {\n                background: rgba(30,41,41,0.84);\n                border: 1px solid rgba(255,255,255,0.14);\n                border-radius: 8px;\n            }\n            QFrame#LoaderCard:hover {\n                background: rgba(39,56,56,0.90);\n                border-color: rgba(136,221,221,0.42);\n            }\n            QFrame#LoaderCard QLabel {\n                background: transparent;\n                border: none;\n            }\n        ')
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -344,7 +344,7 @@ class VersionDetailPage(QWidget):
         back_btn = BackButton()
         back_btn.clicked.connect((lambda: self.back_requested.emit()))
         self.top_name_input = QLineEdit()
-        self.top_name_input.setStyleSheet('\n            QLineEdit {\n                background: rgba(18,20,26,0.58);\n                border: 1px solid rgba(255,255,255,0.14);\n                border-radius: 8px;\n                color: #f0f0f0;\n                padding: 6px 10px;\n                font-size: 14px;\n            }\n            QLineEdit:focus {\n                border-color: rgba(122,160,255,0.55);\n            }\n        ')
+        self.top_name_input.setStyleSheet('\n            QLineEdit {\n                background: rgba(30,41,41,0.84);\n                border: 1px solid rgba(255,255,255,0.14);\n                border-radius: 8px;\n                color: #f0f0f0;\n                padding: 6px 10px;\n                font-size: 14px;\n            }\n            QLineEdit:focus {\n                border-color: rgba(136,221,221,0.55);\n            }\n        ')
         self.top_name_input.textEdited.connect(self._on_top_name_edit)
         self.name_error_label = QLabel('')
         self.name_error_label.setStyleSheet('color:#ff6b6b; font-size:12px; background:transparent; padding-left:2px;')
@@ -396,7 +396,7 @@ class VersionDetailPage(QWidget):
         self.download_btn = QPushButton('开始下载')
         self.download_btn.setMinimumHeight(50)
         self.download_btn.setFont(ui_font(12, QFont.DemiBold))
-        self.download_btn.setStyleSheet('\n            QPushButton { background: #0078d4; color: white; border: none; border-radius: 8px; }\n            QPushButton:hover { background: #106ebe; }\n            QPushButton:pressed { background: #005a9e; }\n            QPushButton:disabled { background:#333; color:#777; }\n        ')
+        self.download_btn.setStyleSheet('\n            QPushButton { background: #88DDDD; color: white; border: none; border-radius: 8px; }\n            QPushButton:hover { background: #66BBBB; }\n            QPushButton:pressed { background: #409999; }\n            QPushButton:disabled { background:#333; color:#777; }\n        ')
         self.download_btn.clicked.connect(self._on_download_clicked)
         btn_layout = QHBoxLayout()
         btn_layout.addStretch(1)
@@ -465,7 +465,7 @@ class VersionDetailPage(QWidget):
         container.clicked.connect((lambda lid=loader_id: self._on_loader_card_clicked(lid)))
         outer.addLayout(row)
         version_list = QListWidget()
-        version_list.setStyleSheet('\n            QListWidget { background:rgba(8,10,16,0.45);\n                          border:1px solid rgba(255,255,255,0.10);\n                          border-radius:6px; outline:none; }\n            QListWidget::item { padding:6px 10px; color:rgba(255,255,255,0.85);\n                                border-bottom:1px solid rgba(255,255,255,0.04); }\n            QListWidget::item:selected { background:rgba(0,120,212,0.45); color:white; }\n            QListWidget::item:hover { background:rgba(255,255,255,0.06); }\n        ')
+        version_list.setStyleSheet('\n            QListWidget { background:rgba(8,10,16,0.45);\n                          border:1px solid rgba(255,255,255,0.10);\n                          border-radius:6px; outline:none; }\n            QListWidget::item { padding:6px 10px; color:rgba(255,255,255,0.85);\n                                border-bottom:1px solid rgba(255,255,255,0.04); }\n            QListWidget::item:selected { background:rgba(136,221,221,0.45); color:white; }\n            QListWidget::item:hover { background:rgba(255,255,255,0.06); }\n        ')
         version_list.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         version_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         version_list.setIconSize(QSize(16, 16))
@@ -760,7 +760,7 @@ class VersionDetailPage(QWidget):
             label.setStyleSheet('color: rgba(255,255,255,0.6); font-size: 13px;')
             btn.setText('添加')
             btn.setEnabled(True)
-            btn.setStyleSheet('background:#0078d4;color:white;border-radius:4px;padding:4px 8px;')
+            btn.setStyleSheet('background:#88DDDD;color:white;border-radius:4px;padding:4px 8px;')
 
     def _refresh_all_compatible_tips(self):
         fabric_selected = self._selections['fabric'] is not None
@@ -784,7 +784,7 @@ class VersionDetailPage(QWidget):
             forge_label.setStyleSheet('color:rgba(255,255,255,0.6);font-size:13px;')
             forge_btn.setText('添加')
             forge_btn.setEnabled(True)
-            forge_btn.setStyleSheet('background:#0078d4;color:white;')
+            forge_btn.setStyleSheet('background:#88DDDD;color:white;')
         else:
             forge_label.setText('无可用版本')
             forge_label.setStyleSheet('color:rgba(255,255,255,0.4);font-size:13px;')
@@ -810,7 +810,7 @@ class VersionDetailPage(QWidget):
             neo_label.setStyleSheet('color:rgba(255,255,255,0.6);font-size:13px;')
             neo_btn.setText('添加')
             neo_btn.setEnabled(True)
-            neo_btn.setStyleSheet('background:#0078d4;color:white;')
+            neo_btn.setStyleSheet('background:#88DDDD;color:white;')
         else:
             neo_label.setText('无可用版本')
             neo_label.setStyleSheet('color:rgba(255,255,255,0.4);font-size:13px;')
@@ -830,7 +830,7 @@ class VersionDetailPage(QWidget):
             opti_label.setStyleSheet('color:rgba(255,255,255,0.6);font-size:13px;')
             opti_btn.setText('添加')
             opti_btn.setEnabled(True)
-            opti_btn.setStyleSheet('background:#0078d4;color:white;')
+            opti_btn.setStyleSheet('background:#88DDDD;color:white;')
         else:
             opti_label.setText('无可用版本')
             opti_label.setStyleSheet('color:rgba(255,255,255,0.4);font-size:13px;')
@@ -850,7 +850,7 @@ class VersionDetailPage(QWidget):
             fab_label.setStyleSheet('color:rgba(255,255,255,0.6);font-size:13px;')
             fab_btn.setText('添加')
             fab_btn.setEnabled(True)
-            fab_btn.setStyleSheet('background:#0078d4;color:white;')
+            fab_btn.setStyleSheet('background:#88DDDD;color:white;')
         else:
             fab_label.setText('无可用版本')
             fab_label.setStyleSheet('color:rgba(255,255,255,0.4);font-size:13px;')
@@ -870,7 +870,7 @@ class VersionDetailPage(QWidget):
             api_label.setStyleSheet('color:rgba(255,255,255,0.6);font-size:13px;')
             api_btn.setText('添加')
             api_btn.setEnabled(True)
-            api_btn.setStyleSheet('background:#0078d4;color:white;')
+            api_btn.setStyleSheet('background:#88DDDD;color:white;')
         else:
             api_label.setText('无可用版本')
             api_label.setStyleSheet('color:rgba(255,255,255,0.4);font-size:13px;')
@@ -1056,7 +1056,7 @@ class VersionDetailPage(QWidget):
         api_btn.setText('添加' if self._loader_versions['fabric_api'] else '无')
         api_btn.setEnabled(bool(self._loader_versions['fabric_api']))
         if self._loader_versions['fabric_api']:
-            api_btn.setStyleSheet('background:#0078d4;color:white;')
+            api_btn.setStyleSheet('background:#88DDDD;color:white;')
             return
         api_btn.setStyleSheet('background:#3a3a3a;color:#888;')
 
@@ -1146,12 +1146,12 @@ class VersionDetailPage(QWidget):
         if error:
             self.name_error_label.setText(error)
             self.name_error_label.show()
-            self.top_name_input.setStyleSheet('\n                QLineEdit {\n                    background: rgba(18,20,26,0.58);\n                    border: 1px solid #e05555;\n                    border-radius: 8px;\n                    color: #f0f0f0;\n                    padding: 6px 10px;\n                    font-size: 14px;\n                }\n            ')
+            self.top_name_input.setStyleSheet('\n                QLineEdit {\n                    background: rgba(30,41,41,0.84);\n                    border: 1px solid #e05555;\n                    border-radius: 8px;\n                    color: #f0f0f0;\n                    padding: 6px 10px;\n                    font-size: 14px;\n                }\n            ')
             if hasattr(self, 'download_btn'):
                 self.download_btn.setEnabled(False)
             return False
         self.name_error_label.hide()
-        self.top_name_input.setStyleSheet('\n            QLineEdit {\n                background: rgba(18,20,26,0.58);\n                border: 1px solid rgba(255,255,255,0.14);\n                border-radius: 8px;\n                color: #f0f0f0;\n                padding: 6px 10px;\n                font-size: 14px;\n            }\n            QLineEdit:focus {\n                border-color: rgba(122,160,255,0.55);\n            }\n        ')
+        self.top_name_input.setStyleSheet('\n            QLineEdit {\n                background: rgba(30,41,41,0.84);\n                border: 1px solid rgba(255,255,255,0.14);\n                border-radius: 8px;\n                color: #f0f0f0;\n                padding: 6px 10px;\n                font-size: 14px;\n            }\n            QLineEdit:focus {\n                border-color: rgba(136,221,221,0.55);\n            }\n        ')
         if hasattr(self, 'download_btn') and not self._loading:
             self.download_btn.setEnabled(True)
         return True

@@ -10,24 +10,30 @@ from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QDialog, QMainWindow, QMenu, QWidget,
 )
 
+from ui.design import (
+    ACCENT, ACCENT_TEXT, CARD_DARK, CARD_LIGHT, DEEP_ACCENT_DARK,
+    DEEP_ACCENT_LIGHT, MUTED_DARK, MUTED_LIGHT, ON_ACCENT, RADIUS_LG,
+    RADIUS_MD, SIDEBAR_DARK, SIDEBAR_LIGHT, TEXT_DARK, TEXT_LIGHT,
+    WINDOW_DARK, WINDOW_LIGHT, accent_qss, app_stylesheet,
+)
 from ui.widgets.checkbox_style import CheckBoxProxyStyle
 from ui.widgets.theme_reveal import ThemeRevealOverlay
 
 _THEMES = ('dark', 'light', 'system')
 
-_MENU_LIGHT = """
-QMenu { background:#fbfbfb; color:#1b1b1b; border:1px solid #c8ccd2;
-        border-radius:8px; padding:5px; }
-QMenu::item { padding:6px 26px 6px 18px; border-radius:5px; }
-QMenu::item:selected { background:#0078d4; color:white; }
-QMenu::separator { height:1px; background:rgba(0,0,0,0.12); margin:4px 8px; }
+_MENU_LIGHT = f"""
+QMenu {{ background:{CARD_LIGHT}; color:{TEXT_LIGHT}; border:1px solid rgba(64,153,153,0.36);
+        border-radius:{RADIUS_LG}px; padding:6px; }}
+QMenu::item {{ padding:7px 26px 7px 18px; border-radius:{RADIUS_MD}px; }}
+QMenu::item:selected {{ background:{ACCENT}; color:{ON_ACCENT}; }}
+QMenu::separator {{ height:1px; background:rgba(85,85,85,0.16); margin:5px 8px; }}
 """
-_MENU_DARK = """
-QMenu { background:#20232b; color:#f0f0f0; border:1px solid rgba(255,255,255,0.18);
-        border-radius:8px; padding:5px; }
-QMenu::item { padding:6px 26px 6px 18px; border-radius:5px; }
-QMenu::item:selected { background:#0078d4; color:white; }
-QMenu::separator { height:1px; background:rgba(255,255,255,0.12); margin:4px 8px; }
+_MENU_DARK = f"""
+QMenu {{ background:{CARD_DARK}; color:{TEXT_DARK}; border:1px solid rgba(15,76,76,0.92);
+        border-radius:{RADIUS_LG}px; padding:6px; }}
+QMenu::item {{ padding:7px 26px 7px 18px; border-radius:{RADIUS_MD}px; }}
+QMenu::item:selected {{ background:{ACCENT}; color:{ON_ACCENT}; }}
+QMenu::separator {{ height:1px; background:rgba(168,200,200,0.16); margin:5px 8px; }}
 """
 
 _COLOR_TOKEN = re.compile(
@@ -128,6 +134,34 @@ def _transform_light_color(token: str, prop: str, accent_background: bool) -> st
     gray = max(r, g, b) - min(r, g, b) <= 26
     is_text = prop in ('color', 'selection-color', 'outline-color')
     is_border = 'border' in prop or prop in ('gridline-color',)
+    token_lower = token.strip().lower()
+
+    # 两套主题的核心表面色按设计稿直接对应，避免被通用反色算法带偏。
+    if not accent_background:
+        if is_text:
+            if token_lower == '#eeffff':
+                return TEXT_LIGHT
+            if token_lower == '#a8c8c8':
+                return MUTED_LIGHT
+            if token_lower in ('#88dddd', '#a8e6e6'):
+                return DEEP_ACCENT_LIGHT
+        elif is_border:
+            if token_lower in ('#0f4c4c', '#273838', '#3a7777'):
+                return _format_color(64, 153, 153, max(60, min(120, a)))
+        else:
+            if token_lower == WINDOW_DARK.lower():
+                return WINDOW_LIGHT
+            if token_lower == CARD_DARK.lower():
+                return CARD_LIGHT
+            if token_lower in (SIDEBAR_DARK.lower(), '#2f4747'):
+                return SIDEBAR_LIGHT
+            if (r, g, b) == (30, 41, 41):
+                return _format_color(248, 251, 251, a)
+            if (r, g, b) == (39, 56, 56):
+                return _format_color(230, 243, 243, a)
+            if (r, g, b) == (18, 23, 23):
+                return _format_color(255, 255, 255, a)
+
     if is_text:
         if accent_background and luminance >= 120:
             return token
@@ -366,6 +400,11 @@ class ThemeManager(QObject):
         self._theme_updating = True
         try:
             app.setPalette(self._make_palette(light))
+            # 全局控件样式只保留一套：页面自己的 QSS 仍会覆盖它，
+            # 但所有未单独调样的按钮/输入框/列表都自动使用统一薄荷青设计。
+            stylesheet = app_stylesheet(light)
+            if app.styleSheet() != stylesheet:
+                app.setStyleSheet(stylesheet)
         finally:
             self._theme_updating = False
         CheckBoxProxyStyle.set_light_mode(light)
@@ -467,67 +506,87 @@ class ThemeManager(QObject):
         palette = QPalette()
         if light:
             colors = {
-                QPalette.Window: '#f3f3f3',
-                QPalette.WindowText: '#1b1b1b',
-                QPalette.Base: '#fbfbfb',
-                QPalette.AlternateBase: '#f0f0f0',
-                QPalette.Text: '#1b1b1b',
-                QPalette.Button: '#ececec',
-                QPalette.ButtonText: '#1b1b1b',
-                QPalette.ToolTipBase: '#fbfbfb',
-                QPalette.ToolTipText: '#1b1b1b',
-                QPalette.PlaceholderText: '#7a7f87',
+                QPalette.Window: WINDOW_LIGHT,
+                QPalette.WindowText: TEXT_LIGHT,
+                QPalette.Base: CARD_LIGHT,
+                QPalette.AlternateBase: SIDEBAR_LIGHT,
+                QPalette.Text: TEXT_LIGHT,
+                QPalette.Button: SIDEBAR_LIGHT,
+                QPalette.ButtonText: TEXT_LIGHT,
+                QPalette.ToolTipBase: CARD_LIGHT,
+                QPalette.ToolTipText: TEXT_LIGHT,
+                QPalette.PlaceholderText: MUTED_LIGHT,
+                QPalette.Light: '#FFFFFF',
+                QPalette.Midlight: '#E6F3F3',
+                QPalette.Mid: DEEP_ACCENT_LIGHT,
+                QPalette.Dark: '#99AAAA',
             }
+            disabled = '#8A9A9A'
+            link = DEEP_ACCENT_LIGHT
         else:
             colors = {
-                QPalette.Window: '#121419',
-                QPalette.WindowText: '#f0f0f0',
-                QPalette.Base: '#181a20',
-                QPalette.AlternateBase: '#20232b',
-                QPalette.Text: '#f0f0f0',
-                QPalette.Button: '#2a2a2a',
-                QPalette.ButtonText: '#f0f0f0',
-                QPalette.ToolTipBase: '#20232b',
-                QPalette.ToolTipText: '#f0f0f0',
-                QPalette.PlaceholderText: '#8a8f99',
+                QPalette.Window: WINDOW_DARK,
+                QPalette.WindowText: TEXT_DARK,
+                QPalette.Base: CARD_DARK,
+                QPalette.AlternateBase: SIDEBAR_DARK,
+                QPalette.Text: TEXT_DARK,
+                QPalette.Button: SIDEBAR_DARK,
+                QPalette.ButtonText: TEXT_DARK,
+                QPalette.ToolTipBase: CARD_DARK,
+                QPalette.ToolTipText: TEXT_DARK,
+                QPalette.PlaceholderText: MUTED_DARK,
+                QPalette.Light: SIDEBAR_DARK,
+                QPalette.Midlight: '#2F4747',
+                QPalette.Mid: DEEP_ACCENT_DARK,
+                QPalette.Dark: '#0B1111',
             }
+            disabled = '#6F8A8A'
+            link = ACCENT_TEXT
         for role, color in colors.items():
             palette.setColor(role, QColor(color))
-        palette.setColor(QPalette.Highlight, QColor('#0078d4'))
-        palette.setColor(QPalette.HighlightedText, QColor('#ffffff'))
-        palette.setColor(QPalette.Disabled, QPalette.Text, QColor('#8a8f99'))
-        palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor('#8a8f99'))
+        palette.setColor(QPalette.Highlight, QColor(ACCENT))
+        palette.setColor(QPalette.HighlightedText, QColor(ON_ACCENT))
+        palette.setColor(QPalette.Link, QColor(link))
+        palette.setColor(QPalette.Disabled, QPalette.Text, QColor(disabled))
+        palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor(disabled))
         return palette
 
     def _style_widget(self, widget: QWidget, light: bool):
         try:
-            if widget.property('_theme_ignore'):
+            if widget.property('_theme_ignore') or widget.property('_scl_scrollbar_styled'):
                 return
             current = widget.styleSheet()
-            original = getattr(widget, '_theme_original_style', None)
+            raw = getattr(widget, '_theme_source_style', None)
+            cached_dark = getattr(widget, '_theme_dark_style', None)
             cached_light = getattr(widget, '_theme_light_style', None)
-            if original is None:
+            if raw is None:
                 if not current:
                     return
-                original = current
-                widget._theme_original_style = current
-            elif current != original and current != cached_light:
-                original = current
-                widget._theme_original_style = current
+                raw = current
+                widget._theme_source_style = raw
+            elif current not in (raw, cached_dark, cached_light):
+                raw = current
+                widget._theme_source_style = raw
+                widget._theme_dark_style = None
                 widget._theme_light_style = None
+                cached_dark = None
                 cached_light = None
+            if cached_dark is None:
+                cached_dark = accent_qss(raw)
+                widget._theme_dark_style = cached_dark
             if light:
                 target = cached_light
                 if target is None:
-                    target = _light_qss(original)
+                    target = _light_qss(cached_dark)
                     widget._theme_light_style = target
             else:
-                target = original
-            final = target
-            if widget.styleSheet() != final:
+                target = cached_dark
+            # 兼容旧属性，便于其它代码观察原始样式。
+            widget._theme_original_style = raw
+            if widget.styleSheet() != target:
                 self._theme_updating = True
                 try:
-                    widget.setStyleSheet(final)
+                    widget.setStyleSheet(target)
                 finally:
                     self._theme_updating = False
         except RuntimeError:
@@ -663,14 +722,13 @@ class ThemeManager(QObject):
             self._style_shown_widget(obj)
         elif (
             event.type() == QEvent.StyleChange
-            and self._light
             and self._theme
             and not self._theme_updating
             and isinstance(obj, QWidget)
             and not (isinstance(obj, QMenu) and getattr(obj, '_theme_default_menu', False))
         ):
             try:
-                self._style_widget(obj, True)
+                self._style_widget(obj, self._light)
             except RuntimeError:
                 pass
         return super().eventFilter(obj, event)

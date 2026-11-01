@@ -24,7 +24,8 @@ from core.background import (FIT_OPTIONS, LOOP_MODES, DEFAULT_LOOP_MODE, get_set
 from core.music import (BackgroundMusicPlayer, list_music_files, music_dir)
 from ui.widgets.advanced_options import AdvancedOptionsPanel
 from ui.widgets.dark_dialog import DarkQuestionDialog
-from ui.widgets.form_styles import RADIO_BUTTON_STYLE
+from ui.widgets.form_styles import RADIO_BUTTON_STYLE, SLIDER_STYLE
+from ui.design import MUTED_DARK, MUTED_LIGHT, ON_ACCENT
 from ui.widgets.painted_icons import painted_icon
 from ui.widgets.collapsible_section import CollapsibleSection
 from ui.widgets.offline_skin_settings import OfflineSkinSettings
@@ -74,6 +75,22 @@ class SettingsPage(QWidget):
         self.java_scan.finished.connect(self._on_java_scan_finished)
         self._load_settings()
 
+    def _refresh_settings_tab_icons(self, *_args):
+        names = getattr(self, '_settings_tab_icon_names', None)
+        tabs = getattr(self, 'settings_tabs', None)
+        if not names or tabs is None:
+            return
+        light = QApplication.palette().color(QPalette.Window).lightness() > 128
+        current = tabs.currentIndex()
+        for index, name in enumerate(names):
+            if index >= tabs.count():
+                continue
+            color = ON_ACCENT if index == current else (MUTED_LIGHT if light else MUTED_DARK)
+            tabs.setTabIcon(index, painted_icon(name, 16, color, light_safe=True))
+
+    def set_light(self, light):
+        self._refresh_settings_tab_icons()
+
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -104,8 +121,8 @@ class SettingsPage(QWidget):
             ' border:1px solid rgba(255,255,255,0.14); border-radius:6px;'
             ' padding:6px 16px; }'
             'QPushButton:hover { background:rgba(255,255,255,0.12); }'
-            'QPushButton:checked { background:#0078d4; color:white;'
-            ' border-color:#0078d4; }'
+            'QPushButton:checked { background:#88DDDD; color:white;'
+            ' border-color:#88DDDD; }'
         )
         theme_row.addWidget(theme_label)
         for key, label in (
@@ -173,7 +190,7 @@ class SettingsPage(QWidget):
         self.mem_slider.setRange(512, 32768)
         self.mem_slider.setTickInterval(512)
         self.mem_slider.setTickPosition(QSlider.TicksBelow)
-        self.mem_slider.setStyleSheet('\n            QSlider::groove:horizontal {\n                background: #444;\n                height: 8px;\n                border-radius: 4px;\n            }\n            QSlider::handle:horizontal {\n                background: #0078d4;\n                width: 18px;\n                margin: -5px 0;\n                border-radius: 9px;\n            }\n        ')
+        self.mem_slider.setStyleSheet(SLIDER_STYLE)
         self.mem_slider.valueChanged.connect(self._on_mem_slider_changed)
         self.mem_value_label = QLabel('2G')
         self.mem_value_label.setFixedWidth(60)
@@ -208,7 +225,7 @@ class SettingsPage(QWidget):
         self.thread_slider.setValue(64)
         self.thread_slider.setTickInterval(16)
         self.thread_slider.setTickPosition(QSlider.TicksBelow)
-        self.thread_slider.setStyleSheet('\n            QSlider::groove:horizontal {\n                background: #444; height: 8px; border-radius: 4px;\n            }\n            QSlider::handle:horizontal {\n                background: #0078d4; width: 18px; margin: -5px 0;\n                border-radius: 9px;\n            }\n        ')
+        self.thread_slider.setStyleSheet(SLIDER_STYLE)
         self.thread_value_label = QLabel('64')
         self.thread_value_label.setFixedWidth(50)
         self.thread_value_label.setStyleSheet('color: #f0f0f0; font-weight:900;')
@@ -225,8 +242,8 @@ class SettingsPage(QWidget):
         self.speed_limit_slider.setValue(1000)
         self.speed_limit_slider.setTickInterval(100)
         self.speed_limit_slider.setTickPosition(QSlider.TicksBelow)
-        self.speed_limit_slider.setStyleSheet(self.thread_slider.styleSheet())
-        self.speed_limit_label = QLabel('无限制')
+        self.speed_limit_slider.setStyleSheet(SLIDER_STYLE)
+        self.speed_limit_label = QLabel('不限速')
         self.speed_limit_label.setMinimumWidth(90)
         self.speed_limit_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.speed_limit_label.setStyleSheet('color:#f0f0f0; font-weight:900;')
@@ -312,7 +329,7 @@ class SettingsPage(QWidget):
         advanced_group.content_layout.addWidget(self.advanced_panel)
         adv_note = QLabel('版本独立设置中还有更多高级选项可供调整。')
         adv_note.setWordWrap(True)
-        adv_note.setStyleSheet('QLabel { background: rgba(0,120,212,0.18); color: #9ccaff; padding: 7px 10px; border-radius: 4px; font-size: 12px; }')
+        adv_note.setStyleSheet('QLabel { background: rgba(136,221,221,0.18); color: #A8E6E6; padding: 7px 10px; border-radius: 4px; font-size: 12px; }')
         advanced_group.content_layout.addWidget(adv_note)
         layout.addWidget(advanced_group)
         title_group = self._create_group('标题栏')
@@ -682,10 +699,10 @@ class SettingsPage(QWidget):
         self.version_settings_btn.setMinimumHeight(40)
         self.version_settings_btn.setCursor(Qt.PointingHandCursor)
         self.version_settings_btn.setStyleSheet(
-            'QPushButton { background:#0078d4; color:white; border:none;'
+            'QPushButton { background:#88DDDD; color:white; border:none;'
             ' border-radius:8px; padding:8px 32px; font-size:13px; font-weight:900; }'
-            'QPushButton:hover { background:#1084e0; }'
-            'QPushButton:pressed { background:#006cbd; }'
+            'QPushButton:hover { background:#66BBBB; }'
+            'QPushButton:pressed { background:#409999; }'
         )
         self.version_settings_btn.clicked.connect(self._open_selected_version_settings)
 
@@ -715,7 +732,7 @@ class SettingsPage(QWidget):
             'QTabBar::tab { background:rgba(255,255,255,0.16); color:#f0f0f0;'
             ' border:1px solid rgba(255,255,255,0.24); padding:8px 22px; margin-right:6px; margin-bottom:8px;'
             ' border-radius:8px; font-size:11pt; }'
-            'QTabBar::tab:selected { background:#0078d4; color:white; border-color:#0078d4; }'
+            'QTabBar::tab:selected { background:#88DDDD; color:white; border-color:#88DDDD; }'
             'QTabBar::tab:hover { background:rgba(255,255,255,0.24); }'
         )
         self.settings_tabs.addTab(self.startup_scroll, '启动')
@@ -724,6 +741,9 @@ class SettingsPage(QWidget):
         self.settings_tabs.setTabIcon(1, painted_icon('shirt', 16, '#aab4c0'))
         self.settings_tabs.addTab(self.other_scroll, '其他')
         self.settings_tabs.setTabIcon(2, painted_icon('grid', 16, '#aab4c0'))
+        self._settings_tab_icon_names = ['play', 'shirt', 'grid']
+        self.settings_tabs.currentChanged.connect(self._refresh_settings_tab_icons)
+        self._refresh_settings_tab_icons()
 
         while layout.count():
             item = layout.takeAt(0)
@@ -882,7 +902,7 @@ class SettingsPage(QWidget):
 
     def _create_group(self, title):
         group = QGroupBox()
-        group.setStyleSheet('\n            QGroupBox {\n                background: rgba(18,20,26,0.58);\n                border: 1px solid rgba(255,255,255,0.22);\n                border-radius: 12px;\n                margin-top: 0px;\n                padding-top: 8px;\n            }\n        ')
+        group.setStyleSheet('\n            QGroupBox {\n                background: rgba(30,41,41,0.84);\n                border: 1px solid rgba(255,255,255,0.22);\n                border-radius: 12px;\n                margin-top: 0px;\n                padding-top: 8px;\n            }\n        ')
         group_layout = QVBoxLayout(group)
         group_layout.setContentsMargins(24, 18, 24, 18)
         group_layout.setSpacing(12)
@@ -1406,7 +1426,7 @@ class SettingsPage(QWidget):
             self.java_combo.blockSignals(False)
 
     def _ok_button_style(self):
-        return 'QPushButton { background:#0078d4; color:white; border:none; border-radius:6px; padding:6px 14px; } QPushButton:hover { background:#106ebe; }'
+        return 'QPushButton { background:#88DDDD; color:white; border:none; border-radius:6px; padding:6px 14px; } QPushButton:hover { background:#66BBBB; }'
 
     def _on_reset_settings(self):
         reply = QMessageBox.question(self, '恢复默认设置', '确定将所有设置恢复为默认值吗？\n账号、登录凭据、游戏目录和本地背景文件会保留。', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
@@ -1441,7 +1461,7 @@ class SettingsPage(QWidget):
         return 'QPushButton { background:#3a3a3a; color:white; border:none; border-radius:6px; padding:6px 14px; } QPushButton:hover { background:#4a4a4a; }'
 
     def _slider_style(self):
-        return '\n            QSlider::groove:horizontal { background:#444; height:8px; border-radius:4px; }\n            QSlider::handle:horizontal { background:#0078d4; width:18px;\n                                         margin:-5px 0; border-radius:9px; }\n        '
+        return SLIDER_STYLE
 
     def _schedule_title_update(self):
         self._title_timer.start()

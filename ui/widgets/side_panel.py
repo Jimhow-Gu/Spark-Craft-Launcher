@@ -4,13 +4,16 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import (QColor, QPainter, QPainterPath)
 from PySide6.QtWidgets import QWidget
 
+from ui.design import SIDEBAR_DARK, SIDEBAR_LIGHT
+
 class SidePanel(QWidget):
     def __init__(self, parent=None, radius: int=14, color=None):
         super().__init__(parent)
         self._radius = int(radius)
         self._light = False
         self._expanded = False
-        self._color = QColor(color or QColor(16, 18, 24, 150))
+        self._color = QColor(color or QColor(SIDEBAR_DARK))
+        self._color.setAlpha(232)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setAutoFillBackground(False)
 
@@ -25,9 +28,11 @@ class SidePanel(QWidget):
     def _refresh_color(self):
         # 展开前后保持同一透明度，避免覆盖内容时突然变成不透明。
         if self._light:
-            self._color = QColor(246, 247, 249, 210)
+            self._color = QColor(SIDEBAR_LIGHT)
+            self._color.setAlpha(238)
         else:
-            self._color = QColor(16, 18, 24, 150)
+            self._color = QColor(SIDEBAR_DARK)
+            self._color.setAlpha(232)
         self.update()
 
     def paintEvent(self, event):

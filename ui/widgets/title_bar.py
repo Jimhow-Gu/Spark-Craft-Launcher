@@ -2,11 +2,12 @@
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QPoint, QEasingCurve, QPropertyAnimation
+from PySide6.QtCore import Qt, QPoint, QTimer, QEasingCurve, QPropertyAnimation
 from PySide6.QtGui import (QColor, QFont, QImage, QPainter, QPainterPath, QPixmap)
-from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QPushButton)
+from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QPushButton)
 
 from core.app_font import ui_font
+from ui.design import TITLEBAR_DARK, TITLEBAR_LIGHT
 
 class WindowTitleBar(QFrame):
     HEIGHT = 56
@@ -18,6 +19,10 @@ class WindowTitleBar(QFrame):
         self._title_text = ''
         self._light = False
         self._logo_pixmap = None
+        self._video_frozen = False
+        self._drag_release_timer = QTimer(self)
+        self._drag_release_timer.setInterval(30)
+        self._drag_release_timer.timeout.connect(self._check_drag_release)
         self.setFixedHeight(self.HEIGHT)
         self.setObjectName('WindowTitleBar')
         self.setFrameShape(QFrame.NoFrame)
@@ -89,7 +94,12 @@ class WindowTitleBar(QFrame):
         path.lineTo(rect.left(), bottom)
         path.closeSubpath()
         painter.setPen(Qt.NoPen)
-        bar_color = QColor(246, 247, 249, 200) if self._light else QColor(16, 18, 24, 150)
+        if self._light:
+            bar_color = QColor(TITLEBAR_LIGHT)
+            bar_color.setAlpha(242)
+        else:
+            bar_color = QColor(TITLEBAR_DARK)
+            bar_color.setAlpha(238)
         painter.setBrush(bar_color)
         painter.drawPath(path)
         painter.fillRect(rect.left(), rect.bottom(), rect.width(), 1, bar_color)
@@ -188,10 +198,51 @@ class WindowTitleBar(QFrame):
         self._title_anim = animation
         animation.start()
 
+    def _freeze_background_video(self):
+        if self._video_frozen:
+            return
+        try:
+            self._window.central.freeze_video_updates(True)
+            self._video_frozen = True
+        except AttributeError:
+            pass
+
+    def _restore_background_video(self):
+        if not self._video_frozen:
+            return
+        self._video_frozen = False
+        self._drag_release_timer.stop()
+        try:
+            self._window.central.freeze_video_updates(False)
+        except AttributeError:
+            pass
+
+    def _check_drag_release(self):
+        if not (QApplication.mouseButtons() & Qt.LeftButton):
+            self._dragging = False
+            self._restore_background_video()
+
+    def _start_system_move(self):
+        try:
+            handle = self._window.windowHandle()
+            if handle is not None and handle.startSystemMove():
+                return True
+        except Exception:
+            pass
+        return False
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
+            # 优先交给 Windows 原生窗口移动循环，避免逐帧 move() 导致整窗重绘卡顿。
+            self._freeze_background_video()
+            if self._start_system_move():
+                self._dragging = False
+                self._drag_release_timer.start()
+                event.accept()
+                return
             self._dragging = True
             self._drag_offset = event.globalPosition().toPoint() - self._window.frameGeometry().topLeft()
+            self._drag_release_timer.start()
             event.accept()
             return
         super().mousePressEvent(event)
@@ -205,6 +256,7 @@ class WindowTitleBar(QFrame):
 
     def mouseReleaseEvent(self, event):
         self._dragging = False
+        self._restore_background_video()
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event):

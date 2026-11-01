@@ -6,6 +6,8 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPalette
 from PySide6.QtWidgets import QCheckBox, QStyle, QStyleOptionButton
 
+from ui.design import ACCENT, ACCENT_HOVER, ON_ACCENT
+
 
 class ThemedCheckBox(QCheckBox):
     def paintEvent(self, event):
@@ -33,29 +35,29 @@ class ThemedCheckBox(QCheckBox):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         if checked or partial:
-            fill = QColor('#0078d4') if enabled else QColor('#9aa0aa' if light else '#3b414a')
+            fill = QColor(ACCENT) if enabled else QColor('#9aa0aa' if light else '#3b414a')
             if hover and enabled:
-                border = QColor('#4da3ff')
+                border = QColor(ACCENT_HOVER)
             else:
-                border = QColor('#0078d4') if enabled else QColor('#8a909a' if light else '#4c525c')
+                border = QColor(ACCENT) if enabled else QColor('#8a909a' if light else '#4c525c')
         elif light:
             fill = QColor(255, 255, 255, 235 if enabled else 180)
             border = QColor('#6b7280') if enabled else QColor('#c0c4cc')
             if hover and enabled:
-                border = QColor('#0078d4')
-                fill = QColor(0, 120, 212, 28)
+                border = QColor(ACCENT)
+                fill = QColor(136, 221, 221, 28)
         else:
             fill = QColor(255, 255, 255, 22 if enabled else 10)
             border = QColor('#b6bfd0') if enabled else QColor('#5b616b')
             if hover and enabled:
-                border = QColor('#4da3ff')
-                fill = QColor(0, 120, 212, 38)
+                border = QColor(ACCENT_HOVER)
+                fill = QColor(136, 221, 221, 38)
         painter.setBrush(fill)
         painter.setPen(QPen(border, 1.3))
         painter.drawRoundedRect(box.adjusted(0.65, 0.65, -0.65, -0.65), 3.0, 3.0)
         if checked:
             pen = QPen(
-                QColor('#ffffff') if enabled else QColor('#8d939d'),
+                QColor(ON_ACCENT) if enabled else QColor('#8d939d'),
                 max(1.7, side * 0.13),
             )
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)
@@ -68,7 +70,7 @@ class ThemedCheckBox(QCheckBox):
             painter.drawPath(path)
         elif partial:
             pen = QPen(
-                QColor('#ffffff') if enabled else QColor('#8d939d'),
+                QColor(ON_ACCENT) if enabled else QColor('#8d939d'),
                 max(1.7, side * 0.13),
             )
             pen.setCapStyle(Qt.PenCapStyle.RoundCap)

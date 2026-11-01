@@ -29,8 +29,8 @@ _DETACHED_LAUNCH_WORKERS = set()
 class VersionDisplay(QFrame):
     '''首页当前版本展示：图标和文字分开布局，避免图标被行高裁切。'''
 
-    ICON_HEIGHT = 28
-    ICON_MAX_WIDTH = 72
+    ICON_HEIGHT = 32
+    ICON_MAX_WIDTH = 80
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName('VersionDisplay')
@@ -38,7 +38,7 @@ class VersionDisplay(QFrame):
         self.setMinimumHeight(50)
         self._light = False
         self._text_color = 'rgba(255,255,255,0.9)'
-        self.setStyleSheet('\n            QFrame#VersionDisplay {\n                background: rgba(18,20,26,0.58);\n                border: 1px solid rgba(255,255,255,0.24);\n                border-radius: 9px;\n            }\n            QFrame#VersionDisplay QLabel {\n                background: transparent;\n                border: none;\n            }\n        ')
+        self.setStyleSheet('\n            QFrame#VersionDisplay {\n                background: rgba(30,41,41,0.84);\n                border: 1px solid rgba(255,255,255,0.24);\n                border-radius: 9px;\n            }\n            QFrame#VersionDisplay QLabel {\n                background: transparent;\n                border: none;\n            }\n        ')
         layout = QHBoxLayout(self)
         layout.setContentsMargins(20, 12, 20, 12)
         layout.setSpacing(10)
@@ -62,12 +62,12 @@ class VersionDisplay(QFrame):
         if self._light:
             color = re.sub(
                 r'rgba\(\s*255\s*,\s*255\s*,\s*255',
-                'rgba(27,27,27', color, flags=re.I,
+                'rgba(34,34,34', color, flags=re.I,
             )
             color = re.sub(
-                r'#(?:fff|ffffff)\b', '#1b1b1b', color, flags=re.I
+                r'#(?:fff|ffffff)\b', '#222222', color, flags=re.I
             )
-            color = re.sub(r'\bwhite\b', '#1b1b1b', color, flags=re.I)
+            color = re.sub(r'\bwhite\b', '#222222', color, flags=re.I)
         self.text_label.setStyleSheet(
             f'color:{color}; background:transparent; border:none;'
         )
@@ -88,7 +88,10 @@ class VersionDisplay(QFrame):
             if not pixmap.isNull():
                 from ui.widgets.settings_widgets import hidpi_pixmap
                 pixmap = hidpi_pixmap(pixmap, self.ICON_MAX_WIDTH, self.ICON_HEIGHT)
-                self.icon_label.setFixedWidth(max(self.ICON_HEIGHT, pixmap.width()))
+                logical_width = pixmap.width() / max(1.0, pixmap.devicePixelRatio())
+                self.icon_label.setFixedWidth(
+                    max(self.ICON_HEIGHT, int(round(logical_width)))
+                )
                 self.icon_label.setFixedHeight(self.ICON_HEIGHT)
                 self.icon_label.setPixmap(pixmap)
                 self.icon_label.show()
@@ -389,7 +392,7 @@ class HomePage(QWidget):
         layout.addWidget(subtitle)
         layout.addStretch(1)
         card = QGroupBox()
-        card.setStyleSheet('\n            QGroupBox {\n                background: rgba(18,20,26,0.58);\n                border: 1px solid rgba(255,255,255,0.22);\n                border-radius: 16px;\n                margin-top: 0px;\n                padding-top: 10px;\n            }\n        ')
+        card.setStyleSheet('\n            QGroupBox {\n                background: rgba(30,41,41,0.84);\n                border: 1px solid rgba(255,255,255,0.22);\n                border-radius: 16px;\n                margin-top: 0px;\n                padding-top: 10px;\n            }\n        ')
         card.setMinimumHeight(200)
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(30, 20, 30, 20)
@@ -418,34 +421,40 @@ class HomePage(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
         self.select_version_btn = QPushButton('选择版本')
-        self.select_version_btn.setMinimumHeight(50)
-        self.select_version_btn.setFixedWidth(120)
-        self.select_version_btn.setFont(ui_font(12))
+        self.select_version_btn.setMinimumHeight(56)
+        self.select_version_btn.setMinimumWidth(120)
+        self.select_version_btn.setMaximumWidth(200)
+        self.select_version_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.select_version_btn.setFont(ui_font(13))
         self.select_version_btn.setStyleSheet('\n            QPushButton {\n                background: #3a3a3a;\n                color: white;\n                border: none;\n                border-radius: 8px;\n            }\n            QPushButton:hover { background: #4a4a4a; }\n            QPushButton:pressed { background: #2a2a2a; }\n            QPushButton:disabled { background: #2a2a2a; color: #666; }\n        ')
         self.select_version_btn.clicked.connect(self._show_version_selector)
         self.action_btn = LaunchProgressButton('启动游戏')
-        self.action_btn.setMinimumHeight(50)
-        self.action_btn.setFont(ui_font(14, QFont.DemiBold))
+        self.action_btn.setMinimumHeight(56)
+        self.action_btn.setFont(ui_font(15, QFont.DemiBold))
         self.action_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.action_btn.setProperty('_theme_ignore', True)
         self.action_btn.clicked.connect(self._on_action_clicked)
         self.settings_btn = QPushButton('游戏设置')
-        self.settings_btn.setMinimumHeight(50)
-        self.settings_btn.setFixedWidth(120)
-        self.settings_btn.setFont(ui_font(12))
+        self.settings_btn.setMinimumHeight(56)
+        self.settings_btn.setMinimumWidth(120)
+        self.settings_btn.setMaximumWidth(200)
+        self.settings_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.settings_btn.setFont(ui_font(13))
         self.settings_btn.setStyleSheet('\n            QPushButton {\n                background: #3a3a3a;\n                color: white;\n                border: none;\n                border-radius: 8px;\n            }\n            QPushButton:hover { background: #4a4a4a; }\n            QPushButton:pressed { background: #2a2a2a; }\n            QPushButton:disabled { background: #2a2a2a; color: #666; }\n        ')
         self.settings_btn.clicked.connect(self._on_settings_clicked_from_home)
         self.mod_manager_btn = QPushButton('管理模组')
-        self.mod_manager_btn.setMinimumHeight(50)
-        self.mod_manager_btn.setFixedWidth(120)
-        self.mod_manager_btn.setFont(ui_font(12))
+        self.mod_manager_btn.setMinimumHeight(56)
+        self.mod_manager_btn.setMinimumWidth(120)
+        self.mod_manager_btn.setMaximumWidth(200)
+        self.mod_manager_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.mod_manager_btn.setFont(ui_font(13))
         self.mod_manager_btn.setStyleSheet(self.settings_btn.styleSheet())
         self.mod_manager_btn.clicked.connect(self._open_mod_manager_home)
         self.mod_manager_btn.hide()
-        btn_row.addWidget(self.select_version_btn)
-        btn_row.addWidget(self.action_btn)
-        btn_row.addWidget(self.mod_manager_btn)
-        btn_row.addWidget(self.settings_btn)
+        btn_row.addWidget(self.select_version_btn, 1)
+        btn_row.addWidget(self.action_btn, 2)
+        btn_row.addWidget(self.mod_manager_btn, 1)
+        btn_row.addWidget(self.settings_btn, 1)
         card_layout.addLayout(btn_row)
         layout.addWidget(card)
         self.running_group = QGroupBox('运行中的游戏 (0)')
@@ -493,9 +502,9 @@ class HomePage(QWidget):
         self.selector_dir_add_btn = QPushButton('添加')
         self.selector_dir_add_btn.setFixedSize(56, 32)
         self.selector_dir_add_btn.setStyleSheet(
-            'QPushButton { background: #0078d4; color: white; border: none;'
+            'QPushButton { background: #88DDDD; color: white; border: none;'
             ' border-radius: 6px; padding: 6px 10px; }'
-            'QPushButton:hover { background: #1084e0; }'
+            'QPushButton:hover { background: #66BBBB; }'
         )
         self.selector_dir_add_btn.clicked.connect(self._on_selector_dir_add)
         top_bar.addWidget(self.selector_dir_add_btn)
@@ -559,10 +568,10 @@ class HomePage(QWidget):
         self.selector_download_btn.setMinimumWidth(180)
         self.selector_download_btn.setCursor(Qt.PointingHandCursor)
         self.selector_download_btn.setStyleSheet(
-            'QPushButton { background:#0078d4; color:white; border:none;'
+            'QPushButton { background:#88DDDD; color:white; border:none;'
             ' border-radius:9px; padding:9px 34px; font-size:14px; font-weight:900; }'
-            'QPushButton:hover { background:#1084e0; }'
-            'QPushButton:pressed { background:#006cbd; }'
+            'QPushButton:hover { background:#66BBBB; }'
+            'QPushButton:pressed { background:#409999; }'
         )
         self.selector_download_btn.clicked.connect(
             (lambda: self.request_switch_page.emit(1))
@@ -580,10 +589,10 @@ class HomePage(QWidget):
         main_layout.addWidget(self.stacked)
 
     def _group_style(self):
-        return '\n            QGroupBox {\n                background: rgba(18,20,26,0.58);\n                border: 1px solid rgba(255,255,255,0.22);\n                border-radius: 12px;\n                margin-top: 0px;\n                padding-top: 8px;\n            }\n        '
+        return '\n            QGroupBox {\n                background: rgba(30,41,41,0.84);\n                border: 1px solid rgba(255,255,255,0.22);\n                border-radius: 12px;\n                margin-top: 0px;\n                padding-top: 8px;\n            }\n        '
 
     def _list_style(self):
-        return '\n            QListWidget {\n                background: rgba(10,12,18,0.45);\n                border: 1px solid rgba(255,255,255,0.16);\n                border-radius: 10px;\n            }\n            QListWidget::item {\n                padding: 0px;\n                border-bottom: 1px solid rgba(255,255,255,0.05);\n            }\n            QListWidget::item:selected {\n                background: rgba(122,160,255,0.2);\n                border-left: 3px solid #7aa0ff;\n            }\n        '
+        return '\n            QListWidget {\n                background: rgba(30,41,41,0.62);\n                border: 1px solid rgba(255,255,255,0.16);\n                border-radius: 10px;\n            }\n            QListWidget::item {\n                padding: 0px;\n                border-bottom: 1px solid rgba(255,255,255,0.05);\n            }\n            QListWidget::item:selected {\n                background: rgba(136,221,221,0.2);\n                border-left: 3px solid #88DDDD;\n            }\n        '
 
     def _categorize_versions(self, versions):
         mod = []
@@ -1050,7 +1059,7 @@ class HomePage(QWidget):
         return nicknames.get(version_id, version_id)
 
     def _launch_button_style(self):
-        return '\n            QPushButton {\n                background: #0078d4;\n                color: white;\n                border: none;\n                border-radius: 8px;\n            }\n            QPushButton:hover { background: #106ebe; }\n            QPushButton:pressed { background: #005a9e; }\n            QPushButton:disabled { background: rgba(128,128,128,0.25); color: #8a8f98; }\n        '
+        return '\n            QPushButton {\n                background: #88DDDD;\n                color: white;\n                border: none;\n                border-radius: 8px;\n            }\n            QPushButton:hover { background: #66BBBB; }\n            QPushButton:pressed { background: #409999; }\n            QPushButton:disabled { background: rgba(128,128,128,0.25); color: #8a8f98; }\n        '
 
     def _fatal_button_style(self):
         return (
@@ -1316,7 +1325,7 @@ class HomePage(QWidget):
         layout.setContentsMargins(10, 8, 10, 8)
         pid_text = f'  (PID {info["pid"]})' if info.get('pid') else ''
         label = QLabel(f'运行中：{info["nickname"]}{pid_text}')
-        label.setStyleSheet('color: #9ccaff; font-size: 13px; background: transparent;')
+        label.setStyleSheet('color: #A8E6E6; font-size: 13px; background: transparent;')
         btn = QPushButton(f'结束 {info["nickname"]} 的进程')
         btn.setStyleSheet('\n            QPushButton { background:#6c2a2a; color:white; border:none;\n                          border-radius:5px; padding:5px 12px; }\n            QPushButton:hover { background:#8a3a3a; }\n            QPushButton:disabled { background:#333; color:#777; }\n        ')
         btn.clicked.connect((lambda checked=False, w=worker: self._stop_game(w)))

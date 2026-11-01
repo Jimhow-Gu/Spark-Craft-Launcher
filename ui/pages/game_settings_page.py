@@ -8,9 +8,9 @@ import json
 import os
 import re
 from pathlib import Path
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QSlider, QLineEdit, QCheckBox, QGroupBox, QScrollArea, QRadioButton, QButtonGroup, QProgressBar, QMessageBox, QFileDialog, QFrame, QGridLayout, QTabWidget, QGraphicsOpacityEffect)
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QSlider, QLineEdit, QCheckBox, QGroupBox, QScrollArea, QRadioButton, QButtonGroup, QProgressBar, QMessageBox, QFileDialog, QFrame, QGridLayout, QTabWidget, QGraphicsOpacityEffect, QApplication)
 from PySide6.QtCore import (Qt, Signal, QTimer, QUrl, QEasingCurve, QPropertyAnimation, QThread)
-from PySide6.QtGui import QFont, QDesktopServices, QPixmap
+from PySide6.QtGui import QFont, QDesktopServices, QPalette, QPixmap
 from ui.widgets.frameless_dialog import FramelessInputDialog
 from ui.version_meta import (
     LOADER_LABELS, default_icon_value, detect_installed_loader, display_name,
@@ -18,6 +18,7 @@ from ui.version_meta import (
 )
 from core.app_font import ui_font
 from ui.widgets.back_button import BackButton
+from ui.design import MUTED_DARK, MUTED_LIGHT, ON_ACCENT
 from ui.widgets.painted_icons import painted_icon
 from ui.widgets.settings_widgets import hidpi_pixmap
 from core.config import ConfigManager
@@ -25,7 +26,7 @@ from core.download_manager import DownloadManager
 from core.launch import LaunchManager
 from core.repair import GameRepairWorker
 from ui.widgets.advanced_options import AdvancedOptionsPanel
-from ui.widgets.form_styles import RADIO_BUTTON_STYLE
+from ui.widgets.form_styles import RADIO_BUTTON_STYLE, SLIDER_STYLE
 from ui.widgets.smooth_progress import SmoothProgressBar
 _DETACHED_REPAIR_WORKERS = set()
 _CLEANUP_REGISTERED = False
@@ -47,7 +48,10 @@ class _ExportBottomBar(QWidget):
         super().__init__(tab)
         from PySide6.QtCore import QEvent
         self._tab = tab
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        # 只让背景保持透明，不能让整个按钮条对鼠标透明：
+        # 否则“开始导出”按钮也收不到点击事件，表现为按钮没反应。
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setStyleSheet('background: transparent;')
         self.setFixedHeight(78)
         tab.installEventFilter(self)
         self.raise_()
@@ -193,11 +197,11 @@ class GameSettingsPage(QWidget):
             'QTabBar::tab { background: rgba(255,255,255,0.16); color: #f0f0f0;'
             ' border: 1px solid rgba(255,255,255,0.24); padding: 8px 22px; margin-right: 6px; margin-bottom: 8px;'
             ' border-radius: 8px; font-size: 11pt; }'
-            'QTabBar::tab:selected { background: #0078d4; color: white; border-color: #0078d4; }'
+            'QTabBar::tab:selected { background: #88DDDD; color: white; border-color: #88DDDD; }'
             'QTabBar::tab:hover { background: rgba(255,255,255,0.24); }'
         )
         self.tabs.addTab(overview_scroll, '概览')
-        self.tabs.setTabIcon(self.tabs.count() - 1, painted_icon('overview', 16, '#aab4c0'))
+        self.tabs.setTabIcon(self.tabs.count() - 1, painted_icon('grid', 16, '#aab4c0'))
         self.tabs.addTab(settings_scroll, '设置')
         self.tabs.setTabIcon(self.tabs.count() - 1, painted_icon('gear', 16, '#aab4c0'))
         self.modify_tab = QWidget()
@@ -216,6 +220,9 @@ class GameSettingsPage(QWidget):
         self.export_tab_layout.setSpacing(0)
         self.tabs.addTab(self.export_tab, '导出')
         self.tabs.setTabIcon(self.tabs.count() - 1, painted_icon('export', 16, '#aab4c0'))
+        self._tab_icon_names = ['grid', 'gear', 'pencil', 'components', 'export']
+        self.tabs.currentChanged.connect(self._refresh_tab_icons)
+        self._refresh_tab_icons()
         self._export_tab_ready = False
         self._export_worker = None
         self._export_task_id = ''
@@ -226,11 +233,11 @@ class GameSettingsPage(QWidget):
         self.tabs.currentChanged.connect(self._animate_tab_switch)
         settings_hint = QLabel('这些设置只对该游戏版本生效，不影响其他版本。')
         settings_hint.setWordWrap(True)
-        settings_hint.setStyleSheet('color:#4da3ff; font-size:12px; background:rgba(0,120,212,0.12); border-left:3px solid #4da3ff; border-radius:4px; padding:8px 12px;')
+        settings_hint.setStyleSheet('color:#A8E6E6; font-size:12px; background:rgba(136,221,221,0.12); border-left:3px solid #A8E6E6; border-radius:4px; padding:8px 12px;')
         settings_layout.addWidget(settings_hint)
         version_card = QFrame()
         version_card.setObjectName('VersionHeaderCard')
-        version_card.setStyleSheet('\n            QFrame#VersionHeaderCard { background: rgba(18,20,26,0.58);\n                border: 1px solid rgba(255,255,255,0.22); border-radius: 12px; }\n            QLabel { background: transparent; border: none; }\n        ')
+        version_card.setStyleSheet('\n            QFrame#VersionHeaderCard { background: rgba(30,41,41,0.84);\n                border: 1px solid rgba(255,255,255,0.22); border-radius: 12px; }\n            QLabel { background: transparent; border: none; }\n        ')
         version_card_layout = QHBoxLayout(version_card)
         version_card_layout.setContentsMargins(18, 14, 18, 14)
         version_card_layout.setSpacing(14)
@@ -342,7 +349,7 @@ class GameSettingsPage(QWidget):
         startup_layout.addWidget(self.java_combo, 2, 1)
         self.java_hint_label = QLabel('')
         self.java_hint_label.setWordWrap(True)
-        self.java_hint_label.setStyleSheet('color:#9ccaff; font-size:12px; background:rgba(0,120,212,0.10); border-left:3px solid #4da3ff; border-radius:4px; padding:7px 10px;')
+        self.java_hint_label.setStyleSheet('color:#A8E6E6; font-size:12px; background:rgba(136,221,221,0.10); border-left:3px solid #A8E6E6; border-radius:4px; padding:7px 10px;')
         startup_layout.addWidget(self.java_hint_label, 3, 0, 1, 2)
         settings_layout.addWidget(startup_group)
         mem_group = QGroupBox('内存分配')
@@ -367,7 +374,7 @@ class GameSettingsPage(QWidget):
         self.mem_slider.setRange(512, 32768)
         self.mem_slider.setTickInterval(512)
         self.mem_slider.setTickPosition(QSlider.TicksBelow)
-        self.mem_slider.setStyleSheet('\n            QSlider::groove:horizontal {\n                background: #444;\n                height: 8px;\n                border-radius: 4px;\n            }\n            QSlider::handle:horizontal {\n                background: #0078d4;\n                width: 18px;\n                margin: -5px 0;\n                border-radius: 9px;\n            }\n        ')
+        self.mem_slider.setStyleSheet(SLIDER_STYLE)
         self.mem_slider.valueChanged.connect(self._on_mem_slider_changed)
         self.mem_slider.setEnabled(True)
         self.mem_value_label = QLabel('2G')
@@ -435,7 +442,7 @@ class GameSettingsPage(QWidget):
         self.repair_progress.setRange(0, 100)
         self.repair_progress.reset_value()
         self.repair_progress.hide()
-        self.repair_progress.setStyleSheet('\n            QProgressBar { background: #333; border-radius: 4px; height: 14px; }\n            QProgressBar::chunk { background: #0078d4; border-radius: 4px; }\n        ')
+        self.repair_progress.setStyleSheet('\n            QProgressBar { background: #333; border-radius: 4px; height: 14px; }\n            QProgressBar::chunk { background: #88DDDD; border-radius: 4px; }\n        ')
         repair_layout.addWidget(self.repair_progress)
         self.repair_status_label = QLabel('')
         self.repair_status_label.setWordWrap(True)
@@ -449,10 +456,10 @@ class GameSettingsPage(QWidget):
         self.global_settings_btn.setMinimumHeight(40)
         self.global_settings_btn.setCursor(Qt.PointingHandCursor)
         self.global_settings_btn.setStyleSheet(
-            'QPushButton { background:#0078d4; color:white; border:none;'
+            'QPushButton { background:#88DDDD; color:white; border:none;'
             ' border-radius:8px; padding:8px 32px; font-size:13px; font-weight:900; }'
-            'QPushButton:hover { background:#1084e0; }'
-            'QPushButton:pressed { background:#006cbd; }'
+            'QPushButton:hover { background:#66BBBB; }'
+            'QPushButton:pressed { background:#409999; }'
         )
         self.global_settings_btn.clicked.connect(self.global_settings_requested.emit)
         settings_btn_row.addWidget(self.global_settings_btn)
@@ -467,7 +474,7 @@ class GameSettingsPage(QWidget):
         main_layout.addWidget(tab_host, 1)
 
     def _group_style(self):
-        return '\n            QGroupBox {\n                background: rgba(18,20,26,0.58);\n                border: 1px solid rgba(255,255,255,0.22);\n                border-radius: 12px;\n                margin-top: 0px;\n                padding-top: 8px;\n                color: rgba(255,255,255,0.85);\n            }\n            QGroupBox::title {\n                subcontrol-origin: margin;\n                left: 18px;\n                padding: 0 4px;\n                color: #f0f0f0;\n            }\n        '
+        return '\n            QGroupBox {\n                background: rgba(30,41,41,0.84);\n                border: 1px solid rgba(255,255,255,0.22);\n                border-radius: 12px;\n                margin-top: 0px;\n                padding-top: 8px;\n                color: rgba(255,255,255,0.85);\n            }\n            QGroupBox::title {\n                subcontrol-origin: margin;\n                left: 18px;\n                padding: 0 4px;\n                color: #f0f0f0;\n            }\n        '
 
     def _combo_style(self):
         return '\n            QComboBox {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.1);\n                border-radius: 6px;\n                color: #f0f0f0;\n                padding: 4px 8px;\n            }\n            QComboBox::drop-down { border: none; }\n            QComboBox QAbstractItemView { background: #2a2a2a; color: #f0f0f0; border: 1px solid rgba(255,255,255,0.1); }\n        '
@@ -530,6 +537,21 @@ class GameSettingsPage(QWidget):
         if hasattr(self, 'version_meta_changed'):
             self.version_meta_changed.emit(self.version_id)
 
+    def _refresh_tab_icons(self, *_args):
+        names = getattr(self, '_tab_icon_names', None)
+        if not names or not hasattr(self, 'tabs'):
+            return
+        light = QApplication.palette().color(QPalette.Window).lightness() > 128
+        current = self.tabs.currentIndex()
+        for index, name in enumerate(names):
+            if index >= self.tabs.count():
+                continue
+            color = ON_ACCENT if index == current else (MUTED_LIGHT if light else MUTED_DARK)
+            self.tabs.setTabIcon(index, painted_icon(name, 16, color, light_safe=True))
+
+    def set_light(self, light):
+        self._refresh_tab_icons()
+
     def _on_tab_changed(self, index):
         widget = self.tabs.widget(index)
         if widget is self.export_tab:
@@ -573,11 +595,11 @@ class GameSettingsPage(QWidget):
                 install_btn.setMinimumWidth(154)
                 install_btn.setCursor(Qt.PointingHandCursor)
                 install_btn.setStyleSheet(
-                    'QPushButton { background:#0078d4; color:white; border:none;'
+                    'QPushButton { background:#88DDDD; color:white; border:none;'
                     ' border-radius:8px; padding:10px 36px; font-size:14px;'
                     ' font-weight:900; }'
-                    'QPushButton:hover { background:#1084e0; }'
-                    'QPushButton:pressed { background:#006cbd; }'
+                    'QPushButton:hover { background:#66BBBB; }'
+                    'QPushButton:pressed { background:#409999; }'
                 )
                 install_btn.clicked.connect(
                     (lambda: self.tabs.setCurrentWidget(self.modify_tab))
@@ -594,7 +616,7 @@ class GameSettingsPage(QWidget):
 
     # ---------- 导出整合包 ----------
     _EXPORT_CARD_STYLE = (
-        'QFrame#ExportCard { background: rgba(18,20,26,0.58);'
+        'QFrame#ExportCard { background: rgba(30,41,41,0.84);'
         ' border: 1px solid rgba(255,255,255,0.22); border-radius: 12px; }'
         'QFrame#ExportCard QLabel { background: transparent; border: none; }'
         'QWidget#ExportChildren { background: transparent; }'
@@ -624,6 +646,7 @@ class GameSettingsPage(QWidget):
         top = QFrame()
         top.setObjectName('ExportCard')
         top.setAttribute(Qt.WA_StyledBackground, True)
+        top.setStyleSheet(self._EXPORT_CARD_STYLE)
         top_layout = QHBoxLayout(top)
         top_layout.setContentsMargins(20, 14, 20, 14)
         top_layout.setSpacing(10)
@@ -637,7 +660,7 @@ class GameSettingsPage(QWidget):
         self._export_name_edit.setStyleSheet(
             'QLineEdit { background:rgba(255,255,255,0.06); color:#f0f0f0;'
             ' border:1px solid rgba(255,255,255,0.2); border-radius:7px; padding:4px 10px; }'
-            'QLineEdit:focus { border-color:rgba(0,120,212,0.75); }'
+            'QLineEdit:focus { border-color:rgba(136,221,221,0.75); }'
         )
         top_layout.addWidget(self._export_name_edit, 1)
         ver_title = QLabel('整合包版本')
@@ -756,10 +779,10 @@ class GameSettingsPage(QWidget):
         self._export_start_btn.setMinimumWidth(190)
         self._export_start_btn.setCursor(Qt.PointingHandCursor)
         self._export_start_btn.setStyleSheet(
-            'QPushButton { background:#0078d4; color:white; border:none;'
+            'QPushButton { background:#88DDDD; color:white; border:none;'
             ' border-radius:9px; padding:10px 44px; font-size:15px; font-weight:900; }'
-            'QPushButton:hover { background:#1084e0; }'
-            'QPushButton:pressed { background:#006cbd; }'
+            'QPushButton:hover { background:#66BBBB; }'
+            'QPushButton:pressed { background:#409999; }'
             'QPushButton:disabled { background:rgba(128,128,128,0.25); color:#8a8f98; }'
         )
         self._export_start_btn.clicked.connect(self._on_export_clicked)

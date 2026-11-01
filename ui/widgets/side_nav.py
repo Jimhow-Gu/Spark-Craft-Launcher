@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from PySide6.QtCore import Property, QRectF, QSize, Qt, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
-from PySide6.QtWidgets import QListWidget, QStyle, QStyledItemDelegate
+from PySide6.QtWidgets import QListWidget, QSizePolicy, QStyle, QStyledItemDelegate
 
+from ui.design import ACCENT, MUTED_DARK, MUTED_LIGHT, ON_ACCENT
 from ui.widgets.painted_icons import painted_icon
 
 NAV_ICON_ROLE = int(Qt.UserRole) + 10
@@ -48,7 +49,7 @@ class SideNavDelegate(QStyledItemDelegate):
                 painter.drawLine(int(rect.left()) + 22, y, int(rect.right()) - 22, y)
             else:
                 painter.setOpacity(self._text_opacity)
-                painter.setPen(QColor('#8b929d' if not self.light else '#707783'))
+                painter.setPen(QColor(MUTED_LIGHT if self.light else MUTED_DARK))
                 font = QFont(option.font)
                 font.setPointSizeF(9.0)
                 font.setWeight(QFont.Medium)
@@ -68,7 +69,7 @@ class SideNavDelegate(QStyledItemDelegate):
         body = rect.adjusted(inset, 2.0, -inset, -2.0)
         if selected:
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor('#0078d4'))
+            painter.setBrush(QColor(ACCENT))
             painter.drawRoundedRect(body, 9.0, 9.0)
         elif hover:
             color = (
@@ -82,7 +83,7 @@ class SideNavDelegate(QStyledItemDelegate):
         icon_name = index.data(NAV_ICON_ROLE) or ''
         size = 24
         if selected:
-            icon_color = '#ffffff'
+            icon_color = ON_ACCENT
         else:
             icon_color = '#4f5866' if self.light else '#c5cbd6'
         if icon_name:
@@ -106,15 +107,15 @@ class SideNavDelegate(QStyledItemDelegate):
             )
             painter.setOpacity(self._text_opacity)
             painter.setPen(
-                QColor('#ffffff') if selected
-                else QColor('#202124' if self.light else '#e8ebf1')
+                QColor(ON_ACCENT) if selected
+                else QColor('#222222' if self.light else '#EEFFFF')
             )
             painter.drawText(
                 text_rect, Qt.AlignLeft | Qt.AlignVCenter, text
             )
         elif selected:
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor('#0078d4'))
+            painter.setBrush(QColor(ACCENT))
             painter.drawRoundedRect(
                 QRectF(rect.left() + 1.0, rect.top() + 9.0, 3.0, rect.height() - 18.0),
                 1.5,
@@ -125,7 +126,8 @@ class SideNavDelegate(QStyledItemDelegate):
     def sizeHint(self, option, index):
         if index.data(NAV_HEADER_ROLE):
             return QSize(0, 18)
-        return QSize(0, 38)
+        # 36px 让 540 高度窗口仍能完整容纳导航、媒体控件和版本标签。
+        return QSize(0, 36)
 
 
 class SideNavList(QListWidget):
@@ -139,6 +141,8 @@ class SideNavList(QListWidget):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setSpacing(0)
+        self.setMinimumHeight(0)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         self._hover_row = -1
         self.itemEntered.connect(self._on_item_entered)
         self.setStyleSheet(

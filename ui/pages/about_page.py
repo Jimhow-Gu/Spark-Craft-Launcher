@@ -20,7 +20,7 @@ _IMAGES_DIR = Path(__file__).resolve().parent.parent / 'imgs'
 _VERSION_TEXT = VERSION_DISPLAY
 def _card_style(object_name):
     return (
-        f'QWidget#{object_name} {{ background: rgba(18,20,26,0.58);'
+        f'QWidget#{object_name} {{ background: rgba(30,41,41,0.84);'
         ' border: 1px solid rgba(255,255,255,0.22); border-radius: 12px; }'
         f'QWidget#{object_name} QLabel {{ background: transparent; border: none; }}'
     )
@@ -99,7 +99,7 @@ class AboutPage(QWidget):
         self.sponsor_btn.setStyleSheet(
             'QPushButton { background:rgba(255,255,255,0.08); color:#f0f0f0;'
             ' border:1px solid rgba(255,255,255,0.18); border-radius:7px; padding:6px 14px; }'
-            'QPushButton:hover { background:rgba(0,120,212,0.72); }'
+            'QPushButton:hover { background:rgba(136,221,221,0.72); }'
         )
         self.sponsor_btn.clicked.connect(
             (lambda: QDesktopServices.openUrl(QUrl('https://ifdian.net/a/200811GJH')))
@@ -115,7 +115,7 @@ class AboutPage(QWidget):
         self.check_update_btn.setStyleSheet(
             'QPushButton { background:rgba(255,255,255,0.08); color:#f0f0f0;'
             ' border:1px solid rgba(255,255,255,0.18); border-radius:7px; padding:6px 14px; }'
-            'QPushButton:hover { background:rgba(0,120,212,0.72); }'
+            'QPushButton:hover { background:rgba(136,221,221,0.72); }'
         )
         self.check_update_btn.clicked.connect(self.check_update.emit)
         scl_row.addWidget(self.check_update_btn)

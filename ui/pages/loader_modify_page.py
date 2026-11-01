@@ -246,7 +246,7 @@ class _VersionRowWidget(QWidget):
 
         if selected:
             check = QLabel('✓')
-            check.setStyleSheet('color:#67b7ff; font-size:14px; font-weight:900; background:transparent;')
+            check.setStyleSheet('color:#A8E6E6; font-size:14px; font-weight:900; background:transparent;')
             check.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             layout.addWidget(check, 0, Qt.AlignVCenter)
 
@@ -1153,7 +1153,7 @@ class LoaderModifyPage(QWidget):
             'QLineEdit { background:rgba(255,255,255,0.05); color:#f0f0f0;'
             ' border:1px solid rgba(255,255,255,0.16); border-radius:7px;'
             ' padding:4px 10px; font-size:13px; }'
-            'QLineEdit:focus { border-color:rgba(0,120,212,0.75); }'
+            'QLineEdit:focus { border-color:rgba(136,221,221,0.75); }'
         )
         self.name_edit.textChanged.connect(self._on_name_changed)
         name_text_layout.addWidget(self.name_edit)
@@ -1198,10 +1198,10 @@ class LoaderModifyPage(QWidget):
         self.start_btn.setMinimumWidth(148)
         self.start_btn.setCursor(Qt.PointingHandCursor)
         self.start_btn.setStyleSheet(
-            'QPushButton { background:#0078d4; color:white; border:none;'
+            'QPushButton { background:#88DDDD; color:white; border:none;'
             ' border-radius:8px; padding:8px 30px; font-size:13px; }'
-            'QPushButton:hover { background:#1084e0; }'
-            'QPushButton:pressed { background:#006cbd; }'
+            'QPushButton:hover { background:#66BBBB; }'
+            'QPushButton:pressed { background:#409999; }'
             'QPushButton:disabled { background:rgba(128,128,128,0.25); color:#8a8f98; }'
         )
         self.start_btn.clicked.connect(self._on_start_modify)
@@ -1286,7 +1286,7 @@ class LoaderModifyPage(QWidget):
             'QListWidget::item { background:transparent; border:none;'
             ' border-radius:6px; margin:1px 2px; }'
             'QListWidget::item:hover { background:rgba(255,255,255,0.07); }'
-            'QListWidget::item:selected { background:rgba(0,120,212,0.40); }'
+            'QListWidget::item:selected { background:rgba(136,221,221,0.40); }'
             'QScrollBar:vertical { background:transparent; width:8px; margin:2px; }'
             'QScrollBar::handle:vertical { background:rgba(255,255,255,0.22);'
             ' border-radius:4px; min-height:22px; }'
@@ -1390,7 +1390,7 @@ class LoaderModifyPage(QWidget):
                 state_style = 'color:rgba(255,255,255,0.36); font-size:12px; background:transparent;'
             elif selected:
                 state_text = selected
-                state_style = 'color:#67b7ff; font-size:12px; background:transparent;'
+                state_style = 'color:#A8E6E6; font-size:12px; background:transparent;'
                 can_expand = bool(versions)
             elif not loaded and not versions:
                 state_text = '' if self.loading_overlay.is_loading() else '正在获取...'
@@ -1460,8 +1460,8 @@ class LoaderModifyPage(QWidget):
                 'QFrame#ModifyLoaderCard QLabel { background:transparent; border:none; }'
             )
         else:
-            border = 'rgba(0,120,212,0.55)' if selected else 'rgba(255,255,255,0.18)'
-            background = 'rgba(0,120,212,0.10)' if selected else 'rgba(18,20,26,0.58)'
+            border = 'rgba(136,221,221,0.55)' if selected else 'rgba(255,255,255,0.18)'
+            background = 'rgba(136,221,221,0.10)' if selected else 'rgba(30,41,41,0.84)'
             style = (
                 f'QFrame#ModifyLoaderCard {{ background:{background};'
                 f' border:1px solid {border}; border-radius:9px; }}'
@@ -1759,7 +1759,7 @@ class LoaderModifyPage(QWidget):
                 self, '重命名确认',
                 f'确定将版本名称修改为：\n{target_name}',
                 actions=[('修改', 'ok', True), ('取消', 'cancel', False)],
-                icon_text='✎', icon_color='#0078d4',
+                icon_text='✎', icon_color='#88DDDD',
             )
         dialog.exec()
         if dialog.choice != 'ok':

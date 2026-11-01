@@ -7,6 +7,7 @@ from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath
 from PySide6.QtWidgets import QPushButton
 
 from core.app_font import ui_font
+from ui.design import ACCENT, ON_ACCENT
 
 
 class LaunchProgressButton(QPushButton):
@@ -83,7 +84,7 @@ class LaunchProgressButton(QPushButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        radius = 8.0
+        radius = 10.0
         path = QPainterPath()
         path.addRoundedRect(rect, radius, radius)
         painter.setClipPath(path)
@@ -91,15 +92,15 @@ class LaunchProgressButton(QPushButton):
         if not enabled:
             base = QColor(128, 128, 128, 64)
         elif self._working:
-            base = QColor(38, 41, 49)
+            base = QColor(24, 33, 35)
         else:
-            base = QColor(0, 120, 212)
+            base = QColor(ACCENT)
         painter.fillPath(path, base)
         if self._working:
             fill = QRectF(rect.left(), rect.top(), max(2.0, rect.width() * self._progress), rect.height())
             fill_path = QPainterPath()
             fill_path.addRoundedRect(fill, radius, radius)
-            painter.fillPath(fill_path, QColor(0, 120, 212))
+            painter.fillPath(fill_path, QColor(ACCENT))
             # 流动高光：证明按钮在持续推进，而不是卡住
             gradient = QLinearGradient(rect.left(), 0, rect.right(), 0)
             center = self._phase % 1.2
@@ -111,7 +112,12 @@ class LaunchProgressButton(QPushButton):
         text = self.text()
         if self._working and self._show_percent:
             text = f'{text}   {int(round(self._progress * 100))}%'
-        color = QColor(255, 255, 255) if enabled else QColor(138, 143, 152)
+        if not enabled:
+            color = QColor(138, 143, 152)
+        elif self._working and self._progress < 0.55:
+            color = QColor(255, 255, 255)
+        else:
+            color = QColor(ON_ACCENT)
         painter.setPen(color)
         painter.setFont(self.font())
         painter.drawText(rect, Qt.AlignCenter, text)

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -14,10 +15,13 @@ from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QL
 from core.app_font import ui_font
 from core.launch import LaunchManager
 from core.net import HttpClient, hash_file
+from core.download_manager import DownloadManager
 from core.mods import download_candidates
 from core.mod_translations import bilingual_html, bilingual_plain, chinese_only, english_only, translation_db
 from ui.widgets.back_button import BackButton
+from ui.widgets.dark_dialog import ask_dark_question
 from ui.widgets.loading_overlay import LoadingOverlay
+from ui.widgets.toast import show_toast
 
 def _toml_value(text, key):
     match = re.search(f'(?m)^\\s*{re.escape(key)}\\s*=\\s*"([^"]*)"', text)
@@ -260,6 +264,7 @@ class ModUpdateDownloadWorker(QThread):
     '''下载并替换检测到的新版本 Mod。'''
 
     status = Signal(str)
+    progress = Signal(int)
     done = Signal(int, list)
     def __init__(self, items, mods_dir):
         super().__init__()
@@ -275,16 +280,20 @@ class ModUpdateDownloadWorker(QThread):
         return download_candidates(url)
 
     def run(self):
-        http = HttpClient(timeout=60, retries=1, verify=False)
+        # 单个文件超时过长会让用户误以为卡死；30 秒无数据就切换下一个源。
+        http = HttpClient(timeout=30, retries=1, verify=False)
         updated = 0
         errors = []
+        total_items = max(1, len(self.items))
+        self.progress.emit(0)
         try:
-            for info in self.items:
+            for index, info in enumerate(self.items):
                 if self._cancelled:
                     break
                 latest = info.get('latest_file') or {}
                 url = str(latest.get('url') or '')
                 if not url:
+                    self.progress.emit(int((index + 1) * 100 / total_items))
                     continue
                 old_path = Path(info.get('path', ''))
                 filename = Path(str(latest.get('filename') or old_path.name)).name
@@ -292,21 +301,41 @@ class ModUpdateDownloadWorker(QThread):
                 if disabled and filename.lower().endswith('.jar'):
                     filename += '.disabled'
                 dest = self.mods_dir / filename
-                self.status.emit(f'正在更新 {info.get("name") or old_path.name} ...')
+                self.status.emit(
+                    f'正在更新 {index + 1}/{total_items}：'
+                    f'{info.get("name") or old_path.name}'
+                )
+
+                def on_download(done_bytes, total_bytes, idx=index):
+                    fraction = float(done_bytes) / float(total_bytes) if total_bytes else 0.0
+                    self.progress.emit(
+                        int((idx + max(0.0, min(1.0, fraction))) * 100 / total_items)
+                    )
+
                 ok = False
                 last_error = ''
                 for candidate in self._download_urls(url):
                     if self._cancelled:
                         break
                     try:
-                        http.download(candidate, dest, sha1=latest.get('sha1') or None, size=latest.get('size') or None, cancel=(lambda: self._cancelled), allow_slow_fallback=False)
+                        http.download(
+                            candidate, dest,
+                            sha1=latest.get('sha1') or None,
+                            size=latest.get('size') or None,
+                            progress=on_download,
+                            cancel=(lambda: self._cancelled),
+                            allow_slow_fallback=False,
+                        )
                         ok = True
                         break
                     except Exception as exc:
                         last_error = str(exc)
                         continue
                 if not ok:
+                    if self._cancelled:
+                        break
                     errors.append(f'{info.get("name") or old_path.name}: {last_error}')
+                    self.progress.emit(int((index + 1) * 100 / total_items))
                     continue
                 if old_path != dest and old_path.exists():
                     try:
@@ -314,6 +343,7 @@ class ModUpdateDownloadWorker(QThread):
                     except OSError:
                         pass
                 updated += 1
+                self.progress.emit(int((index + 1) * 100 / total_items))
         finally:
             try:
                 http.close()
@@ -428,6 +458,7 @@ class ModManagerPage(QWidget):
         self._mod_update_disabled = bool(disabled)
         self._update_worker = None
         self._update_download_worker = None
+        self._update_task_id = ''
         self.setMinimumSize(640, 480)
         self.setStyleSheet('background:transparent; color:#f0f0f0;')
         layout = QVBoxLayout(self)
@@ -483,7 +514,7 @@ class ModManagerPage(QWidget):
         self.disabled_tab = QPushButton('已禁用 (0)')
         for btn in self.all_tab, self.update_tab, self.disabled_tab:
             btn.setCheckable(True)
-            btn.setStyleSheet('\n                QPushButton { background:transparent; color:rgba(255,255,255,0.6);\n                              border:none; padding:7px 15px; font-size:13px; }\n                QPushButton:checked { color:white; border-bottom:2px solid #0078d4; }\n            ')
+            btn.setStyleSheet('\n                QPushButton { background:transparent; color:rgba(255,255,255,0.6);\n                              border:none; padding:7px 15px; font-size:13px; }\n                QPushButton:checked { color:white; border-bottom:2px solid #88DDDD; }\n            ')
         self.all_tab.setChecked(True)
         self.all_tab.clicked.connect((lambda: self._set_filter('all')))
         self.update_tab.clicked.connect((lambda: self._set_filter('update')))
@@ -499,7 +530,7 @@ class ModManagerPage(QWidget):
         self.list = QListWidget()
         self.list.setSelectionMode(QListWidget.MultiSelection)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.list.setStyleSheet('\n            QListWidget { background: rgba(10,12,18,0.45);\n                          border:1px solid rgba(255,255,255,0.16); border-radius:8px; outline:none; }\n            QListWidget::item { border-bottom:1px solid rgba(255,255,255,0.06); }\n            QListWidget::item:selected { background: rgba(0,120,212,0.3); }\n            QListWidget::item:hover { background: rgba(255,255,255,0.06); }\n        ')
+        self.list.setStyleSheet('\n            QListWidget { background: rgba(30,41,41,0.62);\n                          border:1px solid rgba(255,255,255,0.16); border-radius:8px; outline:none; }\n            QListWidget::item { border-bottom:1px solid rgba(255,255,255,0.06); }\n            QListWidget::item:selected { background: rgba(136,221,221,0.3); }\n            QListWidget::item:hover { background: rgba(255,255,255,0.06); }\n        ')
         self.list.itemSelectionChanged.connect(self._on_selection_changed)
         layout.addWidget(self.list, 1)
         self.loading_overlay = LoadingOverlay(self.list.viewport())
@@ -508,7 +539,7 @@ class ModManagerPage(QWidget):
         self.status_label.setStyleSheet('color:rgba(255,255,255,0.5); font-size:12px;')
         layout.addWidget(self.status_label)
         self.action_bar = QFrame()
-        self.action_bar.setStyleSheet('QFrame { background:rgba(18,20,26,0.62); border:1px solid rgba(255,255,255,0.16); border-radius:8px; }')
+        self.action_bar.setStyleSheet('QFrame { background:rgba(30,41,41,0.84); border:1px solid rgba(255,255,255,0.16); border-radius:8px; }')
         bar = QHBoxLayout(self.action_bar)
         bar.setContentsMargins(12, 8, 12, 8)
         self.selected_label = QLabel('已选择 0 个文件')
@@ -567,7 +598,7 @@ class ModManagerPage(QWidget):
                 errors.append(f'{file_path}: {exc}')
                 continue
         if errors:
-            QMessageBox.warning(self, '部分安装失败', '\n'.join(errors[:8]))
+            self._notify(chr(10).join(errors[:8]), 'error', '部分安装失败')
         if copied:
             self.status_label.setText(f'已安装 {copied} 个 Mod')
         self.refresh()
@@ -578,7 +609,7 @@ class ModManagerPage(QWidget):
             window.show_download_section('mod')
             self.back_requested.emit()
             return
-        QMessageBox.information(self, '下载新 Mod', '请到下载中心 → 模组页面下载。')
+        self._notify('请到下载中心 → 模组页面下载。', 'info', '下载新 Mod')
 
     def list_select_all(self):
         self.list.selectAll()
@@ -815,7 +846,7 @@ class ModManagerPage(QWidget):
                 errors.append(f'{path.name}: {exc}')
                 continue
         if errors:
-            QMessageBox.warning(self, '部分操作失败', '\n'.join(errors[:8]))
+            self._notify(chr(10).join(errors[:8]), 'error', '部分操作失败')
         if changed:
             self.status_label.setText(f'已{"启用" if enabled else "禁用"} {changed} 个 Mod')
         self.refresh()
@@ -824,7 +855,7 @@ class ModManagerPage(QWidget):
         selected = self._selected()
         if not selected:
             return
-        reply = QMessageBox.question(self, '删除 Mod', f'确定删除选中的 {len(selected)} 个 Mod 文件吗？此操作不可撤销。', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        reply = ask_dark_question(self, '删除 Mod', f'确定删除选中的 {len(selected)} 个 Mod 文件吗？此操作不可撤销。', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply != QMessageBox.Yes:
             return
         errors = []
@@ -835,38 +866,95 @@ class ModManagerPage(QWidget):
                 errors.append(f'{info["filename"]}: {exc}')
                 continue
         if errors:
-            QMessageBox.warning(self, '部分删除失败', '\n'.join(errors[:8]))
+            self._notify(chr(10).join(errors[:8]), 'error', '部分删除失败')
         self.refresh()
+
+    def _notify(self, text, level='info', title=''):
+        payload = str(text or '')
+        if title:
+            payload = f'{title}\n{payload}'
+        if show_toast(payload, level, self):
+            return
+        from ui.widgets.dark_dialog import DarkMessageDialog
+        DarkMessageDialog(self, title or '提示', str(text or ''), level).exec()
 
     def _update_selected(self):
         if self._mod_update_disabled:
-            QMessageBox.information(self, '更新已禁用', '当前版本已开启「禁止更新Mod」。\n如需更新，请在游戏设置的「高级选项」中取消勾选。')
+            self._notify('当前版本已开启「禁止更新Mod」。如需更新，请在游戏设置的「高级选项」中取消勾选。', 'info', '更新已禁用')
             return
         selected = self._selected()
         if not selected:
             return
         updatable = [info for info in selected if info.get('update_available') if info.get('latest_file')]
         if not updatable:
-            QMessageBox.information(self, '暂无更新', '所选 Mod 没有检测到适配当前游戏版本的新版本。')
+            self._notify('所选 Mod 没有检测到适配当前游戏版本的新版本。', 'warning', '暂无更新')
             return
         worker = self._update_download_worker
         if worker is not None and worker.isRunning():
-            QMessageBox.information(self, '请稍候', '正在更新 Mod，请等待完成。')
+            self._notify('正在更新 Mod，请等待完成。', 'info', '请稍候')
             return
         self.update_btn.setEnabled(False)
         self.status_label.setText(f'正在更新 {len(updatable)} 个 Mod...')
         worker = ModUpdateDownloadWorker(updatable, self.mods_dir)
-        worker.status.connect(self.status_label.setText)
-        worker.done.connect(self._on_mod_update_done)
+        task_id = f'mod-update-{id(self)}-{int(time.time() * 1000)}'
+        self._update_task_id = task_id
+        manager = DownloadManager.instance()
+        manager.start_task(
+            task_id,
+            f'更新 {len(updatable)} 个 Mod',
+            steps=['下载并替换 Mod'],
+            cancel_callback=worker.cancel,
+        )
+        manager.update_step(task_id, 0, state='active', percent=0)
+        manager.update_task(task_id, status='准备更新...')
+        worker.status.connect(
+            (lambda text, tid=task_id:
+             DownloadManager.instance().update_task(tid, status=text))
+        )
+        worker.progress.connect(
+            (lambda value, tid=task_id: self._on_mod_update_progress(tid, value))
+        )
+        worker.done.connect(
+            (lambda updated, errors, tid=task_id, w=worker:
+             self._on_mod_update_done(tid, w, updated, errors))
+        )
         worker.finished.connect((lambda w=worker: self._on_mod_update_finished(w)))
         self._update_download_worker = worker
         worker.start()
+        window = self.window()
+        if hasattr(window, 'show_download_manager_page'):
+            window.show_download_manager_page()
 
-    def _on_mod_update_done(self, updated, errors):
-        if updated:
-            self.status_label.setText(f'已更新 {updated} 个 Mod')
-        if errors:
-            QMessageBox.warning(self, '部分 Mod 更新失败', '\n'.join(errors[:6]))
+    def _on_mod_update_progress(self, task_id, value):
+        try:
+            percent = max(0.0, min(100.0, float(value)))
+        except (TypeError, ValueError):
+            return
+        manager = DownloadManager.instance()
+        manager.update_task(task_id, percent=percent)
+        manager.update_step(task_id, 0, state='active', percent=percent)
+
+    def _on_mod_update_done(self, task_id, worker, updated, errors):
+        manager = DownloadManager.instance()
+        cancelled = bool(getattr(worker, '_cancelled', False))
+        if cancelled:
+            manager.finish_task(task_id, False, '已取消')
+            self.status_label.setText('已取消更新 Mod')
+        elif errors:
+            manager.finish_task(
+                task_id, False,
+                f'已更新 {updated} 个，{len(errors)} 个失败',
+            )
+            self.status_label.setText(f'已更新 {updated} 个 Mod，{len(errors)} 个失败')
+            self._notify(chr(10).join(errors[:6]), 'error', '部分 Mod 更新失败')
+        else:
+            manager.finish_task(task_id, True, f'已更新 {updated} 个 Mod')
+            if updated:
+                self.status_label.setText(f'已更新 {updated} 个 Mod')
+            else:
+                self.status_label.setText('没有可更新的 Mod 文件')
+        if self._update_task_id == task_id:
+            self._update_task_id = ''
         self.refresh()
 
     def _on_mod_update_finished(self, worker):

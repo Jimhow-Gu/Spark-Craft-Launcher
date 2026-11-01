@@ -1,4 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_submodules
 
@@ -36,9 +40,9 @@ a = Analysis(
     binaries=[],
     datas=[
         ("ui/imgs", "ui/imgs"),
-        ("font/HarmonyOS_Sans_SC_Regular.ttf", "font"),
-        ("font/HarmonyOS_Sans_SC_Black.ttf", "font"),
-        ("font/HarmonyOS_Sans_SC_Bold.ttf", "font"),
+        # 仅打包实际使用的两个字重，且是 GB2312 + 界面文本子集。
+        ("font/subset/HarmonyOS_Sans_SC_Black.ttf", "font"),
+        ("font/subset/HarmonyOS_Sans_SC_Medium.ttf", "font"),
     ],
     hiddenimports=hiddenimports,
     hookspath=[],
@@ -49,20 +53,65 @@ a = Analysis(
     optimize=0,
 )
 
-# PySide6 hook 会收集一些未使用的 Qt 模块 DLL；这里剔除，减小体积
+# PySide6 hook 会收集一些未使用的 Qt 模块/插件；这里剔除，减小体积。
 _drop_prefixes = (
     "qt6qml", "qt6quick", "qt6pdf", "qt6virtualkeyboard",
 )
-_drop_names = {"qtvirtualkeyboardplugin.dll", "qpdf.dll"}
+_drop_names = {
+    "qtvirtualkeyboardplugin.dll", "qpdf.dll",
+    # 软件 OpenGL 回退（约 20 MB）和未使用的平台/图片插件。
+    # 注意：Python 3.10 的 _ssl/_hashlib 依赖 OpenSSL 1.1，必须保留；
+    # 未被 Python/Qt 使用的 OpenSSL 3 运行库则移除。
+    "opengl32sw.dll", "libssl-3-x64.dll", "libcrypto-3-x64.dll",
+    "qdirect2d.dll", "qminimal.dll", "qoffscreen.dll",
+    "qicns.dll", "qtga.dll", "qtiff.dll", "qwbmp.dll",
+    "qcertonlybackend.dll",
+}
 
 
 def _keep_binary(entry):
     name = str(entry[0]).replace(chr(92), "/").lower()
     base = name.rsplit("/", 1)[-1]
+    if "/translations/" in name:
+        return False
     return not base.startswith(_drop_prefixes) and base not in _drop_names
 
 
 a.binaries = [entry for entry in a.binaries if _keep_binary(entry)]
+# translations 也可能被收集进 datas；启动器界面全部自带文本，不需要 Qt 翻译包。
+a.datas = [
+    entry for entry in a.datas
+    if "/translations/" not in str(entry[0]).replace(chr(92), "/").lower()
+]
+
+# PyInstaller 遇到带 CFG 的 Qt DLL 会自动跳过 UPX；用户要求 Qt DLL 也压缩，
+# 这里先把这些 DLL 复制到临时目录并用 UPX --force 压缩，再交给打包器。
+_force_upx_names = {
+    # Qt 核心 DLL 带 CFG，PyInstaller 默认跳过；只强制压缩这些已验证可用的核心库。
+    # 平台/多媒体插件（qwindows、ffmpegmediaplugin 等）压缩后会报
+    # “no Qt platform plugin could be initialized”，无论是否保留 load config 都不能压。
+    "qt6gui.dll", "qt6widgets.dll", "qt6multimedia.dll",
+    "qt6svg.dll", "qt6opengl.dll",
+}
+_upx = shutil.which("upx")
+if _upx:
+    _upx_cache = Path(tempfile.mkdtemp(prefix="scl-upx-"))
+    for _index, (_dest, _src, _typ) in enumerate(list(a.binaries)):
+        _base = os.path.basename(str(_src)).lower()
+        if _base not in _force_upx_names:
+            continue
+        _target = _upx_cache / _base
+        try:
+            shutil.copy2(_src, _target)
+            _result = subprocess.run(
+                [_upx, "--force", "--lzma", "--strip-loadconf", "-q", str(_target)],
+                capture_output=True,
+                text=True,
+            )
+            if _result.returncode == 0:
+                a.binaries[_index] = (_dest, str(_target), _typ)
+        except OSError:
+            continue
 
 pyz = PYZ(a.pure)
 
@@ -76,8 +125,17 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,
-    upx_exclude=[],
+    # 用户要求压缩 Qt/FFmpeg 等 DLL；Python/VC 运行时保留原样以提高稳定性。
+    upx=True,
+    upx_exclude=[
+        "python310.dll", "python3.dll",
+        "VCRUNTIME140.dll", "VCRUNTIME140_1.dll", "MSVCP140.dll",
+        "Qt6Gui.dll", "Qt6Widgets.dll", "Qt6Multimedia.dll",
+        "Qt6Svg.dll", "Qt6OpenGL.dll",
+        "qwindows.dll", "ffmpegmediaplugin.dll", "windowsmediaplugin.dll",
+        "qgif.dll", "qjpeg.dll", "qico.dll", "qwebp.dll", "qsvg.dll",
+        "qsvgicon.dll", "qmodernwindowsstyle.dll", "qtuiotouchplugin.dll",
+    ],
     runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,

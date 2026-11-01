@@ -1,3 +1,11 @@
 '''通用表单控件样式。'''
 
-RADIO_BUTTON_STYLE = '\nQRadioButton {\n    color: #f0f0f0;\n    spacing: 8px;\n    background: transparent;\n}\nQRadioButton::indicator {\n    width: 14px;\n    height: 14px;\n    border-radius: 9px;\n    border: 2px solid rgba(255,255,255,0.45);\n    background: rgba(0,0,0,0.22);\n}\nQRadioButton::indicator:hover {\n    border-color: rgba(255,255,255,0.72);\n}\nQRadioButton::indicator:checked {\n    border: 2px solid #4da3ff;\n    background: qradialgradient(\n        cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,\n        stop:0 #4da3ff,\n        stop:0.42 #4da3ff,\n        stop:0.52 #202020,\n        stop:1 #202020\n    );\n}\n'
+SLIDER_STYLE = 'QSlider { background: transparent; }'
+
+RADIO_BUTTON_STYLE = '''
+QRadioButton {
+    color: #f0f0f0;
+    spacing: 8px;
+    background: transparent;
+}
+'''

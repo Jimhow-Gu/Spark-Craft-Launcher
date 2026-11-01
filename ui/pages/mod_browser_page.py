@@ -77,13 +77,13 @@ class VersionComboBox(QComboBox):
         if self._light:
             style = (
                 'QAbstractItemView { background:#fbfbfb; color:#1b1b1b;'
-                ' selection-background-color:#0078d4; selection-color:white;'
+                ' selection-background-color:#88DDDD; selection-color:white;'
                 ' border:1px solid #c8ccd2; }'
             )
         else:
             style = (
                 'QAbstractItemView { background:#20232b; color:#f0f0f0;'
-                ' selection-background-color:#0078d4; selection-color:white;'
+                ' selection-background-color:#88DDDD; selection-color:white;'
                 ' border:1px solid rgba(255,255,255,0.18); }'
             )
         self.view().setStyleSheet(style)
@@ -550,7 +550,7 @@ class ProjectCard(QFrame):
         self.project = project
         self.icon_url = project.icon_url
         self.setObjectName('ProjectCard')
-        self.setStyleSheet('\n            QFrame#ProjectCard {\n                background: rgba(18,20,26,0.58);\n                border: 1px solid rgba(255,255,255,0.16);\n                border-radius: 9px;\n            }\n            QFrame#ProjectCard:hover {\n                background: rgba(28,30,38,0.72);\n                border: 1px solid rgba(122,160,255,0.45);\n            }\n        ')
+        self.setStyleSheet('\n            QFrame#ProjectCard {\n                background: rgba(30,41,41,0.84);\n                border: 1px solid rgba(255,255,255,0.16);\n                border-radius: 9px;\n            }\n            QFrame#ProjectCard:hover {\n                background: rgba(28,30,38,0.72);\n                border: 1px solid rgba(136,221,221,0.45);\n            }\n        ')
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumHeight(104)
         self.setToolTip('点击选择版本并下载')
@@ -689,8 +689,11 @@ class PaginationBar(QWidget):
             btn.setFixedSize(30, 28)
             btn.setCheckable(True)
             btn.setChecked(page == self.current_page)
-            btn.setStyleSheet('\n                QPushButton {\n                    background: rgba(255,255,255,0.06);\n                    color: #ddd; border: none; border-radius: 5px;\n                }\n                QPushButton:hover { background: rgba(255,255,255,0.14); }\n                QPushButton:checked { background: #0078d4; color: white; }\n            ')
-            btn.clicked.connect((lambda checked=False, p=page: self._goto(p)))
+            btn.setStyleSheet('\n                QPushButton {\n                    background: rgba(255,255,255,0.06);\n                    color: #ddd; border: none; border-radius: 5px;\n                }\n                QPushButton:hover { background: rgba(255,255,255,0.14); }\n                QPushButton:checked { background: #88DDDD; color: white; }\n            ')
+            btn.clicked.connect((
+                lambda checked=False, p=page, b=btn:
+                b.setChecked(True) if p == self.current_page else self._goto(p)
+            ))
             self._buttons_layout.addWidget(btn)
 
     def _visible_pages(self):
@@ -737,7 +740,7 @@ class CollapsibleSection(QWidget):
         self._toggle.setText(text)
         self._toggle.setCursor(Qt.PointingHandCursor)
         if highlighted:
-            self._toggle.setStyleSheet('\n                QToolButton {\n                    text-align: left; padding: 8px 10px; border: none;\n                    border-left: 3px solid #0078d4; border-radius: 6px;\n                    background: rgba(0,120,212,0.18); color: #8ec5ff;\n                    font-weight:900; font-size: 13px;\n                }\n                QToolButton:hover { background: rgba(0,120,212,0.28); }\n            ')
+            self._toggle.setStyleSheet('\n                QToolButton {\n                    text-align: left; padding: 8px 10px; border: none;\n                    border-left: 3px solid #88DDDD; border-radius: 6px;\n                    background: rgba(136,221,221,0.18); color: #A8E6E6;\n                    font-weight:900; font-size: 13px;\n                }\n                QToolButton:hover { background: rgba(136,221,221,0.28); }\n            ')
         else:
             self._toggle.setStyleSheet('\n                QToolButton {\n                    text-align: left; padding: 8px 10px; border: none;\n                    border-radius: 6px; background: rgba(255,255,255,0.045);\n                    color: rgba(255,255,255,0.85); font-size: 13px;\n                }\n                QToolButton:hover { background: rgba(255,255,255,0.09); }\n            ')
         outer.addWidget(self._toggle)
@@ -861,9 +864,9 @@ class FileRow(QWidget):
 
     def _apply_style(self):
         if self._selected:
-            self.setStyleSheet('\n                QWidget#FileRow { background: rgba(0,120,212,0.30);\n                          border: 1px solid #3399ff; border-radius: 6px; }\n            ')
+            self.setStyleSheet('\n                QWidget#FileRow { background: rgba(136,221,221,0.30);\n                          border: 1px solid #3399ff; border-radius: 6px; }\n            ')
             return
-        self.setStyleSheet('\n                QWidget#FileRow { background: rgba(18,20,26,0.5);\n                          border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; }\n                QWidget#FileRow:hover { background: rgba(28,30,38,0.72);\n                                border: 1px solid rgba(122,160,255,0.4); }\n            ')
+        self.setStyleSheet('\n                QWidget#FileRow { background: rgba(18,20,26,0.5);\n                          border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; }\n                QWidget#FileRow:hover { background: rgba(28,30,38,0.72);\n                                border: 1px solid rgba(136,221,221,0.4); }\n            ')
 
     def set_selected(self, selected):
         self._selected = bool(selected)
@@ -1055,7 +1058,7 @@ class ProjectFilesDialog(QDialog):
         self.dep_panel = QFrame()
         self.dep_panel.setObjectName('DependencyPanel')
         self.dep_panel.setAttribute(Qt.WA_StyledBackground, True)
-        self.dep_panel.setStyleSheet('\n            QFrame#DependencyPanel { background: rgba(18,20,26,0.58);\n                     border: 1px solid rgba(255,255,255,0.22);\n                     border-radius: 8px; }\n            QFrame#DependencyPanel QLabel { background: transparent; border: none; }\n        ')
+        self.dep_panel.setStyleSheet('\n            QFrame#DependencyPanel { background: rgba(30,41,41,0.84);\n                     border: 1px solid rgba(255,255,255,0.22);\n                     border-radius: 8px; }\n            QFrame#DependencyPanel QLabel { background: transparent; border: none; }\n        ')
         dep_layout = QVBoxLayout(self.dep_panel)
         dep_layout.setContentsMargins(10, 8, 10, 8)
         dep_layout.setSpacing(6)
@@ -1100,7 +1103,7 @@ class ProjectFilesDialog(QDialog):
         btn_row.addStretch(1)
         self.download_btn = QPushButton('下一步')
         self.download_btn.setEnabled(False)
-        self.download_btn.setStyleSheet('\n            QPushButton { background: #0078d4; color: white; border: none;\n                          border-radius: 6px; padding: 8px 22px; }\n            QPushButton:hover { background: #106ebe; }\n            QPushButton:disabled { background: #333; color: #777; }\n        ')
+        self.download_btn.setStyleSheet('\n            QPushButton { background: #88DDDD; color: white; border: none;\n                          border-radius: 6px; padding: 8px 22px; }\n            QPushButton:hover { background: #66BBBB; }\n            QPushButton:disabled { background: #333; color: #777; }\n        ')
         self.download_btn.clicked.connect(self.accept)
         cancel_btn = QPushButton('返回' if embedded else '取消')
         cancel_btn.setStyleSheet('\n            QPushButton { background: #3a3a3a; color: white; border: none;\n                          border-radius: 6px; padding: 8px 22px; }\n            QPushButton:hover { background: #4a4a4a; }\n        ')
@@ -1481,7 +1484,7 @@ class ModBrowserPage(QWidget):
         top.addWidget(refresh_btn)
         layout.addLayout(top)
         filters = QFrame()
-        filters.setStyleSheet('QFrame { background: rgba(18,20,26,0.58); border: 1px solid rgba(255,255,255,0.18); border-radius: 8px; }')
+        filters.setStyleSheet('QFrame { background: rgba(30,41,41,0.84); border: 1px solid rgba(255,255,255,0.18); border-radius: 8px; }')
         grid = QGridLayout(filters)
         grid.setContentsMargins(10, 8, 10, 8)
         grid.setHorizontalSpacing(8)
@@ -1522,7 +1525,7 @@ class ModBrowserPage(QWidget):
         self.mc_combo.view().setMinimumWidth(190)
         self.mc_combo.view().setStyleSheet(
             'QAbstractItemView { background: palette(base); color: palette(text);'
-            ' selection-background-color:#0078d4; selection-color:white;'
+            ' selection-background-color:#88DDDD; selection-color:white;'
             ' border:1px solid palette(mid); }'
         )
         self.mc_combo.setStyleSheet(
@@ -1585,7 +1588,7 @@ class ModBrowserPage(QWidget):
         self.download_bar.setRange(0, 100)
         self.download_bar.reset_value()
         self.download_bar.hide()
-        self.download_bar.setStyleSheet('\n            QProgressBar { background: #333; border-radius: 4px; height: 12px; }\n            QProgressBar::chunk { background: #0078d4; border-radius: 4px; }\n        ')
+        self.download_bar.setStyleSheet('\n            QProgressBar { background: #333; border-radius: 4px; height: 12px; }\n            QProgressBar::chunk { background: #88DDDD; border-radius: 4px; }\n        ')
         layout.addWidget(self.download_bar)
         self._browser_index = self.stack.addWidget(browser)
         self.stack.setCurrentWidget(browser)
@@ -1594,7 +1597,7 @@ class ModBrowserPage(QWidget):
         return '\n            QComboBox {\n                background: rgba(255,255,255,0.06);\n                border: 1px solid rgba(255,255,255,0.12);\n                border-radius: 6px; color: #f0f0f0; padding: 3px 8px;\n            }\n            QComboBox::drop-down { border: none; }\n            QComboBox QAbstractItemView { background: #2a2a2a; color: #f0f0f0; }\n        '
 
     def _primary_style(self):
-        return 'QPushButton { background:#0078d4; color:white; border:none; border-radius:6px; padding:6px 16px; } QPushButton:hover { background:#106ebe; }'
+        return 'QPushButton { background:#88DDDD; color:white; border:none; border-radius:6px; padding:6px 16px; } QPushButton:hover { background:#66BBBB; }'
 
     def _secondary_style(self):
         return 'QPushButton { background:#3a3a3a; color:white; border:none; border-radius:6px; padding:6px 12px; } QPushButton:hover { background:#4a4a4a; }'
@@ -1877,7 +1880,7 @@ class ModBrowserPage(QWidget):
             'QComboBox { background:rgba(255,255,255,0.08); color:#f0f0f0;'
             ' border:1px solid rgba(255,255,255,0.16); border-radius:6px; padding:4px 8px; }'
             'QComboBox QAbstractItemView { background:#2a2d36; color:#f0f0f0;'
-            ' selection-background-color:#0078d4; }'
+            ' selection-background-color:#88DDDD; }'
             'QPushButton { background:#3a3d47; color:#f0f0f0; border:none;'
             ' border-radius:6px; padding:6px 14px; }'
         )

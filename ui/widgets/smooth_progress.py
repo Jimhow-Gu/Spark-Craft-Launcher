@@ -10,7 +10,7 @@ class RoundedProgressBar(QProgressBar):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._fill_color = QColor('#0078d4')
+        self._fill_color = QColor('#88DDDD')
 
     def set_fill_color(self, color):
         value = QColor(color)

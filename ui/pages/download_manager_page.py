@@ -32,7 +32,7 @@ class _TaskCard(QFrame):
         header.addWidget(self.title_label, 1)
         header.addStretch(1)
         self.pct_label = QLabel(f'{float(task.get("percent", 0)):.2f}%')
-        self.pct_label.setStyleSheet('color:#9ccaff; font-size:13px; font-weight:900;')
+        self.pct_label.setStyleSheet('color:#A8E6E6; font-size:13px; font-weight:900;')
         header.addWidget(self.pct_label)
         self.close = QPushButton('✕')
         self.close.setFixedSize(24, 24)
@@ -52,7 +52,7 @@ class _TaskCard(QFrame):
         self.bar.setFixedHeight(7)
         self.bar.setStyleSheet(
             '\n            QProgressBar { background:rgba(255,255,255,0.12); border:none; border-radius:3px; }\n'
-            '            QProgressBar::chunk { background:#0078d4; border-radius:3px; }\n        '
+            '            QProgressBar::chunk { background:#88DDDD; border-radius:3px; }\n        '
         )
         self.bar.valueChanged.connect(self._on_bar_value)
         layout.addWidget(self.bar)
@@ -128,7 +128,7 @@ class _TaskCard(QFrame):
         for (icon, text), step in zip(self._step_rows, steps):
             state = step.get('state', 'pending')
             mark = {'done': '✓', 'active': '●', 'error': '✕'}.get(state, '•')
-            color = {'done': '#4da3ff', 'active': '#4da3ff',
+            color = {'done': '#A8E6E6', 'active': '#A8E6E6',
                      'error': '#ff6b6b'}.get(state, 'rgba(255,255,255,0.35)')
             icon.setText(mark)
             icon.setStyleSheet(f'color:{color}; font-size:15px; font-weight:900;')
@@ -179,7 +179,7 @@ class DownloadManagerPage(QWidget):
         stats_layout.setSpacing(6)
         total_title = QLabel('总进度')
         total_title.setAlignment(Qt.AlignCenter)
-        total_title.setStyleSheet('color:#9ccaff; font-size:14px;')
+        total_title.setStyleSheet('color:#A8E6E6; font-size:14px;')
         stats_layout.addWidget(total_title)
         self.total_label = QLabel('0.00 %')
         self.total_label.setAlignment(Qt.AlignCenter)
@@ -188,7 +188,7 @@ class DownloadManagerPage(QWidget):
         stats_layout.addSpacing(16)
         speed_title = QLabel('下载速度')
         speed_title.setAlignment(Qt.AlignCenter)
-        speed_title.setStyleSheet('color:#9ccaff; font-size:14px;')
+        speed_title.setStyleSheet('color:#A8E6E6; font-size:14px;')
         stats_layout.addWidget(speed_title)
         self.speed_label = QLabel('0 B/s')
         self.speed_label.setAlignment(Qt.AlignCenter)
@@ -197,7 +197,7 @@ class DownloadManagerPage(QWidget):
         stats_layout.addSpacing(16)
         remaining_title = QLabel('剩余文件')
         remaining_title.setAlignment(Qt.AlignCenter)
-        remaining_title.setStyleSheet('color:#9ccaff; font-size:14px;')
+        remaining_title.setStyleSheet('color:#A8E6E6; font-size:14px;')
         stats_layout.addWidget(remaining_title)
         self.remaining_label = QLabel('0')
         self.remaining_label.setAlignment(Qt.AlignCenter)

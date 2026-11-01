@@ -60,7 +60,7 @@ def _draw_microsoft(painter):
 
 
 def _draw_thirdparty(painter):
-    pen = QPen(QColor('#4da3ff'), 1.5)
+    pen = QPen(QColor('#66BBBB'), 1.5)
     pen.setJoinStyle(Qt.RoundJoin)
     painter.setPen(pen)
     painter.setBrush(Qt.NoBrush)

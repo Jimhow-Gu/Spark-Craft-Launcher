@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import (QColor, QIcon, QPainterPath)
 from PySide6.QtWidgets import (QDialog, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget)
 from core.app_font import ui_font
+from ui.design import ON_ACCENT
 
 class _DialogHeader(QWidget):
     def __init__(self, dialog, title, parent=None, title_color=None):
@@ -47,7 +48,7 @@ class _DialogHeader(QWidget):
 
 
 class DarkMessageDialog(QDialog):
-    COLORS = {'error': '#c42b1c', 'warning': '#d98b00', 'info': '#0078d4'}
+    COLORS = {'error': '#c42b1c', 'warning': '#d98b00', 'info': '#88DDDD'}
     MARKS = {'error': '×', 'warning': '!', 'info': 'i'}
     def __init__(self, parent, title, text, level='error'):
         super().__init__(parent)
@@ -81,7 +82,8 @@ class DarkMessageDialog(QDialog):
         icon = QLabel(self.MARKS[level])
         icon.setFixedSize(46, 46)
         icon.setAlignment(Qt.AlignCenter)
-        icon.setStyleSheet(f'background:{self.COLORS[level]}; color:white; border-radius:23px; font-size:25px; font-weight:900;')
+        icon_fg = ON_ACCENT if QColor(self.COLORS[level]).lightness() > 150 else 'white'
+        icon.setStyleSheet(f'background:{self.COLORS[level]}; color:{icon_fg}; border-radius:23px; font-size:25px; font-weight:900;')
         body.addWidget(icon, 0, Qt.AlignTop)
         message = QLabel(str(text or ''))
         message.setWordWrap(True)
@@ -159,7 +161,7 @@ class DarkQuestionDialog(QDialog):
 
     ''
     ''
-    def __init__(self, parent, title, text, buttons=None, actions=None, icon_text='?', icon_color='#0078d4', title_color=None):
+    def __init__(self, parent, title, text, buttons=None, actions=None, icon_text='?', icon_color='#88DDDD', title_color=None):
         super().__init__(parent)
         from PySide6.QtWidgets import QMessageBox
         self.choice = None if actions else QMessageBox.No
@@ -195,7 +197,8 @@ class DarkQuestionDialog(QDialog):
         icon = QLabel(str(icon_text))
         icon.setFixedSize(46, 46)
         icon.setAlignment(Qt.AlignCenter)
-        icon.setStyleSheet(f'background:{icon_color}; color:white; border-radius:23px; font-size:25px; font-weight:900;')
+        icon_fg = ON_ACCENT if QColor(icon_color).lightness() > 150 else 'white'
+        icon.setStyleSheet(f'background:{icon_color}; color:{icon_fg}; border-radius:23px; font-size:25px; font-weight:900;')
         body.addWidget(icon, 0, Qt.AlignTop)
         message = QLabel(str(text or ''))
         message.setWordWrap(True)
@@ -234,7 +237,7 @@ class DarkQuestionDialog(QDialog):
         button = QPushButton(text)
         button.setMinimumWidth(88)
         button.setMinimumHeight(32)
-        button.setStyleSheet('QPushButton { background:#0078d4; color:white; border:none; border-radius:6px; }QPushButton:hover { background:#106ebe; }' if primary else 'QPushButton { background:#3a3a3a; color:#f0f0f0; border:none; border-radius:6px; }QPushButton:hover { background:#4a4a4a; }')
+        button.setStyleSheet('QPushButton { background:#88DDDD; color:white; border:none; border-radius:6px; }QPushButton:hover { background:#66BBBB; }' if primary else 'QPushButton { background:#3a3a3a; color:#f0f0f0; border:none; border-radius:6px; }QPushButton:hover { background:#4a4a4a; }')
         button.clicked.connect((lambda: self._choose(value)))
         return button
 

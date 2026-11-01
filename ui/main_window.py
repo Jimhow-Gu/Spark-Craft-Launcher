@@ -2,6 +2,7 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, Q
 from PySide6.QtCore import (Qt, QPoint, QPropertyAnimation, QVariantAnimation, QEasingCurve, QTimer, QSize, QEvent, QRect)
 from PySide6.QtGui import QColor, QCursor, QFont, QPixmap
 import os
+import time
 from pathlib import Path
 from core.app_font import ui_font
 from core.background import get_settings
@@ -101,7 +102,7 @@ class MainWindow(QMainWindow):
             0, 0, self._sidebar_collapsed_width, self.central.height()
         )
         left_layout = QVBoxLayout(self.left_panel)
-        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setContentsMargins(0, 0, 0, 4)
         left_layout.setSpacing(0)
         self._sidebar_header = QWidget()
         self._sidebar_header.setFixedHeight(56)
@@ -162,8 +163,11 @@ class MainWindow(QMainWindow):
         self.media_row = media_row
         left_layout.addWidget(media_row)
         self.status_label = QLabel(f'V{CURRENT_VERSION}')
-        self.status_label.setStyleSheet('color:#a8a8a8; font-size:10px; font-weight:500; background:transparent;')
+        self.status_label.setStyleSheet('color:#A8C8C8; font-weight:500; background:transparent;')
+        self.status_label.setFont(ui_font(9))
         self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setFixedWidth(self._sidebar_collapsed_width)
+        self.status_label.setFixedHeight(14)
         self.status_label.setToolTip(
             f'{BUILD_LABEL}' + chr(10) +
             f'Release 构建号：{RELEASE_BUILD}' + chr(10) +
@@ -297,23 +301,46 @@ class MainWindow(QMainWindow):
         animation.setStartValue(current)
         animation.setEndValue(int(target_width))
         animation.setEasingCurve(QEasingCurve.OutCubic)
-        animation.valueChanged.connect(
-            lambda value: (
-                self.sidebar_spacer.setFixedWidth(int(value)),
-                self.body.update(),
-                self.left_panel.update(),
-            )
-        )
+        last_frame = [0.0]
+        final_width = int(target_width)
+
+        def apply_width(value):
+            now = time.monotonic()
+            # 页面内容重排比侧栏绘制贵得多；内容位移限制在约 45fps，
+            # 侧栏本身仍按 60fps 动画，避免跟随重排拖慢整个展开过程。
+            if int(value) != final_width and now - last_frame[0] < 1.0 / 45.0:
+                return
+            last_frame[0] = now
+            self.sidebar_spacer.setFixedWidth(int(value))
+            self.body.update()
+            self.left_panel.update()
+
+        def finish_width():
+            self.sidebar_spacer.setFixedWidth(final_width)
+            self.body.update()
+            self.left_panel.update()
+
+        animation.valueChanged.connect(apply_width)
+        animation.finished.connect(finish_width)
         self._sidebar_spacer_anim = animation
         animation.start()
 
     def _set_version_label(self, expanded: bool, animate: bool=True):
-        self.status_label.setText(
-            BUILD_LABEL if expanded else f'V{CURRENT_VERSION}'
+        self.status_label.setFixedWidth(
+            self._sidebar_expanded_width if expanded
+            else self._sidebar_collapsed_width
         )
+        if expanded:
+            # 详细版本保持最初的完整构建标签格式。
+            self.status_label.setFont(ui_font(7.5))
+            self.status_label.setText(BUILD_LABEL)
+        else:
+            self.status_label.setFont(ui_font(9))
+            self.status_label.setText(f'V{CURRENT_VERSION}')
 
     def _set_sidebar_expanded(self, expanded: bool, animate: bool=True):
         expanded = bool(expanded)
+        animate = bool(animate and self.isVisible())
         if self._sidebar_anim is not None:
             try:
                 self._sidebar_anim.stop()
@@ -329,28 +356,31 @@ class MainWindow(QMainWindow):
             self._sidebar_expanded_width
             if expanded else self._sidebar_collapsed_width
         )
+        # 动画期间冻结背景视频帧；否则每帧都会重绘视频，侧栏动画明显掉帧。
+        try:
+            self.central.freeze_video_updates(animate)
+        except AttributeError:
+            pass
         self._animate_sidebar_spacer(
-            target_width, animate and self.isVisible(),
+            target_width, animate,
             190 if expanded else 160,
         )
         self._animate_media_buttons(
             target_width,
             190 if expanded else 160,
-            animate and self.isVisible(),
+            animate,
         )
         self.nav_list.set_collapsed(not expanded)
-        self._set_version_label(
-            expanded, animate and self.isVisible()
-        )
+        self._set_version_label(expanded, animate)
         self.account_card.set_compact(
             not expanded, self._sidebar_expanded_width - 20,
-            animate and self.isVisible(),
+            animate,
         )
         # 侧栏移动过程中先隐藏标题，等面板完全停稳后再淡入，避免拖影。
         self._set_sidebar_brand_visible(False, animate=False)
         if expanded:
             self.title_bar.set_title_visible(False, animate=False)
-        if not animate or not self.isVisible():
+        if not animate:
             self.left_panel.setGeometry(
                 0, 0, target_width, self.central.height()
             )
@@ -395,6 +425,10 @@ class MainWindow(QMainWindow):
 
     def _on_sidebar_anim_finished(self, expanded: bool):
         self._sidebar_anim = None
+        try:
+            self.central.freeze_video_updates(False)
+        except AttributeError:
+            pass
         target_width = (
             self._sidebar_expanded_width
             if expanded else self._sidebar_collapsed_width
@@ -489,6 +523,10 @@ class MainWindow(QMainWindow):
             if self._sidebar_anim is not None:
                 self._sidebar_anim.stop()
                 self._sidebar_anim = None
+                try:
+                    self.central.freeze_video_updates(False)
+                except AttributeError:
+                    pass
             width = (
                 self._sidebar_expanded_width
                 if self._sidebar_expanded
@@ -1107,7 +1145,7 @@ class MainWindow(QMainWindow):
         overlay = QWidget(self.page_stack)
         overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         overlay.setAttribute(Qt.WA_StyledBackground, True)
-        overlay.setStyleSheet('background: rgba(15,17,23,225);')
+        overlay.setStyleSheet('background: rgba(18,23,23,225);')
         overlay.setGeometry(self.page_stack.rect())
         overlay.show()
         overlay.raise_()

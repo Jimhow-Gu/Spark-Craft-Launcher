@@ -38,7 +38,7 @@ class CollapsibleSection(QWidget):
         self.card.setObjectName('CollapsibleCard')
         self.card.setAttribute(Qt.WA_StyledBackground, True)
         self.card.setStyleSheet(
-            'QFrame#CollapsibleCard { background:rgba(18,20,26,0.58);'
+            'QFrame#CollapsibleCard { background:rgba(30,41,41,0.84);'
             ' border:1px solid rgba(255,255,255,0.22); border-radius:12px; }'
             'QFrame#CollapsibleCard QLabel { background:transparent; border:none; }'
             'QFrame#CollapsibleHeader { background:transparent; border:none; border-radius:12px; }'

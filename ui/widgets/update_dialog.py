@@ -27,7 +27,7 @@ class UpdateDialog(QDialog):
             'QDialog { background:#1f2229; }'
             'QLabel { color:#f0f0f0; background:transparent; }'
             'QProgressBar { background:rgba(255,255,255,0.12); border:none; border-radius:6px; height:12px; }'
-            'QProgressBar::chunk { background:#0078d4; border-radius:6px; }'
+            'QProgressBar::chunk { background:#88DDDD; border-radius:6px; }'
             'QPushButton { background:#3a3d47; color:#f0f0f0; border:none; border-radius:7px; padding:7px 18px; }'
             'QPushButton:hover { background:#4a4d57; }'
             'QPushButton:disabled { background:#30333b; color:#858a94; }'
@@ -83,7 +83,7 @@ class UpdateDialog(QDialog):
         self.later_btn = QPushButton('稍后更新')
         self.later_btn.clicked.connect(self.reject)
         self.download_btn = QPushButton('下载更新')
-        self.download_btn.setStyleSheet('QPushButton { background:#0078d4; color:white; }')
+        self.download_btn.setStyleSheet('QPushButton { background:#88DDDD; color:white; }')
         self.download_btn.clicked.connect(self._on_primary_clicked)
         row.addWidget(self.later_btn)
         row.addWidget(self.download_btn)
@@ -167,7 +167,7 @@ class UpdateDialog(QDialog):
         self.progress.hide()
         self.download_btn.setEnabled(True)
         self.download_btn.setText('重试下载')
-        self.download_btn.setStyleSheet('QPushButton { background:#0078d4; color:white; }')
+        self.download_btn.setStyleSheet('QPushButton { background:#88DDDD; color:white; }')
         self.later_btn.setText('关闭')
 
     def _on_finished(self):

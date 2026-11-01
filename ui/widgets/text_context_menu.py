@@ -23,7 +23,7 @@ class TextContextMenuFilter(QObject):
             border-radius: 5px;
         }
         QMenu::item:selected {
-            background: #0078d4;
+            background: #88DDDD;
             color: white;
         }
         QMenu::item:disabled {

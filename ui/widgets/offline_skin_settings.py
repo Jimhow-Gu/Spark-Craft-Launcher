@@ -145,7 +145,7 @@ class OfflineSkinSettings(QWidget):
         self.skin_preview.setFixedSize(80, 80)
         self.skin_preview.setAlignment(Qt.AlignCenter)
         self.skin_preview.setStyleSheet(
-            'background:rgba(10,12,18,0.45);'
+            'background:rgba(30,41,41,0.62);'
             ' border:1px solid rgba(255,255,255,0.16);'
             ' border-radius:8px; color:#777;'
         )
