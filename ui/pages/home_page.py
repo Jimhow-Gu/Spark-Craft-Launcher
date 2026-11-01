@@ -1292,7 +1292,7 @@ class HomePage(QWidget):
         pre_launch = self.launch_mgr.get_pre_launch_command(version_id)
         window_title = getattr(self.launch_mgr, 'last_window_title', '') or ''
         worker = LaunchWorker(command, self.config.get_mc_dir(), pre_launch, window_title)
-        info = {'version_id': version_id, 'nickname': nickname, 'log_path': log_path, 'log_handle': log_handle, 'lines': [], 'user_stopped': False, 'started': False, 'pid': None}
+        info = {'version_id': version_id, 'nickname': nickname, 'log_path': log_path, 'log_handle': log_handle, 'lines': [], 'user_stopped': False, 'started': False, 'pid': None, 'window_seen': False, 'window_missing': False}
         self._instance_info[worker] = info
         self._instances.append(worker)
         self._launch_worker = worker
@@ -1302,6 +1302,7 @@ class HomePage(QWidget):
         worker.process_exited.connect((lambda code, w=worker: self._on_process_exited(w, code)))
         worker.output_received.connect((lambda line, w=worker: self._append_log(line, w)))
         worker.window_ready.connect((lambda w=worker: self._on_game_window_ready(w)))
+        worker.window_missing.connect((lambda w=worker: self._on_game_window_missing(w)))
         worker.finished.connect(worker.deleteLater)
         worker.start()
 
@@ -1359,38 +1360,59 @@ class HomePage(QWidget):
                 info['pid'] = proc.pid
         except Exception:
             pass
-        # 进程已成功启动即视为启动成功：恢复按钮，允许继续启动其他版本
+        # 进程创建成功不等于游戏已经出现。先保持启动中状态，
+        # 等真正检测到窗口后再提示成功，避免“有进程但没界面”被误报为已启动。
         if self._starting_worker is worker:
-            self._starting_worker = None
-        self.action_btn.set_idle('启动游戏')
-        self.status_label.setText(f'{info["nickname"]} 已启动')
-        self._append_log(f'{info["nickname"]} 进程已启动', worker)
-        from ui.widgets.toast import show_toast
-        show_toast(f'{info["nickname"]} 启动成功', 'success', self)
+            self.action_btn.set_working('等待游戏窗口...', 1.0, animate=False, show_percent=False, starting=True)
+        self.status_label.setText(f'{info["nickname"]} 进程已启动，正在等待游戏窗口...')
+        self._append_log(f'{info["nickname"]} 进程已启动，正在等待游戏窗口', worker)
         try:
             set_process_priority(info.get('pid'), str(self.config.get('game_process_priority', 'normal') or 'normal'))
         except Exception:
             pass
         self._add_running_row(worker)
-        self._apply_launcher_visibility()
 
     def _on_game_window_ready(self, worker):
-        if self._starting_worker is not worker:
+        info = self._instance_info.get(worker)
+        if not info:
             return
-        try:
-            if not worker.isRunning():
-                return
-        except RuntimeError:
-            return
-        self._starting_worker = None
-        self.action_btn.set_idle('启动游戏')
-        info = self._instance_info.get(worker) or {}
+        info['window_seen'] = True
+        info['window_missing'] = False
         nickname = info.get('nickname') or ''
+        is_current = self._starting_worker is worker
+        if is_current:
+            self._starting_worker = None
+            self.action_btn.set_idle('启动游戏')
+        # 慢整合包可能超过 30 秒才出现窗口；此时没有其他启动任务时仍要补报成功。
+        can_update = is_current or self._starting_worker is None
         if nickname:
-            self.status_label.setText(f'{nickname} 已启动')
+            self._append_log(f'{nickname} 游戏窗口已出现', worker)
+            if can_update:
+                self.status_label.setText(f'{nickname} 已启动')
+                from ui.widgets.toast import show_toast
+                show_toast(f'{nickname} 启动成功', 'success', self)
+                self._apply_launcher_visibility()
+
+    def _on_game_window_missing(self, worker):
+        info = self._instance_info.get(worker)
+        if not info:
+            return
+        info['window_missing'] = True
+        nickname = info.get('nickname') or ''
+        is_current = self._starting_worker is worker
+        if is_current:
+            self._starting_worker = None
+            self.action_btn.set_idle('启动游戏')
+        self._append_log(
+            f'{nickname} 进程已运行较长时间但未检测到游戏窗口，请查看日志或结束进程后重试',
+            worker,
+        )
+        if is_current:
+            self.status_label.setText(
+                f'{nickname} 进程已启动，但尚未检测到游戏窗口；可能仍在加载，可结束进程后重试'
+            )
             from ui.widgets.toast import show_toast
-            show_toast(f'{nickname} 启动成功', 'success', self)
-        self._apply_launcher_visibility()
+            show_toast(f'{nickname} 进程已运行，但游戏窗口未出现', 'warning', self)
 
     def _poll_game_window(self, worker):
         if self._starting_worker is not worker:
@@ -1433,18 +1455,24 @@ class HomePage(QWidget):
             return
         nickname = info['nickname']
         user_stopped = info.get('user_stopped', False)
-        started = info.get('started', False)
+        window_seen = bool(info.get('window_seen'))
         if self._starting_worker is worker:
             self._starting_worker = None
         log_path = info.get('log_path')
         lines = list(info.get('lines', []))
-        self.action_btn.set_idle('启动游戏')
+        if self._starting_worker is None:
+            self.action_btn.set_idle('启动游戏')
         self._finalize_instance(worker)
         if exit_code == 0:
-            self.status_label.setText(f'{nickname} 已正常退出')
-            self._append_log(f'{nickname} 进程退出，退出码：0')
             from ui.widgets.toast import show_toast
-            show_toast(f'{nickname} 已正常退出', 'success', self)
+            if not window_seen and not user_stopped:
+                self.status_label.setText(f'{nickname} 进程已退出（未检测到游戏窗口）')
+                self._append_log(f'{nickname} 进程退出，退出码：0，未检测到游戏窗口', worker)
+                show_toast(f'{nickname} 进程已退出，未检测到游戏窗口', 'warning', self)
+            else:
+                self.status_label.setText(f'{nickname} 已正常退出')
+                self._append_log(f'{nickname} 进程退出，退出码：0')
+                show_toast(f'{nickname} 已正常退出', 'success', self)
             self._restore_launcher_after_game()
         elif user_stopped:
             self.status_label.setText(f'{nickname} 已被终止')

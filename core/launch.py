@@ -1189,23 +1189,25 @@ def _process_tree_pids(pid: int) -> set:
     return pids
 
 
-def _game_window_handle(pid: int):
-    """按进程树查找可见游戏窗口；兼容 Java 启动代理子进程和低版本无标题 LWJGL 窗口。"""
+_GAME_WINDOW_CLASSES = ('lwjgl', 'glfw30', 'glfw', 'sunawtframe', 'minecraft', 'sdl_app')
+_BLOCKED_WINDOW_CLASSES = ('ime', 'msctfime ui', 'nvoglpbuffer', 'tooltips_class32')
+_GAME_TITLE_HINTS = ('minecraft', 'forge', 'fabric', 'neoforge', 'quilt', 'spark craft')
+
+
+def _process_windows(pid: int) -> list[dict]:
+    '''枚举进程树的所有顶层窗口（包含隐藏/最小化窗口）。'''
 
     if sys.platform != 'win32' or not pid:
-        return 0
+        return []
     try:
         import ctypes
         from ctypes import wintypes
         user32 = ctypes.windll.user32
-        best = {'hwnd': 0, 'area': 0, 'pid': 0}
-        known_classes = ('lwjgl', 'glfw30', 'glfw', 'sunawtframe', 'minecraft')
         pids = _process_tree_pids(pid)
+        windows = []
         EnumProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
         def callback(hwnd, _lparam):
-            if not user32.IsWindowVisible(hwnd):
-                return True
             proc_id = wintypes.DWORD()
             user32.GetWindowThreadProcessId(hwnd, ctypes.byref(proc_id))
             if proc_id.value not in pids:
@@ -1213,27 +1215,115 @@ def _game_window_handle(pid: int):
             rect = wintypes.RECT()
             if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
                 return True
-            width = rect.right - rect.left
-            height = rect.bottom - rect.top
-            if width < 200 or height < 120:
-                return True
             class_buf = ctypes.create_unicode_buffer(256)
             user32.GetClassNameW(hwnd, class_buf, 256)
-            class_name = (class_buf.value or '').strip().lower()
             title_len = user32.GetWindowTextLengthW(hwnd)
-            if class_name not in known_classes and title_len <= 0:
-                return True
-            area = width * height
-            if area > best['area']:
-                best['hwnd'] = hwnd
-                best['area'] = area
-                best['pid'] = int(proc_id.value)
+            title_buf = ctypes.create_unicode_buffer(title_len + 2)
+            user32.GetWindowTextW(hwnd, title_buf, title_len + 2)
+            windows.append({
+                'hwnd': int(hwnd),
+                'pid': int(proc_id.value),
+                'visible': bool(user32.IsWindowVisible(hwnd)),
+                'iconic': bool(user32.IsIconic(hwnd)),
+                'class_name': (class_buf.value or '').strip().lower(),
+                'title': title_buf.value or '',
+                'width': rect.right - rect.left,
+                'height': rect.bottom - rect.top,
+            })
             return True
 
         user32.EnumWindows(EnumProc(callback), 0)
-        return int(best['hwnd'] or 0)
+        return windows
     except Exception:
+        return []
+
+
+def _window_looks_like_game(window: dict) -> bool:
+    '''过滤掉 IME、OpenGL 辅助窗口等，避免把隐藏工具窗口当成游戏窗口。'''
+
+    width = int(window.get('width') or 0)
+    height = int(window.get('height') or 0)
+    if width < 200 or height < 120:
+        return False
+    title = str(window.get('title') or '').strip().lower()
+    class_name = str(window.get('class_name') or '').strip().lower()
+    if not title and class_name not in _GAME_WINDOW_CLASSES:
+        return False
+    if 'hidden utility window' in title:
+        return False
+    if class_name in _BLOCKED_WINDOW_CLASSES:
+        return False
+    if class_name in _GAME_WINDOW_CLASSES:
+        return True
+    if any(hint in title for hint in _GAME_TITLE_HINTS):
+        return True
+    # Java 的报错/崩溃弹窗也可能是隐藏的，需要拉出来让用户看到。
+    if class_name in ('sunawtdialog', '#32770') and any(
+        hint in title for hint in ('java', 'minecraft', 'error', '错误')
+    ):
+        return True
+    return False
+
+
+def _game_window_handle(pid: int):
+    """按进程树查找可见游戏窗口；兼容 Java 启动代理子进程和低版本无标题 LWJGL 窗口。"""
+
+    best = None
+    for window in _process_windows(pid):
+        if not window.get('visible') or window.get('iconic'):
+            continue
+        if not _window_looks_like_game(window):
+            continue
+        if best is None or window['width'] * window['height'] > best['width'] * best['height']:
+            best = window
+    return int(best['hwnd']) if best else 0
+
+
+def _reveal_hidden_game_window(pid: int) -> int:
+    '''如果游戏窗口被隐藏/最小化，恢复到桌面并置前；返回可见窗口句柄。'''
+
+    if sys.platform != 'win32' or not pid:
         return 0
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        SW_SHOW = 5
+        SW_RESTORE = 9
+        candidates = [
+            window for window in _process_windows(pid)
+            if _window_looks_like_game(window)
+            and (not window.get('visible') or window.get('iconic'))
+        ]
+        candidates.sort(key=lambda item: item['width'] * item['height'], reverse=True)
+        for window in candidates:
+            hwnd = window['hwnd']
+            user32.ShowWindow(hwnd, SW_RESTORE if window.get('iconic') else SW_SHOW)
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+            if user32.IsWindowVisible(hwnd):
+                logger.info(f'检测到隐藏的游戏窗口并已恢复: hwnd={hwnd}')
+                return int(hwnd)
+    except Exception as exc:
+        logger.debug(f'恢复隐藏游戏窗口失败: {exc}')
+    return 0
+
+
+def _activate_game_window(pid: int) -> bool:
+    '''把已经出现的游戏窗口提到前台，避免窗口被启动器/其他程序遮住。'''
+
+    hwnd = _game_window_handle(pid)
+    if not hwnd:
+        return False
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, 9)
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+        return True
+    except Exception:
+        return False
 
 
 def _center_game_window(pid: int, move: bool=True):
@@ -1288,9 +1378,12 @@ def _set_window_title_for_pid(pid: int, title: str) -> bool:
 class LaunchWorker(QThread):
     launch_success = Signal()
     window_ready = Signal()
+    window_missing = Signal()
     launch_error = Signal(str)
     process_exited = Signal(int)
     output_received = Signal(str)
+    NO_WINDOW_WARN_SECONDS = 30.0
+
     def __init__(self, command: list[str], mc_dir: str, pre_launch_command: str='', window_title: str=''):
         super().__init__()
         self.command = command
@@ -1303,6 +1396,8 @@ class LaunchWorker(QThread):
         self._stop_lock = threading.Lock()
         self._exited_emitted = False
         self._window_ready_emitted = False
+        self._window_missing_emitted = False
+        self._watch_done = threading.Event()
         for i, arg in enumerate(command):
             if arg == '--version' and i + 1 < len(command):
                 self.version_id = command[i + 1]
@@ -1366,13 +1461,20 @@ class LaunchWorker(QThread):
                 return
             self._stop_flag = True
         proc = self._process
-        if proc is not None and proc.poll() is None:
+        if proc is not None:
             try:
                 pid = proc.pid
                 if sys.platform == 'win32':
-                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)], capture_output=True, check=False, creationflags=subprocess.CREATE_NO_WINDOW)
-                    proc.wait(timeout=3)
-                else:
+                    # Java 启动包装器可能把真正游戏放在子进程里；
+                    # 根进程已退出时也要继续清理仍存活的子进程。
+                    pids = _process_tree_pids(pid)
+                    if proc.poll() is not None:
+                        pids.discard(pid)
+                    for child_pid in sorted(pids, reverse=True):
+                        subprocess.run(['taskkill', '/F', '/PID', str(child_pid)], capture_output=True, check=False, creationflags=subprocess.CREATE_NO_WINDOW)
+                    if proc.poll() is None:
+                        proc.wait(timeout=3)
+                elif proc.poll() is None:
                     proc.terminate()
                     proc.wait(timeout=3)
             except Exception as e:
@@ -1384,8 +1486,33 @@ class LaunchWorker(QThread):
                 self.process_exited.emit(exit_code)
             return
 
-    def _post_launch_window_loop(self, pid: int):
-        '''游戏窗口出现后：按设置改标题，并把窗口居中（连续多次位置不变后停止）。'''
+    def _read_output(self, proc):
+        '''持续读取游戏 stdout；读取线程与进程退出检测解耦，避免管道被子进程占用时永远收不到退出。'''
+
+        stream = getattr(proc, 'stdout', None)
+        if stream is None:
+            return
+        try:
+            for raw_line in iter(stream.readline, ''):
+                if self._stop_flag:
+                    break
+                line = raw_line.rstrip()
+                if not line:
+                    continue
+                try:
+                    self.output_received.emit(line)
+                except RuntimeError:
+                    break
+        except (ValueError, OSError):
+            pass
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    def _post_launch_window_loop(self, pid: int, proc):
+        '''等待游戏窗口；恢复被隐藏/最小化的窗口，并在窗口出现后置前、居中、改标题。'''
 
         if sys.platform != 'win32':
             return
@@ -1393,22 +1520,44 @@ class LaunchWorker(QThread):
             center_enabled = bool(ConfigManager().get('game_window_center', True))
         except Exception:
             center_enabled = True
+        started = time.monotonic()
         title_done = not self.window_title
+        activated = False
         last_rect = None
         stable = 0
-        for _ in range(120):
-            if self._stop_flag:
+        for _ in range(240):
+            if self._stop_flag or self._watch_done.is_set():
                 return
+            if proc.poll() is not None and len(_process_tree_pids(pid)) <= 1:
+                return
+            elapsed = time.monotonic() - started
+            hwnd = _game_window_handle(pid)
+            if not hwnd and elapsed >= 5.0:
+                # 有些显卡驱动/模组会把游戏窗口创建成隐藏或最小化状态，
+                # 此时进程正常但用户看不到界面，需要主动恢复。
+                _reveal_hidden_game_window(pid)
+                hwnd = _game_window_handle(pid)
+            if not hwnd:
+                if not self._window_missing_emitted and elapsed >= self.NO_WINDOW_WARN_SECONDS:
+                    self._window_missing_emitted = True
+                    logger.warning(f'游戏进程已运行 {int(elapsed)} 秒，但仍未检测到游戏窗口')
+                    self.window_missing.emit()
+                time.sleep(0.5)
+                continue
             if not title_done and _set_window_title_for_pid(pid, self.window_title):
                 logger.info(f'已修改游戏窗口标题: {self.window_title}')
                 title_done = True
+            if not self._window_ready_emitted:
+                self._window_ready_emitted = True
+                logger.info('已检测到游戏窗口')
+                self.window_ready.emit()
+            if not activated:
+                _activate_game_window(pid)
+                activated = True
             ok, rect = _center_game_window(pid, move=center_enabled)
             if not ok:
                 time.sleep(0.5)
                 continue
-            if not self._window_ready_emitted:
-                self._window_ready_emitted = True
-                self.window_ready.emit()
             if not center_enabled:
                 return
             if rect == last_rect:
@@ -1444,38 +1593,39 @@ class LaunchWorker(QThread):
                     self.process_exited.emit(-2)
                 return
         proc = None
+        reader = None
         try:
             try:
-                startupinfo = None
-                if sys.platform == 'win32':
-                    startupinfo = subprocess.STARTUPINFO()
-                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                    startupinfo.wShowWindow = subprocess.SW_HIDE
-                proc = subprocess.Popen(self.command, cwd=self.mc_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, encoding='utf-8', errors='replace', startupinfo=startupinfo, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
+                # 不再使用 STARTUPINFO/SW_HIDE：部分显卡驱动或 Java 弹窗会继承隐藏状态，
+                # 导致进程存在但游戏窗口永远不可见。CREATE_NO_WINDOW 已足够隐藏 java 控制台。
+                creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                proc = subprocess.Popen(self.command, cwd=self.mc_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, encoding='utf-8', errors='replace', creationflags=creationflags)
                 self._process = proc
                 self.launch_success.emit()
-                threading.Thread(target=self._post_launch_window_loop, args=(proc.pid,), daemon=True).start()
-                if proc.stdout is not None:
-                    try:
-                        for raw_line in iter(proc.stdout.readline, ''):
-                            if self._stop_flag:
-                                break
-                            line = raw_line.rstrip()
-                            if line:
-                                self.output_received.emit(line)
-                    except (ValueError, OSError):
-                        pass
-                if not self._exited_emitted:
-                    if proc is not None:
-                        exit_code = proc.poll()
-                        if exit_code is None:
-                            exit_code = proc.wait()
-                    else:
-                        exit_code = -1
-                    with self._stop_lock:
-                        if not self._exited_emitted:
-                            self._exited_emitted = True
-                            self.process_exited.emit(exit_code)
+                reader = threading.Thread(target=self._read_output, args=(proc,), daemon=True)
+                reader.start()
+                threading.Thread(target=self._post_launch_window_loop, args=(proc.pid, proc), daemon=True).start()
+                # 以进程真正退出为准，而不是以 stdout EOF 为准：
+                # 游戏若派生了继承管道的子进程，旧逻辑会永远卡在 readline，界面一直显示运行中。
+                exit_code = proc.wait()
+                # 少数 Java 启动包装器会先退出、把游戏留在子进程里。
+                # 先给子进程一点时间创建窗口；窗口出现后一直跟踪到窗口关闭。
+                if len(_process_tree_pids(proc.pid)) > 1:
+                    grace_deadline = time.monotonic() + 5.0
+                    while not self._stop_flag:
+                        if _game_window_handle(proc.pid):
+                            while not self._stop_flag and _game_window_handle(proc.pid):
+                                time.sleep(0.5)
+                            break
+                        if time.monotonic() >= grace_deadline:
+                            break
+                        time.sleep(0.5)
+                self._watch_done.set()
+                reader.join(timeout=1.0)
+                with self._stop_lock:
+                    if not self._exited_emitted:
+                        self._exited_emitted = True
+                        self.process_exited.emit(exit_code)
             except FileNotFoundError:
                 if not self._exited_emitted:
                     self._exited_emitted = True
@@ -1490,6 +1640,7 @@ class LaunchWorker(QThread):
                     self._exited_emitted = True
                     self.process_exited.emit(-1)
         finally:
+            self._watch_done.set()
             if proc is not None and proc.poll() is None:
                 try:
                     proc.kill()
