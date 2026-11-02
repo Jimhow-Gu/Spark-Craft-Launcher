@@ -72,7 +72,7 @@ def _version_tuple(text) -> tuple:
     return tuple(int(part) for part in match.groups() if part)
 
 class LoadVersionsWorker(QThread):
-    finished = Signal(dict)
+    loaded = Signal(dict)
     partial = Signal(dict)
     def __init__(self, version_id, load_optional=True, load_optifabric=True):
         super().__init__()
@@ -281,7 +281,7 @@ class LoadVersionsWorker(QThread):
         executor.shutdown(wait=False, cancel_futures=True)
         result['optifine_objects'] = dict(self._optifine_objects)
         if not self._cancelled:
-            self.finished.emit(result)
+            self.loaded.emit(result)
 
 
 class VersionDetailPage(QWidget):
@@ -320,7 +320,7 @@ class VersionDetailPage(QWidget):
         self._loading_watchdog.timeout.connect(self._on_loading_watchdog)
         self._loading_watchdog.start()
         self._load_worker = LoadVersionsWorker(version_id)
-        self._load_worker.finished.connect(self._on_versions_loaded)
+        self._load_worker.loaded.connect(self._on_versions_loaded)
         self._load_worker.partial.connect(self._on_partial_versions_loaded)
         self._load_worker.start()
         _register_cleanup()

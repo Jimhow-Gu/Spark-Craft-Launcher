@@ -71,7 +71,7 @@ class _SpeedProbeWorker(QThread):
 
 
 class LoadVersionsWorker(QThread):
-    finished = Signal(list)
+    loaded = Signal(list)
     progress = Signal(int)
     def __init__(self, mirror_urls, version_type):
         super().__init__()
@@ -137,7 +137,7 @@ class LoadVersionsWorker(QThread):
             if self._cancelled:
                 return
             if not manifest:
-                self.finished.emit([])
+                self.loaded.emit([])
                 return
             self.progress.emit(70)
             for v in manifest.get('versions', []):
@@ -145,10 +145,10 @@ class LoadVersionsWorker(QThread):
                         or v.get('type') == self.version_type):
                     versions.append(v)
             self.progress.emit(95)
-            self.finished.emit(versions)
+            self.loaded.emit(versions)
         except Exception as e:
             print(f'[LoadVersionsWorker] 加载失败: {e}')
-            self.finished.emit([])
+            self.loaded.emit([])
 
 
 class VersionValidationWorker(QThread):
@@ -213,6 +213,7 @@ class VersionPage(QWidget):
         self._pending_post_install_refresh = False
         self._pending_installed_version = ''
         self._pending_modpack_version = ''
+        self._available_retry_count = 0
         if not self.config.get('file_download_source'):
             self.config.set('file_download_source', 'auto')
         if not self.config.get('version_list_source'):
@@ -222,7 +223,6 @@ class VersionPage(QWidget):
         self._init_ui()
         self._refresh_game_dir_combo()
         QTimer.singleShot(50, self._load_installed_versions)
-        QTimer.singleShot(100, self._load_available_versions_async)
 
     def _init_ui(self):
         root = QVBoxLayout(self)
@@ -262,9 +262,8 @@ class VersionPage(QWidget):
             self._load_installed_versions()
             return
         if key == 'available':
-            if self.available_list.count() == 0:
+            if self.available_list.count() == 0 and self.isVisible():
                 self._load_available_versions_async()
-                return
             return
         if key == 'mod':
             self.mod_browser.activate()
@@ -916,7 +915,7 @@ class VersionPage(QWidget):
         self._loading = True
         self._load_worker = LoadVersionsWorker(mirror_urls, 'all')
         self._load_worker.progress.connect(self.available_loading.set_progress)
-        self._load_worker.finished.connect((lambda versions, g=gen: self._on_versions_loaded(versions, g)))
+        self._load_worker.loaded.connect((lambda versions, g=gen: self._on_versions_loaded(versions, g)))
         self._load_worker.start()
 
     def _add_available_header(self, text: str):
@@ -942,26 +941,54 @@ class VersionPage(QWidget):
             item.setToolTip(tag.strip('[]'))
         self.available_list.addItem(item)
 
+    def _release_load_worker(self, worker):
+        '''保留 QThread 引用到真正 finished，避免槽内 deleteLater 销毁运行中线程。'''
+
+        if worker is None:
+            return
+        try:
+            if worker.isFinished():
+                worker.deleteLater()
+                return
+            _DETACHED_LOADERS.add(worker)
+            worker.finished.connect(
+                (lambda w=worker: (
+                    _DETACHED_LOADERS.discard(w), w.deleteLater()
+                ))
+            )
+        except RuntimeError:
+            pass
+
     def _on_versions_loaded(self, versions, generation=None):
         if generation is not None and generation != self._load_gen:
             return
         silent = bool(getattr(self, '_available_silent', False))
         self._available_silent = False
         self._loading = False
+        worker = self._load_worker
+        self._load_worker = None
+        if worker is not None:
+            self._release_load_worker(worker)
         if not versions:
-            offline = not network_available()
-            reason = (
-                '未连接到互联网，无法获取版本列表'
-                if offline else '获取版本列表失败，请检查网络连接'
-            )
             if silent:
                 self.available_loading.stop()
+            elif self._available_retry_count < 1:
+                # 网络抖动导致清单偶发加载失败时自动重试一次，避免用户刚点下载
+                # 就看到“加载失败”，再点一次又成功。
+                self._available_retry_count += 1
+                self.available_loading.set_progress(5)
+                QTimer.singleShot(800, self._load_available_versions_async)
+                return
             else:
+                self._available_retry_count = 0
+                offline = not network_available()
+                reason = (
+                    '未连接到互联网，无法获取版本列表'
+                    if offline else '获取版本列表失败，请检查网络连接'
+                )
                 self.available_loading.fail(reason)
-            if self._load_worker:
-                self._load_worker.deleteLater()
-                self._load_worker = None
             return
+        self._available_retry_count = 0
         self.available_list.setUpdatesEnabled(False)
         self.available_list.clear()
         def _version_order(v):
@@ -986,9 +1013,6 @@ class VersionPage(QWidget):
                 self._add_available_header(f'正式版 ({len(items)})')
         for v in items:
             self._add_available_version(v)
-        if self._load_worker:
-            self._load_worker.deleteLater()
-            self._load_worker = None
         self.available_list.setUpdatesEnabled(True)
         # 列表项绘制完成后再结束加载遮罩，避免空列表短暂闪现。
         if not silent:

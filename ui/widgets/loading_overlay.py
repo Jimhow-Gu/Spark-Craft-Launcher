@@ -67,9 +67,17 @@ class _MovieLabel(QLabel):
         pix = self._movie.currentPixmap()
         if pix.isNull():
             return
-        self.setPixmap(pix.scaled(
-            self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
-        ))
+        try:
+            dpr = max(1.0, float(self.devicePixelRatioF()))
+        except Exception:
+            dpr = 1.0
+        target = self.size() * dpr
+        scaled = pix.scaled(
+            target, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        # 用物理像素绘制并标记 DPR，避免高 DPI 下先缩到逻辑尺寸再被放大变糊。
+        scaled.setDevicePixelRatio(dpr)
+        self.setPixmap(scaled)
 
 
 class LoadingOverlay(QWidget):
