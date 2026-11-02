@@ -1905,7 +1905,7 @@ class ModBrowserPage(QWidget):
             self.status_label.setText('未找到匹配的内容')
             self.status_label.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 12px;')
             self.results_list.setUpdatesEnabled(True)
-            self.loading_overlay.finish()
+            self._finish_project_loading(token)
             return
         self._render_project_batch(token, list(projects), 0)
 
@@ -1942,6 +1942,16 @@ class ModBrowserPage(QWidget):
         self.results_list.setUpdatesEnabled(True)
         self.status_label.setText(f'第 {self._page} 页 · 共 {self._total} 个结果 · 来源 {self.source_combo.currentText()}')
         self.status_label.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 12px;')
+        # 至少留出一帧让列表完成布局/绘制，再进入 100% 并隐藏遮罩。
+        QTimer.singleShot(
+            120,
+            lambda: self._finish_project_loading(token),
+        )
+
+    def _finish_project_loading(self, token):
+        if token != self._render_token:
+            return
+        self.loading_overlay.raise_()
         self.loading_overlay.finish()
 
     def _on_icon_ready(self, url, pix):

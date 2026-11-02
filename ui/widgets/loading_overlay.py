@@ -310,6 +310,10 @@ class LoadingOverlay(QWidget):
         self._auto_timer.stop()
         self._error_timer.stop()
         self._percent = 100
+        try:
+            self.raise_()
+        except RuntimeError:
+            pass
         self._animate_progress(100, 220)
         QTimer.singleShot(300, self._hide_after_finish)
 
