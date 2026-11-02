@@ -1399,7 +1399,10 @@ class HomePage(QWidget):
             if can_update:
                 self.status_label.setText(f'{nickname} 已启动')
                 from ui.widgets.toast import show_toast
-                show_toast(f'{nickname} 启动成功', 'success', self)
+                # 等游戏窗口完成前台切换后再弹提示，避免与窗口创建抢 UI 线程。
+                QTimer.singleShot(
+                    120, lambda n=nickname: show_toast(f'{n} 启动成功', 'success', self)
+                )
                 self._apply_launcher_visibility()
 
     def _on_game_window_missing(self, worker):
@@ -1557,13 +1560,17 @@ class HomePage(QWidget):
         info = self._instance_info.get(worker)
         if info:
             info['lines'].append(text)
-            if len(info['lines']) > 8000:
-                info['lines'] = info['lines'][-4000:]
+            if len(info['lines']) > 12000:
+                info['lines'] = info['lines'][-8000:]
             handle = info.get('log_handle')
             if handle:
                 try:
                     handle.write(text + '\n')
-                    handle.flush()
+                    # 每行 flush 会在游戏窗口出现、日志暴涨时卡住主线程。
+                    writes = int(info.get('log_writes', 0)) + 1
+                    info['log_writes'] = writes
+                    if writes % 16 == 0:
+                        handle.flush()
                 except Exception:
                     pass
 

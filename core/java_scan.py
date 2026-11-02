@@ -55,6 +55,15 @@ class JavaScanService(QObject):
             return list(self._result)
         return LaunchManager().peek_cached_java_list()
 
+    def add_imported(self, java_path):
+        '''手动导入后立即刷新所有 Java 下拉框。'''
+
+        result = LaunchManager().register_java_path(java_path)
+        self._result = list(result or [])
+        self._done = True
+        self.finished.emit(list(self._result))
+        return list(self._result)
+
     def shutdown(self):
         worker = self._worker
         if worker is None:

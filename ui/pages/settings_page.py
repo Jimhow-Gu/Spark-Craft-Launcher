@@ -1280,14 +1280,21 @@ class SettingsPage(QWidget):
             pass
 
     def _on_import_java(self):
-        file_filter = 'Java 可执行文件 (javaw.exe java.exe);;所有文件 (*.*)'
+        # 使用 *.exe 而不是写死两个文件名：Windows 原生文件对话框对
+        # "javaw.exe java.exe" 这种精确文件名过滤支持并不可靠。
+        file_filter = 'Java 可执行文件 (*.exe);;所有文件 (*.*)'
         path, _ = QFileDialog.getOpenFileName(self, '选择 Java 可执行文件', '', file_filter)
         if not path:
             return
+        normalized = os.path.normcase(os.path.abspath(path))
+        existing = -1
         for i in range(self.java_combo.count()):
-            if self.java_combo.itemData(i) == path:
-                self.java_combo.setCurrentIndex(i)
+            data = self.java_combo.itemData(i)
+            if data and os.path.normcase(os.path.abspath(str(data))) == normalized:
+                existing = i
                 break
+        if existing >= 0:
+            self.java_combo.setCurrentIndex(existing)
         else:
             ver = self._get_java_version(path) or '自定义'
             self.java_combo.addItem(f'Java {ver}  [路径: {path}]', path)
@@ -1296,8 +1303,13 @@ class SettingsPage(QWidget):
             self.config.save()
             self.java_status.setText(f'✅ 已导入 Java: {ver}')
             self.java_status.setStyleSheet('color: #4ade80; font-size: 12px;')
-            self._sync_advanced_java()
-            self.settings_changed.emit()
+        # 同步到全局扫描结果并广播，游戏设置里的 Java 列表会立即刷新。
+        try:
+            self.java_scan.add_imported(path)
+        except Exception:
+            pass
+        self._sync_advanced_java()
+        self.settings_changed.emit()
 
     def _load_settings(self):
         self._refresh_dir_list()

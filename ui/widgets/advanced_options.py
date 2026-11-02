@@ -118,11 +118,12 @@ class AdvancedOptionsPanel(QWidget):
         self.java_combo.clear()
         self.java_combo.addItem('自动选择最佳 Java', '')
         java_list = LaunchManager().peek_cached_java_list()
+        if not self._java_scan_connected:
+            self._java_scan_connected = True
+            JavaScanService.instance().finished.connect(self._on_java_scan_finished)
         if java_list is None:
             java_list = []
-            if not self._java_scan_connected:
-                self._java_scan_connected = True
-                JavaScanService.instance().finished.connect(self._on_java_scan_finished)
+            JavaScanService.instance().start()
         try:
             for ver, path in java_list:
                 self.java_combo.addItem(f'Java {ver}  |  {path}', path)

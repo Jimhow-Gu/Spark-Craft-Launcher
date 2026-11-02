@@ -328,18 +328,52 @@ class LaunchManager:
         cached = self._cached_java_version(java_path)
         if cached is not None:
             return cached
+        candidates = [str(java_path)]
         try:
-            result = subprocess.run([java_path, '-version'], capture_output=True, text=True, timeout=2, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
-            output = result.stderr + result.stdout
-            match = re.search('version "(\\d+\\.\\d+\\.\\d+[^"]*)"', output)
-            if match:
-                return match.group(1)
-            match2 = re.search('(\\d+\\.\\d+\\.\\d+[^\\s]*)', output)
-            if match2:
-                return match2.group(1)
+            path_obj = Path(str(java_path))
+            if path_obj.name.lower() == 'javaw.exe':
+                console_java = path_obj.with_name('java.exe')
+                if console_java.is_file():
+                    candidates.append(str(console_java))
         except Exception:
             pass
+        for candidate in candidates:
+            try:
+                result = subprocess.run(
+                    [candidate, '-version'],
+                    capture_output=True, text=True, timeout=2,
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0,
+                )
+                output = result.stderr + result.stdout
+                match = re.search('version "(\\d+\\.\\d+\\.\\d+[^"]*)"', output)
+                if match:
+                    return match.group(1)
+                match2 = re.search('(\\d+\\.\\d+\\.\\d+[^\\s]*)', output)
+                if match2:
+                    return match2.group(1)
+            except Exception:
+                continue
         return ''
+
+    def register_java_path(self, java_path):
+        '''把手动导入的 Java 加入当前会话的全局候选列表。'''
+
+        global _SHARED_JAVA_LIST
+        path = str(java_path or '').strip()
+        if not path or not os.path.isfile(path):
+            return self.peek_cached_java_list() or []
+        try:
+            key = os.path.normcase(os.path.abspath(path))
+        except Exception:
+            key = os.path.normcase(path)
+        version = self._get_java_version(path) or '自定义'
+        with _JAVA_LIST_LOCK:
+            entries = list(_SHARED_JAVA_LIST or self._cached_java_list or [])
+            if not any(os.path.normcase(os.path.abspath(str(p))) == key for _v, p in entries):
+                entries.append((version, path))
+            _SHARED_JAVA_LIST = entries
+        self._cached_java_list = list(entries)
+        return list(entries)
 
     def _cached_java_version(self, java_path):
         '''从已完成的 Java 扫描缓存里取版本，避免同步运行 java -version 卡界面。'''
@@ -1519,6 +1553,19 @@ class LaunchWorker(QThread):
         stream = getattr(proc, 'stdout', None)
         if stream is None:
             return
+        batch = []
+        last_emit = time.monotonic()
+
+        def flush_batch():
+            if not batch:
+                return
+            text = '\n'.join(batch)
+            batch.clear()
+            try:
+                self.output_received.emit(text)
+            except RuntimeError:
+                self._stop_flag = True
+
         try:
             for raw_line in iter(stream.readline, ''):
                 if self._stop_flag:
@@ -1526,13 +1573,17 @@ class LaunchWorker(QThread):
                 line = raw_line.rstrip()
                 if not line:
                     continue
-                try:
-                    self.output_received.emit(line)
-                except RuntimeError:
-                    break
+                batch.append(line)
+                now = time.monotonic()
+                # 游戏窗口出现时日志会瞬间暴涨；合并后再发给 UI，
+                # 避免每个日志行都触发一次主线程事件和一次日志刷新。
+                if len(batch) >= 24 or now - last_emit >= 0.06:
+                    flush_batch()
+                    last_emit = now
         except (ValueError, OSError):
             pass
         finally:
+            flush_batch()
             try:
                 stream.close()
             except Exception:

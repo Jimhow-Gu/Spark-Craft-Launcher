@@ -1191,16 +1191,18 @@ class GameSettingsPage(QWidget):
         # 绝不在 UI 线程同步做全盘 Java 扫描（会导致打开页面长时间卡死）
         java_list = self.launch_mgr.peek_cached_java_list()
         self._fill_java_combo(java_list)
-        if java_list is None:
-            try:
-                from core.java_scan import JavaScanService
-                service = JavaScanService.instance()
-                if not getattr(self, '_java_scan_connected', False):
-                    service.finished.connect(self._on_java_scan_refresh)
-                    self._java_scan_connected = True
+        try:
+            from core.java_scan import JavaScanService
+            service = JavaScanService.instance()
+            # 即使已有缓存也要保持连接：之后从全局设置导入 Java 时，
+            # 这里需要收到 finished 信号并立即刷新列表。
+            if not getattr(self, '_java_scan_connected', False):
+                service.finished.connect(self._on_java_scan_refresh)
+                self._java_scan_connected = True
+            if java_list is None:
                 service.start()
-            except Exception:
-                pass
+        except Exception:
+            pass
         mem_mode = self.settings.get('mem_mode', 'global')
         if mem_mode == 'global':
             self.global_radio.setChecked(True)
@@ -1307,26 +1309,56 @@ class GameSettingsPage(QWidget):
             pass
 
     def _fill_java_combo(self, java_list):
-        self.java_combo.clear()
-        self.java_combo.addItem('自动选择', '')
-        for ver, path in (java_list or []):
-            self.java_combo.addItem(f'Java {ver}  [路径: {path}]', path)
-        # 版本独立设置优先；没设置时沿用全局导入/选择的 Java
-        current_java = str(self.settings.get('java_path') or '').strip()
-        if not current_java:
+        self.java_combo.blockSignals(True)
+        try:
+            self.java_combo.clear()
+            self.java_combo.addItem('自动选择', '')
+            seen = set()
+
+            def norm(path):
+                try:
+                    return os.path.normcase(os.path.abspath(str(path)))
+                except Exception:
+                    return os.path.normcase(str(path))
+
+            def add_entry(version, path, tag=''):
+                path = str(path or '').strip()
+                if not path:
+                    return
+                key = norm(path)
+                if key in seen:
+                    return
+                seen.add(key)
+                prefix = f'{tag}: ' if tag else ''
+                self.java_combo.addItem(
+                    f'{prefix}Java {version}  [路径: {path}]', path
+                )
+
+            for ver, path in (java_list or []):
+                add_entry(ver, path)
+            version_path = str(self.settings.get('java_path') or '').strip()
             try:
-                current_java = str(self.config.get('java_path') or '').strip()
+                global_path = str(self.config.get('java_path') or '').strip()
             except Exception:
-                current_java = ''
-        if current_java:
-            idx = self.java_combo.findData(current_java)
-            if idx < 0:
-                prefix = '自定义' if self.settings.get('java_path') else '全局'
-                self.java_combo.addItem(f'{prefix}: {current_java}', current_java)
-                idx = self.java_combo.count() - 1
+                global_path = ''
+            for path, tag in ((global_path, '全局导入'), (version_path, '版本自定义')):
+                if path and os.path.isfile(path):
+                    add_entry(
+                        self.launch_mgr._get_java_version(path) or '自定义',
+                        path, tag,
+                    )
+            current_java = version_path or global_path
+            current_key = norm(current_java) if current_java else ''
+            idx = 0
+            if current_key:
+                for i in range(self.java_combo.count()):
+                    data = self.java_combo.itemData(i)
+                    if data and norm(data) == current_key:
+                        idx = i
+                        break
             self.java_combo.setCurrentIndex(idx)
-        else:
-            self.java_combo.setCurrentIndex(0)
+        finally:
+            self.java_combo.blockSignals(False)
 
     def _on_java_scan_refresh(self, result):
         '''后台 Java 扫描完成后刷新下拉框（保留当前选择）。'''
@@ -1334,9 +1366,13 @@ class GameSettingsPage(QWidget):
             current = str(self.java_combo.currentData() or '')
             self._fill_java_combo(result)
             if current:
-                idx = self.java_combo.findData(current)
-                if idx >= 0:
-                    self.java_combo.setCurrentIndex(idx)
+                for i in range(self.java_combo.count()):
+                    data = self.java_combo.itemData(i)
+                    if data and os.path.normcase(os.path.abspath(str(data))) == os.path.normcase(os.path.abspath(current)):
+                        self.java_combo.blockSignals(True)
+                        self.java_combo.setCurrentIndex(i)
+                        self.java_combo.blockSignals(False)
+                        break
             self._update_java_hint()
         except RuntimeError:
             pass
