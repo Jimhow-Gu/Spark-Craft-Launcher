@@ -891,6 +891,14 @@ class SettingsPage(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         self._update_version_settings_button()
+        # Java 扫描会遍历安装目录并运行 java -version，不在启动阶段执行；
+        # 首次打开设置页时再后台检测。
+        try:
+            if (self.launch_mgr.peek_cached_java_list() is None
+                    and not self.java_scan.is_running()):
+                self.java_scan.start()
+        except Exception:
+            pass
 
     def shutdown(self):
         self._stop_settings_tab_animation()

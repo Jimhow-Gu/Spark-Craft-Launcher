@@ -1,6 +1,7 @@
 '''启动器背景绘制控件'''
 
 import math
+import time
 from pathlib import Path
 from PySide6.QtCore import (QRect, QRectF, Qt, QUrl, Signal)
 from PySide6.QtGui import (QColor, QImage, QLinearGradient, QPainter, QPainterPath, QPixmap)
@@ -29,6 +30,7 @@ class BackgroundWidget(QWidget):
         self._video_auto_cache = None
         self._video_auto_key = None
         self._freeze_updates = False
+        self._last_video_frame_time = 0.0
         self._light = False
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setAutoFillBackground(False)
@@ -241,9 +243,24 @@ class BackgroundWidget(QWidget):
     def _on_video_frame(self, frame):
         if self._video_player is None or self._freeze_updates:
             return
+        # 1080p 背景视频在软件渲染/低配机器上会占满主线程；限制到约 12fps，
+        # 保留动态背景但避免启动和交互时卡死。
+        now = time.monotonic()
+        if now - self._last_video_frame_time < 0.08:
+            return
+        self._last_video_frame_time = now
         try:
             image = frame.toImage()
             if not image.isNull():
+                dpr = max(1.0, float(self.devicePixelRatioF()))
+                max_w = max(320, int(self.width() * dpr))
+                max_h = max(240, int(self.height() * dpr))
+                if image.width() > max_w * 1.15 or image.height() > max_h * 1.15:
+                    image = image.scaled(
+                        max_w, max_h,
+                        Qt.KeepAspectRatioByExpanding,
+                        Qt.SmoothTransformation,
+                    )
                 self._video_image = image
                 self._invalidate_video_cache()
                 self.update()
