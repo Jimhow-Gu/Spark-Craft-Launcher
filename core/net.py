@@ -141,15 +141,15 @@ class DownloadGate:
     _lock = threading.Lock()
     _condition = threading.Condition(_lock)
     _active = 0
-    _max = 16
+    _max = 64
     @classmethod
     def configure(cls, limit):
         try:
             limit = int(limit)
         except Exception:
-            limit = 16
+            limit = 64
         with cls._condition:
-            cls._max = max(1, min(64, limit))
+            cls._max = max(1, min(256, limit))
             cls._condition.notify_all()
 
     @classmethod
@@ -235,7 +235,7 @@ class HttpClient:
         try:
             from core.config import ConfigManager
             config = ConfigManager()
-            DownloadGate.configure(config.get('download_threads', 16))
+            DownloadGate.configure(config.get('download_threads', 64))
             DownloadSpeedLimiter.configure(config.get('download_speed_limit', 0))
         except Exception:
             pass

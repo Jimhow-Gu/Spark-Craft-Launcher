@@ -216,20 +216,20 @@ class SettingsPage(QWidget):
         self.memory_usage_bar = MemoryUsageBar()
         mem_group_layout.addWidget(self.memory_usage_bar)
         layout.addWidget(mem_group)
-        thread_group = self._create_group('下载线程数')
+        thread_group = self._create_group('最大线程数')
         thread_layout = thread_group.layout()
-        thread_tip = QLabel('控制同时下载的最大任务数，默认 16，最高 64。线程数过高会造成网络拥塞和设备卡顿。')
+        thread_tip = QLabel('最大线程数：默认 64，和 PCL 一致。这是并发上限，不是固定开启 64 个线程；实际并发会按任务数量自动调整。')
         thread_tip.setWordWrap(True)
         thread_tip.setStyleSheet('color: rgba(255,255,255,0.6); font-size: 12px;')
         thread_layout.addWidget(thread_tip)
         thread_row = QHBoxLayout()
         self.thread_slider = QSlider(Qt.Horizontal)
-        self.thread_slider.setRange(1, 64)
-        self.thread_slider.setValue(16)
-        self.thread_slider.setTickInterval(8)
+        self.thread_slider.setRange(1, 256)
+        self.thread_slider.setValue(64)
+        self.thread_slider.setTickInterval(16)
         self.thread_slider.setTickPosition(QSlider.TicksBelow)
         self.thread_slider.setStyleSheet(SLIDER_STYLE)
-        self.thread_value_label = QLabel('16')
+        self.thread_value_label = QLabel('64')
         self.thread_value_label.setFixedWidth(50)
         self.thread_value_label.setStyleSheet('color: #f0f0f0; font-weight:900;')
         self.thread_slider.valueChanged.connect(self._on_threads_changed)
@@ -1034,11 +1034,11 @@ class SettingsPage(QWidget):
         self._download_save_timer.start()
         from core.net import DownloadGate
         DownloadGate.configure(value)
-        if value > 16:
+        if value > 64:
             if not getattr(self, '_threads_warned', False):
                 self._threads_warned = True
                 from ui.widgets.toast import show_toast
-                show_toast('下载线程数过高会导致网络拥塞和启动器卡顿，建议保持 16 或更低。', 'warning', self)
+                show_toast('最大线程数过高可能造成网络拥塞；实际并发仍会按任务数量自动控制。', 'warning', self)
                 return
             return
         self._threads_warned = False
@@ -1376,8 +1376,8 @@ class SettingsPage(QWidget):
         self.memory_optimize_check.setChecked(optimize)
         self.memory_optimize_check.blockSignals(False)
         self._update_mem_label()
-        threads = int(self.config.get('download_threads', 16) or 16)
-        threads = max(1, min(64, threads))
+        threads = int(self.config.get('download_threads', 64) or 64)
+        threads = max(1, min(256, threads))
         self.thread_slider.blockSignals(True)
         self.thread_slider.setValue(threads)
         self.thread_value_label.setText(str(threads))
