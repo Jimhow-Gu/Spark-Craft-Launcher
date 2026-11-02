@@ -196,14 +196,8 @@ class ModrinthSource(BaseSource):
                     result = future.result()
                 except Exception as exc:
                     last = exc
-                    status_code = getattr(exc, 'status_code', None)
-                    response = getattr(exc, 'response', None)
-                    if response is not None:
-                        status_code = response.status_code
-                    if status_code in (401, 403, 404):
-                        for pending in futures:
-                            pending.cancel()
-                        raise
+                    # 不要因为官方源或镜像其中一个返回 404 就立刻取消另一个：
+                    # 两边收录情况不同，先等另一个结果，全部失败再抛错。
                     continue
                 for pending in futures:
                     pending.cancel()
@@ -237,16 +231,33 @@ class ModrinthSource(BaseSource):
         return SearchResult(projects, total, offset, limit)
 
     def get_files(self, project, mc_version='', loader=''):
-        ident = project.project_id or project.slug
+        idents = []
+        for candidate in (project.project_id, project.slug):
+            candidate = str(candidate or '').strip()
+            if candidate and candidate not in idents:
+                idents.append(candidate)
+        if not idents:
+            return []
         params = {'limit': 100}
         if mc_version:
             params['game_versions'] = json.dumps([mc_version])
         if loader:
             params['loaders'] = json.dumps([loader])
-        try:
-            data = self._get_json(f'{MODRINTH_API}/project/{quote(ident)}/version', params=params)
-        except DownloadError:
-            raise
+        data = None
+        last_error = None
+        ident = idents[0]
+        for candidate in idents:
+            try:
+                data = self._get_json(f'{MODRINTH_API}/project/{quote(candidate)}/version', params=params)
+                ident = candidate
+                break
+            except DownloadError as exc:
+                last_error = exc
+                continue
+        if data is None:
+            if last_error is not None:
+                raise last_error
+            return []
         if not isinstance(data, list):
             return []
         if not data:
@@ -465,7 +476,23 @@ class CurseForgeSource(BaseSource):
         if loader and loader in CF_LOADER_IDS:
             params['modLoaderType'] = CF_LOADER_IDS[loader]
         try:
-            data = self.http.get_json(f'{self.api_base}/mods/{project.project_id}/files', params=params, headers=self._headers())
+            bases = [self.api_base]
+            if self.api_base == CURSEFORGE_API and self.mirror_base not in bases:
+                bases.append(self.mirror_base)
+            data = None
+            last_error = None
+            for base in bases:
+                try:
+                    data = self.http.get_json(
+                        f'{base}/mods/{project.project_id}/files',
+                        params=params, headers=self._headers(),
+                    )
+                    break
+                except DownloadError as exc:
+                    last_error = exc
+                    continue
+            if data is None and last_error is not None:
+                raise last_error
         except DownloadError:
             raise
         rows = data.get('data') or []

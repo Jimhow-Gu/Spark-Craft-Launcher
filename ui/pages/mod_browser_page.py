@@ -244,6 +244,7 @@ class FilesWorker(QThread):
         self._cancelled = True
 
     def run(self):
+        source = None
         try:
             source = get_source(self.source_name)
             files = source.get_files(self.project, self.mc_version, self.loader)
@@ -258,6 +259,16 @@ class FilesWorker(QThread):
         except Exception as exc:
             if not self._cancelled:
                 text = str(exc)
+                # 某些资源不支持当前版本/加载器过滤时会返回 404；去过滤重试一次。
+                if source is not None and '404' in text and (self.mc_version or self.loader):
+                    try:
+                        files = source.get_files(self.project, '', '')
+                    except Exception as retry_exc:
+                        text = str(retry_exc)
+                    else:
+                        if not self._cancelled:
+                            self.done.emit(files)
+                        return
                 if 'getaddrinfo failed' in text or 'NameResolutionError' in text:
                     text = '网络解析失败（DNS），请检查网络连接后重试。'
                 self.error.emit(f'获取文件列表失败：{text}')
@@ -1012,6 +1023,9 @@ class ProjectFilesDialog(QDialog):
         self.loader = loader
         self.game_dir = Path(game_dir)
         self.project_type = project_type
+        # 整合包自带游戏版本，不能按当前实例版本过滤其文件列表。
+        self._files_mc_version = '' if project_type == 'modpack' else mc_version
+        self._files_loader = '' if project_type == 'modpack' else loader
         self.embedded = embedded
         self._cleaned = False
         self._worker = None
@@ -1157,7 +1171,7 @@ class ProjectFilesDialog(QDialog):
         self._load_timeout.timeout.connect(self._on_load_timeout)
         self._load_timeout.start()
         self.loading_overlay.start_auto('正在加载文件列表')
-        self._worker = FilesWorker(project.source, project, self.mc_version, loader)
+        self._worker = FilesWorker(project.source, project, self._files_mc_version, self._files_loader)
         self._worker.done.connect(self._on_files)
         self._worker.error.connect(self._on_error)
         _track_worker(self._worker)
@@ -1195,10 +1209,15 @@ class ProjectFilesDialog(QDialog):
                 widget.deleteLater()
         self._file_rows.clear()
         self._selected_row = None
+        is_modpack = self.project_type == 'modpack'
+        target_version = self._files_mc_version
         if not files:
-            message = '此 Mod 与当前游戏版本不适配或没有可用文件。'
-            if self.mc_version:
-                message = f'此 Mod 与当前游戏版本 {self.mc_version} 不适配，未找到可用文件。'
+            if is_modpack:
+                message = '未找到可用的整合包文件。'
+            else:
+                message = '此 Mod 与当前游戏版本不适配或没有可用文件。'
+                if target_version:
+                    message = f'此 Mod 与当前游戏版本 {target_version} 不适配，未找到可用文件。'
             self.warning_label.setText(message)
             self.warning_label.show()
             self.status_label.setText('没有可用文件')
@@ -1210,9 +1229,9 @@ class ProjectFilesDialog(QDialog):
             groups = {}
             for file in files:
                 versions = self._mc_versions(file)
-                if self.mc_version:
-                    if any((self.mc_version.startswith(v + '.') for v in versions if v != self.mc_version)):
-                        key = self.mc_version
+                if target_version:
+                    if any((target_version.startswith(v + '.') for v in versions if v != target_version)):
+                        key = target_version
                     elif versions:
                         key = sorted(versions, key=_natural_key)[-1]
                     else:
@@ -1229,26 +1248,26 @@ class ProjectFilesDialog(QDialog):
             self.download_btn.setEnabled(False)
             self.loading_overlay.stop()
             return
-        compatible = self.mc_version in groups
-        if self.mc_version and not compatible:
-            self.warning_label.setText(f'此 Mod 与当前游戏版本 {self.mc_version} 不适配。\n你仍然可以在下方选择其他游戏版本的 Mod 文件手动安装。')
+        compatible = True if is_modpack else target_version in groups
+        if not is_modpack and target_version and not compatible:
+            self.warning_label.setText(f'此 Mod 与当前游戏版本 {target_version} 不适配。\n你仍然可以在下方选择其他游戏版本的 Mod 文件手动安装。')
             self.warning_label.show()
         else:
             self.warning_label.hide()
         keys = list(groups.keys())
         keys.sort(key=_natural_key, reverse=True)
-        if compatible and self.mc_version in keys:
-            keys.remove(self.mc_version)
-            keys.insert(0, self.mc_version)
+        if compatible and target_version and target_version in keys:
+            keys.remove(target_version)
+            keys.insert(0, target_version)
         first_row = None
         for key in keys:
             group_files = groups[key]
             group_files.sort(key=(lambda f: f.date or ''), reverse=True)
             group_files.sort(key=(lambda f: self._release_order(f.release_type)))
-            highlighted = bool(self.mc_version and key == self.mc_version)
-            section = CollapsibleSection(f'Minecraft {key}', f'{len(group_files)} 个文件' + (' · 当前游戏版本' if highlighted else ''), highlighted=highlighted, expanded=highlighted or key == keys[0] and (not self.mc_version or not compatible))
+            highlighted = bool(target_version and key == target_version)
+            section = CollapsibleSection(f'Minecraft {key}', f'{len(group_files)} 个文件' + (' · 当前游戏版本' if highlighted else ''), highlighted=highlighted, expanded=highlighted or key == keys[0] and (not target_version or not compatible))
             for mod_file in group_files:
-                row = FileRow(mod_file, self.mc_version, self.project.english_title, self.project.translated_title)
+                row = FileRow(mod_file, target_version, self.project.english_title, self.project.translated_title)
                 row.clicked.connect(self._select_row)
                 section.add_widget(row)
                 self._file_rows.append(row)
@@ -1259,8 +1278,10 @@ class ProjectFilesDialog(QDialog):
         if first_row is not None:
             self._select_row(first_row)
         self.download_btn.setEnabled(True)
-        if self.mc_version:
-            self.status_label.setText(f'共 {len(files)} 个文件；当前游戏版本 {self.mc_version}' + ('，已找到适配文件' if compatible else '，未找到精确适配文件'))
+        if is_modpack:
+            self.status_label.setText(f'共 {len(files)} 个整合包版本，请选择要安装的版本')
+        elif target_version:
+            self.status_label.setText(f'共 {len(files)} 个文件；当前游戏版本 {target_version}' + ('，已找到适配文件' if compatible else '，未找到精确适配文件'))
         else:
             self.status_label.setText(f'共 {len(files)} 个文件，请选择要安装的版本')
         self.status_label.setStyleSheet('color: rgba(255,255,255,0.55); font-size: 12px;')
@@ -1304,7 +1325,7 @@ class ProjectFilesDialog(QDialog):
         except (AttributeError, RuntimeError):
             pass
         self.loading_overlay.start_auto('正在加载文件列表')
-        self._worker = FilesWorker(self.project.source, self.project, self.mc_version, self.loader)
+        self._worker = FilesWorker(self.project.source, self.project, self._files_mc_version, self._files_loader)
         self._worker.done.connect(self._on_files)
         self._worker.error.connect(self._on_error)
         _track_worker(self._worker)
