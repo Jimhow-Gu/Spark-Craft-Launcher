@@ -57,6 +57,10 @@ class AvatarLabel(QLabel):
         self._cache_path = None
         self._set_default()
 
+    @staticmethod
+    def config():
+        return ConfigManager()
+
     def _set_default(self, text=None):
         if text is not None:
             self._name = text
@@ -135,7 +139,11 @@ class AvatarLabel(QLabel):
             if not cached.isNull():
                 self._image_urls = []
                 self._fallback_head = ''
-                self.setPixmap(self._rounded(hidpi_pixmap(cached, self._size, self._size), self._radius))
+                if cached.width() >= 64 and cached.height() >= 32:
+                    cached = self._head_from_skin(cached, self._size)
+                else:
+                    cached = hidpi_pixmap(cached, self._size, self._size)
+                self.setPixmap(self._rounded(cached, self._radius))
                 return
         self._image_urls = [u for u in urls or [] if u]
         if fallback_head is None:
@@ -159,10 +167,14 @@ class AvatarLabel(QLabel):
         req = QNetworkRequest(QUrl(url))
         req.setRawHeader(b'User-Agent', b'PMGL-Launcher/1.1')
         try:
-            req.setTransferTimeout(2500)
+            req.setTransferTimeout(5000)
         except Exception:
             pass
         reply = self._manager.get(req)
+        if not bool(self.config().get('verify_ssl', False)):
+            reply.sslErrors.connect(
+                lambda _errors, r=reply: r.ignoreSslErrors()
+            )
         self._replies.add(reply)
 
     def _on_image_loaded(self, reply):
@@ -172,20 +184,27 @@ class AvatarLabel(QLabel):
             pix = QPixmap()
             raw = reply.readAll()
             cache_path = getattr(self, '_cache_path', None)
-            if cache_path is not None and raw:
-                try:
-                    cache_path.parent.mkdir(parents=True, exist_ok=True)
-                    cache_path.write_bytes(bytes(raw))
-                except OSError:
-                    pass
             if pix.loadFromData(raw) and not pix.isNull():
                 url = reply.url().toString()
-                if 'textures.minecraft.net' in url and pix.width() >= 64:
+                is_official = 'textures.minecraft.net' in url and pix.width() >= 64
+                if is_official:
                     head = self._head_from_skin(pix, self._size)
                     self.setPixmap(self._rounded(head, self._radius))
+                    if cache_path is not None:
+                        try:
+                            cache_path.parent.mkdir(parents=True, exist_ok=True)
+                            head.toImage().save(str(cache_path), 'PNG')
+                        except Exception:
+                            pass
                 else:
                     from ui.widgets.settings_widgets import hidpi_pixmap
                     self.setPixmap(self._rounded(hidpi_pixmap(pix, self._size, self._size), self._radius))
+                    if cache_path is not None and raw:
+                        try:
+                            cache_path.parent.mkdir(parents=True, exist_ok=True)
+                            cache_path.write_bytes(bytes(raw))
+                        except Exception:
+                            pass
                 loaded = True
         reply.deleteLater()
         if not loaded:
@@ -230,10 +249,14 @@ class SavedAccountIconLoader(QObject):
         req = QNetworkRequest(QUrl(url))
         req.setRawHeader(b'User-Agent', b'PMGL-Launcher/1.1')
         try:
-            req.setTransferTimeout(2500)
+            req.setTransferTimeout(5000)
         except Exception:
             pass
         reply = self._manager.get(req)
+        if not bool(ConfigManager().get('verify_ssl', False)):
+            reply.sslErrors.connect(
+                lambda _errors, r=reply: r.ignoreSslErrors()
+            )
         self._pending[reply] = key, urls, url
 
     def _on_finished(self, reply):
@@ -301,19 +324,39 @@ class MicrosoftProfileSkinWorker(QThread):
             from core.net import HttpClient
             from core.skin import microsoft_skin_cache_path
             auth = AuthManager()
-            profile = auth.get_minecraft_profile()
+            try:
+                profile = auth.get_minecraft_profile()
+            except Exception as original_error:
+                account = auth.config.get('microsoft_account') or {}
+                try:
+                    profile = auth.get_public_minecraft_profile(
+                        account.get('uuid', ''), account.get('name', '')
+                    )
+                except Exception:
+                    raise original_error
             skin = profile.get('active_skin') or {}
             skin_path = ''
             name = str(profile.get('name') or '').strip()
-            dest = microsoft_skin_cache_path(profile.get('id', ''), name)
+            profile_id = str(profile.get('id') or '').strip()
+            account = auth.config.get('microsoft_account') or {}
+            uuid = str(profile_id or account.get('uuid') or '').replace('-', '').strip()
+            dest = microsoft_skin_cache_path(uuid, name)
             candidates = []
             if skin.get('url'):
                 candidates.append(str(skin['url']))
+            # 特殊网络环境下官方纹理域名可能不可达，回退到多个第三方皮肤镜像。
+            if uuid:
+                candidates.extend([
+                    f'https://minotar.net/skin/{uuid}',
+                    f'https://mc-heads.net/skin/{uuid}',
+                    f'https://crafatar.com/skins/{uuid}',
+                    f'https://mineskin.eu/skin/{uuid}',
+                ])
             if name:
-                # 特殊网络环境下官方纹理域名可能不可达，回退到第三方皮肤镜像
                 candidates.extend([
                     f'https://minotar.net/skin/{name}',
                     f'https://mc-heads.net/skin/{name}',
+                    f'https://mineskin.eu/skin/{name}',
                 ])
             http = HttpClient(timeout=15, retries=1)
             for url in candidates:

@@ -426,6 +426,13 @@ class IconLoader(QObject):
             except Exception:
                 pass
             reply = self._manager.get(req)
+            try:
+                if not bool(ConfigManager().get('verify_ssl', False)):
+                    reply.sslErrors.connect(
+                        lambda _errors, r=reply: r.ignoreSslErrors()
+                    )
+            except Exception:
+                pass
             self._replies[reply] = url
             reply.finished.connect((lambda r=reply: self._on_finished(r)))
             if self._enabled and self._queue:

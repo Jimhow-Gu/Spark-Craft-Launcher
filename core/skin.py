@@ -90,7 +90,7 @@ CAPE_PALETTE = {'Moonlight Trail': ('#12233f', '#3e64a8', '#c7dcff'), '樱花披
 
 
 def avatar_urls_for_account(account: dict) -> list:
-    """正版/第三方账号头像候选地址：先轻量镜像，官方纹理放最后。"""
+    """正版/第三方账号头像候选地址：官方纹理优先，镜像兜底。"""
 
     account = dict(account or {})
     name = str(account.get('name') or '').strip()
@@ -102,6 +102,12 @@ def avatar_urls_for_account(account: dict) -> list:
         if url and url not in urls:
             urls.append(url)
 
+    # 官方纹理直链优先：机房/校园网常封第三方头像镜像，但官方域名可能可用。
+    skin_url = str(account.get('skin_url') or '')
+    if skin_url.startswith('http://textures.minecraft.net'):
+        skin_url = 'https://' + skin_url[len('http://'):]
+    if 'textures.minecraft.net' in skin_url:
+        add(skin_url)
     add(account.get('avatar_url'))
     if uuid:
         add(f'https://minotar.net/helm/{uuid}/96.png')
@@ -115,10 +121,6 @@ def avatar_urls_for_account(account: dict) -> list:
         add(f'https://mineskin.eu/helm/{name}/96.png')
         add(f'https://crafthead.net/helm/{name}/96')
         add(f'https://mc-heads.net/avatar/{name}/96')
-    # 只把官方纹理当兜底（本地会裁剪成头部）；第三方皮肤 URL 直接显示会是整张皮肤图
-    skin_url = str(account.get('skin_url') or '')
-    if 'textures.minecraft.net' in skin_url:
-        add(skin_url)
     return urls
 
 

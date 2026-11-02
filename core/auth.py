@@ -11,6 +11,7 @@ import uuid
 import webbrowser
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 import requests
 from PySide6.QtCore import QThread, Signal
 try:
@@ -38,6 +39,8 @@ MICROSOFT_SCOPE = 'XboxLive.signin offline_access'
 AUTHLIB_INJECTOR_LATEST = 'https://authlib-injector.yushi.moe/artifact/latest.json'
 AUTHLIB_INJECTOR_FALLBACK = 'https://authlib-injector.yushi.moe/artifact/56/authlib-injector-1.2.8.jar'
 MINECRAFT_PROFILE_URL = 'https://api.minecraftservices.com/minecraft/profile'
+MOJANG_SESSION_PROFILE_URL = 'https://sessionserver.mojang.com/session/minecraft/profile'
+MOJANG_PROFILE_BY_NAME_URL = 'https://api.mojang.com/users/profiles/minecraft'
 MINECRAFT_ACTIVE_CAPE_URL = 'https://api.minecraftservices.com/minecraft/profile/capes/active'
 CAPE_ALIAS_NAMES = {'Mojang-old': 'Mojang披风（旧版）', 'Mojang (Classic)': 'Mojang披风（旧版）', 'Mojang': 'Mojang披风', 'Mojang-new': 'Mojang Studios披风', 'Mojang Studios': 'Mojang Studios披风', 'Minecon2011': 'MINECON 2011参与者披风', 'MineCon 2011': 'MINECON 2011参与者披风', 'Minecon2012': 'MINECON 2012参与者披风', 'MineCon 2012': 'MINECON 2012参与者披风', 'Minecon2013': 'MINECON 2013参与者披风', 'MineCon 2013': 'MINECON 2013参与者披风', 'Minecon2015': 'MINECON 2015参与者披风', 'MineCon 2015': 'MINECON 2015参与者披风', 'Minecon2016': 'MINECON 2016参与者披风', 'MineCon 2016': 'MINECON 2016参与者披风', 'Translator': '翻译者披风', 'Translator-Chinese': '中文翻译者披风', 'Translator (Chinese)': '中文翻译者披风', 'Translator-Japanese': '日文翻译者披风', 'Translator (Japanese)': '日文翻译者披风', 'Mojira Moderator': 'Mojira管理员披风', 'Realms Mapmaker': 'Realms地图制作者披风', 'Cobalt': 'Cobalt锦标赛披风', 'Scrolls': 'Scrolls冠军披风', 'Millionth Customer': '百万购买者披风', 'Prismarine': '海晶石披风', 'Turtle': '海龟披风', 'Snowman': '雪人披风', 'Spade': '黑桃披风', 'dannyBstyle': 'dB披风', 'dB': 'dB披风', 'Birthday': '生日披风', 'Valentine': '情人节披风', 'Oxeye': '牛眼披风', 'Test': '测试披风', 'Document': '文档披风', 'Migrator': '迁移者披风', 'Vanilla': '原版披风', 'Pan': '薄烤饼披风', "Founder's": '创始人披风', '15th Anniversary': '15周年纪念披风', 'Cherry Blossom': '樱花披风', 'Common': '普通披风', "Follower's": '追随者披风', 'Purple Heart': '紫色心形披风', 'Menace': '入侵披风', 'Home': '家园披风', 'Yearn': '渴望披风', 'Copper': '铜披风', 'Zombie Horse': '僵尸马披风', 'Builder': '建造者披风', 'Twisted': '扭曲披风', 'Hero': '英雄披风', 'Aurora': '极光披风', 'Mojang Office': 'Mojang办公室披风', 'MCC 15th Year': 'MCC 15周年披风', 'Minecraft Experience': '村民救援披风', 'Moonlight Trail': '月光小径披风', 'Crafter': '工匠披风'}
 CAPE_UUID_NAMES = {'8a6cc02cc86e43f1': '迁移者披风', '62db1a06cba0d59a': '原版披风', '86a126427a9cf1c9': '15周年纪念披风', '6851f20cfe35bd03': '薄烤饼披风', '3c1a1e7e50fce5f0': '紫色心形披风', 'e22327fef7324090': '樱花披风', '2a92e051c5df531a': '追随者披风', '6dfe9599aa000ffc': '入侵披风', 'd89779ee546fe4f0': '家园披风', '8724e22a0e7fee60': '渴望披风', '93fa88bcdcdc9a36': '铜披风', 'afc3ba389452cbb1': '极光披风', 'd40975b63f693972': '僵尸马披风', 'e99ac5f5259571a7': 'Mojang办公室披风', '71c819d9c37cb61c': '建造者披风', '764e20cd7392bc24': '创始人披风', '07973351ab910408': '村民救援披风', 'b169480d76031eb0': 'MCC 15周年披风', 'd84910543ee2842f': '扭曲披风', '0ac9c5df08969fc1': '英雄披风', '910674a2d3964724': '月光小径披风', 'ff3b90ad33a937ef': '工匠披风', '1981aad373fa9754': 'MINECON 2016参与者披风', '72ee2cfcefbfc081': 'MINECON 2015参与者披风', '0e4cc75a5f8a886d': 'MINECON 2013参与者披风', 'fd7c1a3d5fa7a9f1': 'MINECON 2012参与者披风', 'ebc798c3f7eca2a3': 'MINECON 2011参与者披风', '9349fa25c64ae935': 'Realms地图制作者披风', '11a3dcc4d826d0a1': 'Mojang披风', 'cb5dd34bee340182': 'Mojang Studios披风', 'c00df589ebea3ad6': 'Mojang披风（旧版）', '129a4675704fa3b8': '翻译者披风', '8dd71c1ee6ec0ae4': 'Mojira管理员披风', '298ae017a64261ad': '中文翻译者披风', '696b6cc29946b968': '日文翻译者披风', '116bacd62b233157': 'Cobalt锦标赛披风', 'd059f1a18b159eb6': 'Scrolls冠军披风', '8c05ef3c54870d04': '百万购买者披风', '123b1c8b4352f76d': '海晶石披风', '3d528060ab734868': '海龟披风', 'aab5a23c7495fc70': '雪人披风', '77421d9cf72e07e9': '黑桃披风', 'f249694c066c160c': 'dB披风', 'd3c7ac835b24eb29': '生日披风', 'b78918fa2b4d6189': '情人节披风', '88f1509813f4e324': '牛眼披风', '5e68fa78bd9df310': '测试披风', '7a939dc1a7ad4505': '文档披风'}
@@ -235,6 +238,72 @@ class AuthManager:
             skins.append({'id': item.get('id', ''), 'state': str(item.get('state') or 'INACTIVE').upper(), 'url': item.get('url', ''), 'variant': 'slim' if variant == 'slim' else 'classic'})
         active_skin = next((item for item in skins if item.get('state') == 'ACTIVE'), skins[0] if skins else None)
         return {'id': data.get('id') or '', 'name': data.get('name') or '', 'skins': skins, 'active_skin': active_skin, 'capes': data.get('capes') or []}
+
+    def get_public_minecraft_profile(self, uuid: str='', name: str='') -> dict:
+        """不依赖 access token 的官方资料兜底（学校/机房网络）。
+
+        先通过 Mojang 公共 session server 取 textures property，再解析皮肤 URL。
+        这条路径和游戏登录使用的官方域名一致，比第三方头像镜像更可靠。
+        """
+
+        account = self.config.get('microsoft_account') or {}
+        uid = str(uuid or account.get('uuid') or '').replace('-', '').strip()
+        player_name = str(name or account.get('name') or '').strip()
+        headers = {'User-Agent': 'PMGL-Launcher/1.1', 'Accept': 'application/json'}
+        if not uid and player_name:
+            try:
+                resp = requests.get(
+                    f'{MOJANG_PROFILE_BY_NAME_URL}/{quote(player_name)}',
+                    headers=headers, timeout=15,
+                )
+                if resp.status_code == 200:
+                    uid = str((resp.json() or {}).get('id') or '').replace('-', '')
+            except Exception:
+                pass
+        if not uid:
+            raise AuthError('无法解析正版账号 UUID，请检查网络后重试。', 'general')
+        resp = requests.get(
+            f'{MOJANG_SESSION_PROFILE_URL}/{uid}',
+            headers=headers, timeout=20,
+        )
+        if resp.status_code != 200:
+            raise AuthError(f'官方资料服务器返回 HTTP {resp.status_code}', 'general')
+        data = resp.json() if resp.content else {}
+        if not isinstance(data, dict):
+            raise AuthError('官方资料格式异常', 'general')
+        textures = {}
+        for prop in data.get('properties') or []:
+            if not isinstance(prop, dict) or prop.get('name') != 'textures':
+                continue
+            try:
+                raw = base64.b64decode(str(prop.get('value') or '') + '===')
+                payload = json.loads(raw.decode('utf-8'))
+                textures = payload.get('textures') or {}
+                break
+            except Exception:
+                continue
+        skin = textures.get('SKIN') or {}
+        skin_url = str(skin.get('url') or '').strip()
+        if skin_url.startswith('http://textures.minecraft.net'):
+            skin_url = 'https://' + skin_url[len('http://'):]
+        variant = str((skin.get('metadata') or {}).get('model') or 'classic').lower()
+        skins = []
+        if skin_url:
+            skins.append({
+                'id': '', 'state': 'ACTIVE', 'url': skin_url,
+                'variant': 'slim' if variant == 'slim' else 'classic',
+            })
+        cape = textures.get('CAPE') or {}
+        capes = []
+        if cape.get('url'):
+            capes.append({'id': '', 'state': 'ACTIVE', 'url': cape.get('url')})
+        return {
+            'id': str(data.get('id') or uid),
+            'name': str(data.get('name') or player_name),
+            'skins': skins,
+            'active_skin': skins[0] if skins else None,
+            'capes': capes,
+        }
 
     def get_active_minecraft_skin(self) -> dict:
         '''返回当前正版账号正在使用的官方皮肤信息。'''
