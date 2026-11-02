@@ -1,10 +1,15 @@
 '''高级启动选项面板（全局设置 / 版本设置共用）'''
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPlainTextEdit, QLineEdit, QComboBox, QCheckBox, QPushButton)
 from ui.widgets.themed_checkbox import ThemedCheckBox
 from core.jvm import DEFAULT_JVM_ARGS, MEMORY_GC_OPTIONS
-from core.launch import LaunchManager
+from core.launch import (
+    LaunchManager, format_java_label, normalize_java_executable,
+    unique_java_entries,
+)
 from core.java_scan import JavaScanService
 
 class AdvancedOptionsPanel(QWidget):
@@ -114,7 +119,9 @@ class AdvancedOptionsPanel(QWidget):
         if self.java_combo is None:
             return
         self._loading = True
-        current = str(self._getter('java_path', '') or '')
+        current = normalize_java_executable(
+            self._getter('java_path', '') or ''
+        )
         self.java_combo.clear()
         self.java_combo.addItem('自动选择最佳 Java', '')
         java_list = LaunchManager().peek_cached_java_list()
@@ -125,16 +132,20 @@ class AdvancedOptionsPanel(QWidget):
             java_list = []
             JavaScanService.instance().start()
         try:
-            for ver, path in java_list:
-                self.java_combo.addItem(f'Java {ver}  |  {path}', path)
+            for ver, path in unique_java_entries(java_list):
+                self.java_combo.addItem(format_java_label(ver, path), path)
         except Exception:
             pass
         if current:
             idx = self.java_combo.findData(current)
-            if idx < 0:
-                self.java_combo.addItem(f'自定义: {current}', current)
+            if idx < 0 and (Path(current).name.lower() == 'java.exe'
+                            and Path(current).is_file()):
+                version = LaunchManager()._get_java_version(current) or '自定义'
+                self.java_combo.addItem(
+                    format_java_label(version, current), current
+                )
                 idx = self.java_combo.count() - 1
-            self.java_combo.setCurrentIndex(idx)
+            self.java_combo.setCurrentIndex(idx if idx >= 0 else 0)
         else:
             self.java_combo.setCurrentIndex(0)
         self._loading = False

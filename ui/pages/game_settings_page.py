@@ -23,7 +23,10 @@ from ui.widgets.painted_icons import painted_icon
 from ui.widgets.settings_widgets import hidpi_pixmap
 from core.config import ConfigManager
 from core.download_manager import DownloadManager
-from core.launch import LaunchManager
+from core.launch import (
+    LaunchManager, format_java_label, normalize_java_executable,
+    unique_java_entries,
+)
 from core.repair import GameRepairWorker
 from ui.widgets.advanced_options import AdvancedOptionsPanel
 from ui.widgets.form_styles import RADIO_BUTTON_STYLE, SLIDER_STYLE
@@ -519,11 +522,14 @@ class GameSettingsPage(QWidget):
         return value
 
     def _set_advanced_value(self, key, value):
+        if key == 'java_path':
+            value = normalize_java_executable(value)
         self._save_setting(key, value)
         if key == 'java_path':
             idx = self.java_combo.findData(value)
             if idx < 0 and value:
-                self.java_combo.addItem(f'自定义: {value}', value)
+                version = self.launch_mgr._get_java_version(value) or '自定义'
+                self.java_combo.addItem(format_java_label(version, value), value)
                 idx = self.java_combo.count() - 1
             self.java_combo.blockSignals(True)
             self.java_combo.setCurrentIndex(idx if idx >= 0 else 0)
@@ -1246,7 +1252,7 @@ class GameSettingsPage(QWidget):
         if index == 0:
             self._save_setting('java_path', '')
         else:
-            path = self.java_combo.itemData(index)
+            path = normalize_java_executable(self.java_combo.itemData(index))
             if path:
                 self._save_setting('java_path', path)
         try:
@@ -1297,12 +1303,8 @@ class GameSettingsPage(QWidget):
             if not path or not os.path.isfile(path):
                 self.java_hint_label.hide()
                 return
-            major = self.launch_mgr._parse_java_major(version)
-            version_text = f'Java {major}' if major is not None else 'Java'
-            if version:
-                version_text += f' ({version})'
             self.java_hint_label.setText(
-                f'将会使用：{version_text}  {Path(path).parent}'
+                f'将会使用：{format_java_label(version, path)}'
             )
             self.java_hint_label.show()
         except RuntimeError:
@@ -1317,37 +1319,40 @@ class GameSettingsPage(QWidget):
 
             def norm(path):
                 try:
-                    return os.path.normcase(os.path.abspath(str(path)))
+                    return os.path.normcase(os.path.abspath(
+                        normalize_java_executable(path)
+                    ))
                 except Exception:
                     return os.path.normcase(str(path))
 
-            def add_entry(version, path, tag=''):
-                path = str(path or '').strip()
-                if not path:
+            def add_entry(version, path):
+                path = normalize_java_executable(str(path or '').strip())
+                if not path or not os.path.isfile(path):
+                    return
+                if Path(path).name.lower() != 'java.exe':
                     return
                 key = norm(path)
                 if key in seen:
                     return
                 seen.add(key)
-                prefix = f'{tag}: ' if tag else ''
-                self.java_combo.addItem(
-                    f'{prefix}Java {version}  [路径: {path}]', path
-                )
+                self.java_combo.addItem(format_java_label(version, path), path)
 
-            for ver, path in (java_list or []):
+            for ver, path in unique_java_entries(java_list):
                 add_entry(ver, path)
             version_path = str(self.settings.get('java_path') or '').strip()
             try:
                 global_path = str(self.config.get('java_path') or '').strip()
             except Exception:
                 global_path = ''
-            for path, tag in ((global_path, '全局导入'), (version_path, '版本自定义')):
+            for path in (global_path, version_path):
                 if path and os.path.isfile(path):
                     add_entry(
                         self.launch_mgr._get_java_version(path) or '自定义',
-                        path, tag,
+                        path,
                     )
-            current_java = version_path or global_path
+            current_java = normalize_java_executable(
+                version_path or global_path
+            )
             current_key = norm(current_java) if current_java else ''
             idx = 0
             if current_key:
@@ -1363,7 +1368,9 @@ class GameSettingsPage(QWidget):
     def _on_java_scan_refresh(self, result):
         '''后台 Java 扫描完成后刷新下拉框（保留当前选择）。'''
         try:
-            current = str(self.java_combo.currentData() or '')
+            current = normalize_java_executable(
+                self.java_combo.currentData() or ''
+            )
             self._fill_java_combo(result)
             if current:
                 for i in range(self.java_combo.count()):

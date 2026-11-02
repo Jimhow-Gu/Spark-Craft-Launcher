@@ -17,7 +17,10 @@ from PySide6.QtGui import (QFont, QDesktopServices, QColor, QPainter, QPalette, 
 from PySide6.QtCore import QRectF
 from core.app_font import ui_font
 from core.config import ConfigManager
-from core.launch import LaunchManager
+from core.launch import (
+    LaunchManager, format_java_label, normalize_java_executable,
+    pretty_java_version, unique_java_entries,
+)
 from core.java_scan import JavaScanService
 from core.logging_setup import LOG_DIR, clear_logs
 from core.background import (FIT_OPTIONS, LOOP_MODES, DEFAULT_LOOP_MODE, get_settings as get_background_settings, list_background_images, next_image, pictures_dir, save_setting as save_background_setting)
@@ -1186,16 +1189,29 @@ class SettingsPage(QWidget):
     def _refresh_java_combo(self, java_list):
         self.java_combo.blockSignals(True)
         try:
-            current_path = str(self.config.get('java_path', '') or '')
+            raw_current = str(self.config.get('java_path', '') or '').strip()
+            current_path = normalize_java_executable(raw_current)
+            if raw_current and current_path != raw_current and Path(current_path).is_file():
+                self.config.set('java_path', current_path, auto_save=False)
+                self.config.save()
             self.java_combo.clear()
-            self._cached_java_list = list(java_list or [])
-            self.java_combo.addItem('自动选择最佳版本', '')
-            entries = list(java_list or [])
+            entries = unique_java_entries(java_list)
+            current_valid = (
+                bool(current_path)
+                and Path(current_path).is_file()
+                and Path(current_path).name.lower() == 'java.exe'
+            )
             # 手工导入的 Java 永久保留，不因重新检测或扫描结果为空而消失
-            if current_path and Path(current_path).exists():
-                if not any(str(p) == current_path for _v, p in entries):
+            if current_valid:
+                current_key = os.path.normcase(os.path.abspath(current_path))
+                if not any(
+                    os.path.normcase(os.path.abspath(str(path))) == current_key
+                    for _ver, path in entries
+                ):
                     ver = self._get_java_version(current_path) or '自定义'
                     entries.append((ver, current_path))
+            self._cached_java_list = list(entries)
+            self.java_combo.addItem('自动选择最佳版本', '')
             if not entries:
                 self.java_combo.addItem('未检测到Java', None)
                 self.java_combo.setCurrentIndex(0)
@@ -1203,20 +1219,19 @@ class SettingsPage(QWidget):
                 self.java_status.setStyleSheet('color: #fbbf24; font-size: 12px;')
                 return
             found_index = -1
+            current_key = (
+                os.path.normcase(os.path.abspath(current_path))
+                if current_valid else ''
+            )
             for i, (ver, path) in enumerate(entries):
-                display = f'Java {ver}  [路径: {path}]'
-                self.java_combo.addItem(display, path)
-                if str(path) == current_path and Path(path).exists():
+                self.java_combo.addItem(format_java_label(ver, path), path)
+                if current_key and os.path.normcase(os.path.abspath(path)) == current_key:
                     found_index = i + 1
             if found_index >= 0:
                 self.java_combo.setCurrentIndex(found_index)
-                self.java_status.setText(f'✅ 当前使用: Java {entries[found_index - 1][0]}')
+                version_text = pretty_java_version(entries[found_index - 1][0])
+                self.java_status.setText(f'✅ 当前使用: Java {version_text}')
                 self.java_status.setStyleSheet('color: #4ade80; font-size: 12px;')
-            elif current_path and Path(current_path).exists():
-                self.java_combo.addItem(f'自定义: {current_path}', current_path)
-                self.java_combo.setCurrentIndex(self.java_combo.count() - 1)
-                self.java_status.setText('⚠️ 当前使用自定义 Java')
-                self.java_status.setStyleSheet('color: #fbbf24; font-size: 12px;')
             else:
                 self.java_combo.setCurrentIndex(0)
                 self.java_status.setText('✅ 将自动选择最佳 Java 版本')
@@ -1239,7 +1254,8 @@ class SettingsPage(QWidget):
         self._refresh_java_combo(java_list)
         if self._manual_java_detect:
             self._manual_java_detect = False
-            self.java_status.setText(f'✅ 更新完成，当前有 {len(java_list)} 个 Java')
+            count = len(unique_java_entries(java_list))
+            self.java_status.setText(f'✅ 更新完成，当前有 {count} 个 Java')
             self.java_status.setStyleSheet('color: #4ade80; font-size: 12px;')
             self.settings_changed.emit()
 
@@ -1254,16 +1270,22 @@ class SettingsPage(QWidget):
             self._sync_advanced_java()
             self.settings_changed.emit()
             return
-        path = self.java_combo.itemData(index)
-        if path and Path(path).exists():
+        path = normalize_java_executable(self.java_combo.itemData(index))
+        if path and Path(path).is_file():
             self.config.set('java_path', path, auto_save=False)
             self.config.save()
             ver = '未知版本'
-            for v, p in self._cached_java_list:
-                if p == path:
-                    ver = v
-                    break
-            self.java_status.setText(f'✅ 已选择: Java {ver}')
+            try:
+                path_key = os.path.normcase(os.path.abspath(path))
+                for v, p in self._cached_java_list:
+                    if os.path.normcase(os.path.abspath(str(p))) == path_key:
+                        ver = v
+                        break
+            except Exception:
+                pass
+            self.java_status.setText(
+                f'✅ 已选择: Java {pretty_java_version(ver)}'
+            )
             self.java_status.setStyleSheet('color: #4ade80; font-size: 12px;')
             self._sync_advanced_java()
             self.settings_changed.emit()
@@ -1280,11 +1302,18 @@ class SettingsPage(QWidget):
             pass
 
     def _on_import_java(self):
-        # 使用 *.exe 而不是写死两个文件名：Windows 原生文件对话框对
-        # "javaw.exe java.exe" 这种精确文件名过滤支持并不可靠。
-        file_filter = 'Java 可执行文件 (*.exe);;所有文件 (*.*)'
-        path, _ = QFileDialog.getOpenFileName(self, '选择 Java 可执行文件', '', file_filter)
+        file_filter = 'Java 可执行文件 (java.exe);;所有文件 (*.*)'
+        path, _ = QFileDialog.getOpenFileName(self, '选择 java.exe', '', file_filter)
         if not path:
+            return
+        path = normalize_java_executable(path)
+        if (Path(path).name.lower() != 'java.exe'
+                or not Path(path).is_file()):
+            QMessageBox.warning(
+                self, '无法导入',
+                '只能导入 Java 可执行文件 java.exe。\n'
+                '请进入 Java 安装目录的 bin 文件夹选择 java.exe。',
+            )
             return
         normalized = os.path.normcase(os.path.abspath(path))
         existing = -1
@@ -1297,11 +1326,13 @@ class SettingsPage(QWidget):
             self.java_combo.setCurrentIndex(existing)
         else:
             ver = self._get_java_version(path) or '自定义'
-            self.java_combo.addItem(f'Java {ver}  [路径: {path}]', path)
+            self.java_combo.addItem(format_java_label(ver, path), path)
             self.java_combo.setCurrentIndex(self.java_combo.count() - 1)
             self.config.set('java_path', path, auto_save=False)
             self.config.save()
-            self.java_status.setText(f'✅ 已导入 Java: {ver}')
+            self.java_status.setText(
+                f'✅ 已导入 Java: {pretty_java_version(ver)}'
+            )
             self.java_status.setStyleSheet('color: #4ade80; font-size: 12px;')
         # 同步到全局扫描结果并广播，游戏设置里的 Java 列表会立即刷新。
         try:
@@ -1427,11 +1458,14 @@ class SettingsPage(QWidget):
         return value
 
     def _set_advanced_value(self, key, value):
+        if key == 'java_path':
+            value = normalize_java_executable(value)
         self.config.set(key, value)
         if key == 'java_path':
             idx = self.java_combo.findData(value)
             if idx < 0 and value:
-                self.java_combo.addItem(f'自定义: {value}', value)
+                version = self._get_java_version(value) or '自定义'
+                self.java_combo.addItem(format_java_label(version, value), value)
                 idx = self.java_combo.count() - 1
             self.java_combo.blockSignals(True)
             self.java_combo.setCurrentIndex(idx if idx >= 0 else 0)

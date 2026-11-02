@@ -56,6 +56,77 @@ def _library_applies(lib: dict) -> bool:
             allowed = True
     return allowed
 
+def normalize_java_executable(java_path) -> str:
+    '''统一使用 java.exe：传入 javaw.exe 时自动换成同目录的 java.exe。'''
+
+    path = str(java_path or '').strip()
+    if not path:
+        return ''
+    try:
+        path_obj = Path(path)
+        if path_obj.name.lower() == 'javaw.exe':
+            console_java = path_obj.with_name('java.exe')
+            if console_java.is_file():
+                return str(console_java)
+    except Exception:
+        pass
+    return path
+
+
+def pretty_java_version(version) -> str:
+    '''把 Java 8 的 1.8.0_xxx 显示成 8.0.xxx，其余版本保持原样。'''
+
+    text = str(version or '').strip()
+    match = re.match(r'^1\.8\.0[._-]?(\d+)', text)
+    if match:
+        return f'8.0.{match.group(1)}'
+    if text == '1.8.0':
+        return '8.0.0'
+    return text
+
+
+def java_major_version(version):
+    text = pretty_java_version(version)
+    match = re.match(r'^(\d+)', text)
+    try:
+        return int(match.group(1)) if match else None
+    except (AttributeError, ValueError):
+        return None
+
+
+def format_java_label(version, java_path) -> str:
+    '''格式化 Java 列表项：Java 25 (25.0.2): C:\\...\\bin\\'''
+
+    exe = Path(normalize_java_executable(java_path))
+    bindir = exe.parent
+    bindir_text = str(bindir).rstrip('\\/') + os.sep
+    full = pretty_java_version(version)
+    major = java_major_version(full)
+    if major is None:
+        return f'Java: {bindir_text}'
+    return f'Java {major} ({full}): {bindir_text}'
+
+
+def unique_java_entries(java_list):
+    '''只保留 java.exe，并按可执行文件路径去重。'''
+
+    entries = []
+    seen = set()
+    for version, path in (java_list or []):
+        exe = normalize_java_executable(path)
+        try:
+            if Path(exe).name.lower() != 'java.exe' or not os.path.isfile(exe):
+                continue
+            key = os.path.normcase(os.path.abspath(exe))
+        except Exception:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append((str(version or ''), exe))
+    return entries
+
+
 def chinese_lang_code(base_version) -> str:
     '''返回当前 Minecraft 版本使用的简体中文语言代码。
 
@@ -218,6 +289,9 @@ class LaunchManager:
         def add_candidate(full):
             if not full:
                 return
+            full = normalize_java_executable(full)
+            if Path(str(full)).name.lower() != 'java.exe':
+                return
             try:
                 key = os.path.normcase(os.path.abspath(str(full)))
             except Exception:
@@ -288,16 +362,18 @@ class LaunchManager:
         try:
             runtime_dir = Path(self.config.get_mc_dir()) / 'runtime'
             if runtime_dir.is_dir():
-                for exe in runtime_dir.rglob('javaw.exe'):
-                    add_candidate(str(exe))
+                for exe_name in ('java.exe', 'javaw.exe'):
+                    for exe in runtime_dir.rglob(exe_name):
+                        add_candidate(str(exe))
         except Exception:
             pass
         try:
             from core.paths import scl_dir
             launcher_runtime = scl_dir() / 'runtime'
             if launcher_runtime.is_dir():
-                for exe in launcher_runtime.rglob('javaw.exe'):
-                    add_candidate(str(exe))
+                for exe_name in ('java.exe', 'javaw.exe'):
+                    for exe in launcher_runtime.rglob(exe_name):
+                        add_candidate(str(exe))
         except Exception:
             pass
         return java_list
@@ -359,8 +435,9 @@ class LaunchManager:
         '''把手动导入的 Java 加入当前会话的全局候选列表。'''
 
         global _SHARED_JAVA_LIST
-        path = str(java_path or '').strip()
-        if not path or not os.path.isfile(path):
+        path = normalize_java_executable(str(java_path or '').strip())
+        if (not path or not os.path.isfile(path)
+                or Path(path).name.lower() != 'java.exe'):
             return self.peek_cached_java_list() or []
         try:
             key = os.path.normcase(os.path.abspath(path))
@@ -435,6 +512,7 @@ class LaunchManager:
         java_list = self._cached_java_list or []
         candidates = []
         for ver_str, path in java_list:
+            path = normalize_java_executable(path)
             major = self._parse_java_major(ver_str)
             if major is None or major < required_version:
                 continue
@@ -833,12 +911,13 @@ class LaunchManager:
         global_java = str(self.config.get('java_path', '') or '').strip()
         java_path = ''
         for candidate in version_java, global_java:
+            candidate = normalize_java_executable(candidate)
             if candidate and os.path.isfile(candidate):
                 java_path = candidate
                 break
         required = self._get_required_java_version(final_id)
         min_java, max_java, has_max = self._get_java_bounds(final_id, required)
-        forced = str(force_java_path or '').strip()
+        forced = normalize_java_executable(str(force_java_path or '').strip())
         if forced and os.path.isfile(forced):
             java_path = forced
         elif java_path:
@@ -849,7 +928,7 @@ class LaunchManager:
         if not java_path:
             best_ver, best_path = self._select_best_java(required, max_java if has_max else None)
             if best_path:
-                java_path = best_path
+                java_path = normalize_java_executable(best_path)
                 logger.info(f'版本 {final_id} 需要 Java {required}，已选择 Java {best_ver}')
             else:
                 if prompt_java:
@@ -1148,6 +1227,7 @@ class LaunchManager:
             return False, f'版本 {version_id} 未安装'
         version_settings = self.get_version_settings(version_id)
         java_path = str(version_settings.get('java_path') or '').strip() or str(self.config.get('java_path') or '').strip()
+        java_path = normalize_java_executable(java_path)
         if not java_path:
             required = self._get_required_java_version(actual_id)
             _min_java, max_java, has_max = self._get_java_bounds(actual_id, required)
