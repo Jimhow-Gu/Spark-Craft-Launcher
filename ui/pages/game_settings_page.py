@@ -137,13 +137,16 @@ class GameSettingsPage(QWidget):
         self.launch_mgr = LaunchManager()
         self.settings = self.launch_mgr.get_version_settings(version_id)
         self._effective_isolated = self.launch_mgr.is_version_isolated(version_id)
-        # 与 PCL/HMCL 互通：打开版本设置时回填当前隔离状态标记
+        # 与 PCL/HMCL 互通：有本地显式设置或外部标记时才回填，
+        # 避免在没有隔离信息时把默认值写进对方的配置。
         try:
-            from core.interop import write_isolation_markers
-            write_isolation_markers(
-                Path(self.config.get_mc_dir()) / 'versions' / version_id,
-                self._effective_isolated,
-            )
+            from core.interop import read_external_isolation, write_isolation_markers
+            version_dir = Path(self.config.get_mc_dir()) / 'versions' / version_id
+            external = None
+            if 'isolated' not in self.settings:
+                external = read_external_isolation(version_dir)
+            if 'isolated' in self.settings or external is not None:
+                write_isolation_markers(version_dir, self._effective_isolated)
         except Exception:
             pass
         self._repair_worker = None

@@ -15,14 +15,15 @@ class WindowTitleBar(QFrame):
         super().__init__(parent)
         self._window = window
         self._drag_offset = QPoint()
+        self._drag_target = None
+        self._drag_applied = None
         self._dragging = False
         self._title_text = ''
         self._light = False
         self._logo_pixmap = None
-        self._video_frozen = False
         self._drag_release_timer = QTimer(self)
-        self._drag_release_timer.setInterval(30)
-        self._drag_release_timer.timeout.connect(self._check_drag_release)
+        self._drag_release_timer.setInterval(16)
+        self._drag_release_timer.timeout.connect(self._apply_drag_position)
         self.setFixedHeight(self.HEIGHT)
         self.setObjectName('WindowTitleBar')
         self.setFrameShape(QFrame.NoFrame)
@@ -198,50 +199,53 @@ class WindowTitleBar(QFrame):
         self._title_anim = animation
         animation.start()
 
-    def _freeze_background_video(self):
-        if self._video_frozen:
-            return
-        try:
-            self._window.central.freeze_video_updates(True)
-            self._video_frozen = True
-        except AttributeError:
-            pass
-
-    def _restore_background_video(self):
-        if not self._video_frozen:
-            return
-        self._video_frozen = False
-        self._drag_release_timer.stop()
-        try:
-            self._window.central.freeze_video_updates(False)
-        except AttributeError:
-            pass
-
-    def _check_drag_release(self):
-        if not (QApplication.mouseButtons() & Qt.LeftButton):
-            self._dragging = False
-            self._restore_background_video()
-
-    def _start_system_move(self):
+    def _set_window_position(self, position):
         try:
             handle = self._window.windowHandle()
-            if handle is not None and handle.startSystemMove():
-                return True
+            if handle is not None:
+                handle.setPosition(position)
+                return
         except Exception:
             pass
-        return False
+        try:
+            self._window.move(position)
+        except RuntimeError:
+            pass
+
+    def _apply_drag_position(self):
+        if not self._dragging:
+            self._drag_release_timer.stop()
+            return
+        if not (QApplication.mouseButtons() & Qt.LeftButton):
+            self._finish_drag()
+            return
+        target = self._drag_target
+        if target is None or target == self._drag_applied:
+            return
+        self._drag_applied = QPoint(target)
+        self._set_window_position(target)
+
+    def _finish_drag(self):
+        target = self._drag_target
+        if target is not None and target != self._drag_applied:
+            self._drag_applied = QPoint(target)
+            self._set_window_position(target)
+        self._drag_target = None
+        self._drag_applied = None
+        self._dragging = False
+        self._drag_release_timer.stop()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            # 优先交给 Windows 原生窗口移动循环，避免逐帧 move() 导致整窗重绘卡顿。
-            self._freeze_background_video()
-            if self._start_system_move():
-                self._dragging = False
-                self._drag_release_timer.start()
-                event.accept()
-                return
+            # 不使用 startSystemMove：Windows 原生移动循环会阻塞 Qt 事件循环，
+            # 拖拽期间视频帧和界面动画都会停住。这里按 60Hz 批量设置窗口位置，
+            # 既保持事件循环响应，也避免每个鼠标事件都触发一次重绘。
             self._dragging = True
-            self._drag_offset = event.globalPosition().toPoint() - self._window.frameGeometry().topLeft()
+            self._drag_offset = (
+                event.globalPosition().toPoint() - self._window.pos()
+            )
+            self._drag_target = QPoint(self._window.pos())
+            self._drag_applied = QPoint(self._drag_target)
             self._drag_release_timer.start()
             event.accept()
             return
@@ -249,14 +253,20 @@ class WindowTitleBar(QFrame):
 
     def mouseMoveEvent(self, event):
         if self._dragging and event.buttons() & Qt.LeftButton:
-            self._window.move(event.globalPosition().toPoint() - self._drag_offset)
+            self._drag_target = (
+                event.globalPosition().toPoint() - self._drag_offset
+            )
+            if not self._drag_release_timer.isActive():
+                self._drag_release_timer.start()
             event.accept()
             return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        self._dragging = False
-        self._restore_background_video()
+        if self._dragging and event.button() == Qt.LeftButton:
+            self._finish_drag()
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event):
