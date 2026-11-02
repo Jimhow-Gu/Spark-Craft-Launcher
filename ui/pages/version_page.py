@@ -570,16 +570,36 @@ class VersionPage(QWidget):
         self._start_validation([new_id])
 
     def _load_installed_versions(self):
+        try:
+            versions = self.version_mgr.get_installed_versions(strict=True)
+        except Exception as exc:
+            # 安装刚结束时文件系统/杀毒软件可能短暂占用目录；不要立刻把
+            # “加载失败”盖到列表上，稍后自动重试。
+            retries = int(getattr(self, '_installed_load_retries', 0))
+            if retries < 3:
+                self._installed_load_retries = retries + 1
+                if not getattr(self, '_installed_load_retry_pending', False):
+                    self._installed_load_retry_pending = True
+                    QTimer.singleShot(500, self._retry_load_installed)
+                return
+            self._installed_load_retries = 0
+            self._installed_load_retry_pending = False
+            if self.installed_list.count() == 0:
+                self.installed_list.addItem('加载失败，请点击刷新重试')
+                self._on_installed_selection_changed()
+            return
+        self._installed_load_retries = 0
+        self._installed_load_retry_pending = False
+        versions.sort(
+            key=lambda v: _natural_key(str(v.get('id', ''))),
+            reverse=True,
+        )
+        self.installed_list.setUpdatesEnabled(False)
         self.installed_list.clear()
         self._validation = {}
         self._version_items = {}
         self._nicknames = self.config.get('version_nicknames', {})
         try:
-            versions = self.version_mgr.get_installed_versions()
-            versions.sort(
-                key=lambda v: _natural_key(str(v.get('id', ''))),
-                reverse=True,
-            )
             for v in versions:
                 vid = v.get('id', 'unknown')
                 vtype = v.get('type', '')
@@ -593,9 +613,15 @@ class VersionPage(QWidget):
             else:
                 self.installed_list.setCurrentRow(0)
                 self._start_validation(list(self._version_items))
-        except Exception as e:
-            self.installed_list.addItem(f'加载失败: {e}')
+        except Exception:
+            if self.installed_list.count() == 0:
+                self.installed_list.addItem('加载失败，请点击刷新重试')
+        self.installed_list.setUpdatesEnabled(True)
         self._on_installed_selection_changed()
+
+    def _retry_load_installed(self):
+        self._installed_load_retry_pending = False
+        self._load_installed_versions()
 
     def _start_validation(self, version_ids):
         old = self._validation_worker
@@ -861,10 +887,11 @@ class VersionPage(QWidget):
             self._load_worker = None
         self._loading = False
 
-    def _load_available_versions_async(self):
+    def _load_available_versions_async(self, silent=False):
         if self._install_busy():
             self._pending_available_refresh = True
             return
+        self._available_silent = bool(silent)
         self._load_gen += 1
         gen = self._load_gen
         old = self._load_worker
@@ -879,8 +906,9 @@ class VersionPage(QWidget):
                 pass
         self._load_worker = None
         self._loading = False
-        self.available_list.clear()
-        self.available_loading.start('正在加载版本列表', 0)
+        if not silent:
+            self.available_list.clear()
+            self.available_loading.start('正在加载版本列表', 0)
         mirror_urls = self.config.get_version_mirrors() or ['https://launchermeta.mojang.com', 'https://bmclapi2.bangbang93.com', 'https://openbmclapi.bangbang93.com']
         type_map = {0: 'release', 1: 'snapshot'}
         vtype = type_map.get(self.type_combo.currentIndex(), 'release')
@@ -917,20 +945,25 @@ class VersionPage(QWidget):
     def _on_versions_loaded(self, versions, generation=None):
         if generation is not None and generation != self._load_gen:
             return
+        silent = bool(getattr(self, '_available_silent', False))
+        self._available_silent = False
         self._loading = False
-        self.available_list.clear()
         if not versions:
             offline = not network_available()
             reason = (
                 '未连接到互联网，无法获取版本列表'
                 if offline else '获取版本列表失败，请检查网络连接'
             )
-            self.available_loading.fail(reason)
+            if silent:
+                self.available_loading.stop()
+            else:
+                self.available_loading.fail(reason)
             if self._load_worker:
                 self._load_worker.deleteLater()
                 self._load_worker = None
             return
-        self.available_loading.finish()
+        self.available_list.setUpdatesEnabled(False)
+        self.available_list.clear()
         def _version_order(v):
             return str(v.get('releaseTime') or v.get('time') or ''), _natural_key(str(v.get('id', '')))
 
@@ -956,6 +989,10 @@ class VersionPage(QWidget):
         if self._load_worker:
             self._load_worker.deleteLater()
             self._load_worker = None
+        self.available_list.setUpdatesEnabled(True)
+        # 列表项绘制完成后再结束加载遮罩，避免空列表短暂闪现。
+        if not silent:
+            self.available_loading.finish()
 
     def _on_version_double_clicked(self, item):
         version_id = item.data(Qt.UserRole)
@@ -1228,10 +1265,10 @@ class VersionPage(QWidget):
             self._pending_post_install_refresh = False
             self._pending_available_refresh = False
             self._load_installed_versions()
-            self._load_available_versions_async()
+            self._load_available_versions_async(silent=True)
         elif self._pending_available_refresh:
             self._pending_available_refresh = False
-            self._load_available_versions_async()
+            self._load_available_versions_async(silent=True)
         name = self._pending_installed_version
         self._pending_installed_version = ''
         if name:
@@ -1316,10 +1353,10 @@ class VersionPage(QWidget):
             self._pending_post_install_refresh = False
             self._pending_available_refresh = False
             self._load_installed_versions()
-            self._load_available_versions_async()
+            self._load_available_versions_async(silent=True)
         elif self._pending_available_refresh:
             self._pending_available_refresh = False
-            self._load_available_versions_async()
+            self._load_available_versions_async(silent=True)
         version_name = self._pending_installed_version
         self._pending_installed_version = ''
         self.version_installed.emit(version_name or '')
@@ -1547,7 +1584,7 @@ class VersionPage(QWidget):
         self.version_installed.emit(version_id or '')
         if self._pending_available_refresh:
             self._pending_available_refresh = False
-            self._load_available_versions_async()
+            self._load_available_versions_async(silent=True)
 
     def _on_modpack_error(self, message):
         if self._modpack_task_id:

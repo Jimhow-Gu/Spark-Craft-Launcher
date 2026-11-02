@@ -369,7 +369,8 @@ class IconLoader(QObject):
         self._queued = set()
         self._active = set()
         self._replies = {}
-        self._max_active = 12
+        self._max_active = 8
+        self._fallback_max = 4
         self._cache_limit = 160
         self._enabled = True
 
@@ -408,7 +409,7 @@ class IconLoader(QObject):
                 req.setAttribute(QNetworkRequest.Attribute.CacheLoadControlAttribute, QNetworkRequest.CacheLoadControl.PreferCache)
                 req.setAttribute(QNetworkRequest.Attribute.CacheSaveControlAttribute, True)
                 req.setPriority(QNetworkRequest.Priority.HighPriority)
-                req.setTransferTimeout(8000)
+                req.setTransferTimeout(6000)
             except Exception:
                 pass
             reply = self._manager.get(req)
@@ -444,13 +445,16 @@ class IconLoader(QObject):
     def _start_fallback(self, url):
         if not url or not self._enabled or url in self._fallback_active:
             return
+        # 图标 CDN 失败时不要无限开线程；社区页几十个图标同时回退会卡主界面。
+        if len(self._fallback_active) >= self._fallback_max:
+            return
         self._fallback_active.add(url)
         threading.Thread(target=self._fetch_fallback, args=(url,), daemon=True).start()
 
     def _fetch_fallback(self, url):
         data = b''
         try:
-            http = HttpClient(timeout=20, retries=2, verify=False)
+            http = HttpClient(timeout=8, retries=1, verify=False)
             try:
                 response = http.get(url)
                 if response.status_code < 400:
@@ -1121,11 +1125,11 @@ class ProjectFilesDialog(QDialog):
         self.status_label.setText('')
         self._load_timeout = QTimer(self)
         self._load_timeout.setSingleShot(True)
-        self._load_timeout.setInterval(45000)
+        self._load_timeout.setInterval(20000)
         self._load_timeout.timeout.connect(self._on_load_timeout)
         self._load_timeout.start()
         self.loading_overlay.start_auto('正在加载文件列表')
-        self._worker = FilesWorker(project.source, project, '', loader)
+        self._worker = FilesWorker(project.source, project, self.mc_version, loader)
         self._worker.done.connect(self._on_files)
         self._worker.error.connect(self._on_error)
         _track_worker(self._worker)
@@ -1154,7 +1158,6 @@ class ProjectFilesDialog(QDialog):
             self._load_timeout.stop()
         except (AttributeError, RuntimeError):
             pass
-        self.loading_overlay.stop()
         self._files = files or []
         self.retry_btn.hide()
         while self.groups_layout.count():
@@ -1173,6 +1176,7 @@ class ProjectFilesDialog(QDialog):
             self.status_label.setText('没有可用文件')
             self.status_label.setStyleSheet('color: #ff7777; font-size: 12px;')
             self.download_btn.setEnabled(False)
+            self.loading_overlay.stop()
             return
         try:
             groups = {}
@@ -1195,6 +1199,7 @@ class ProjectFilesDialog(QDialog):
             self.status_label.setStyleSheet('color: #ff7777; font-size: 12px;')
             self.retry_btn.show()
             self.download_btn.setEnabled(False)
+            self.loading_overlay.stop()
             return
         compatible = self.mc_version in groups
         if self.mc_version and not compatible:
@@ -1231,6 +1236,7 @@ class ProjectFilesDialog(QDialog):
         else:
             self.status_label.setText(f'共 {len(files)} 个文件，请选择要安装的版本')
         self.status_label.setStyleSheet('color: rgba(255,255,255,0.55); font-size: 12px;')
+        self.loading_overlay.stop()
 
     def _on_error(self, message):
         text = str(message)
@@ -1270,7 +1276,7 @@ class ProjectFilesDialog(QDialog):
         except (AttributeError, RuntimeError):
             pass
         self.loading_overlay.start_auto('正在加载文件列表')
-        self._worker = FilesWorker(self.project.source, self.project, '', self.loader)
+        self._worker = FilesWorker(self.project.source, self.project, self.mc_version, self.loader)
         self._worker.done.connect(self._on_files)
         self._worker.error.connect(self._on_error)
         _track_worker(self._worker)
@@ -1458,6 +1464,11 @@ class ModBrowserPage(QWidget):
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.timeout.connect(self.search)
+        self._search_worker = None
+        self._search_timeout = QTimer(self)
+        self._search_timeout.setSingleShot(True)
+        self._search_timeout.setInterval(15000)
+        self._search_timeout.timeout.connect(self._on_search_timeout)
         self._init_ui()
         _register_app_cleanup()
 
@@ -1728,11 +1739,19 @@ class ModBrowserPage(QWidget):
         sort = self.sort_combo.currentData() or 'relevance'
         self._generation += 1
         gen = self._generation
+        old_worker = self._search_worker
+        if old_worker is not None and old_worker.isRunning():
+            try:
+                old_worker.cancel()
+            except RuntimeError:
+                pass
         self._show_loading('正在加载...')
         offset = (self._page - 1) * self.PAGE_SIZE
         worker = SearchWorker(gen, source_name, query, self.project_type, mc_version, loader, category, sort, offset, self.PAGE_SIZE)
         worker.done.connect(self._on_search_done)
         worker.error.connect(self._on_search_error)
+        self._search_worker = worker
+        self._search_timeout.start()
         self._workers.append(worker)
         worker.finished.connect((lambda w=worker: self._release_worker(w)))
         _track_worker(worker)
@@ -1740,23 +1759,41 @@ class ModBrowserPage(QWidget):
     def _release_worker(self, worker):
         if worker in self._workers:
             self._workers.remove(worker)
+        if self._search_worker is worker:
+            self._search_worker = None
+
+    def _on_search_timeout(self):
+        '''搜索超过 15 秒仍未返回时结束加载态，避免社区页一直卡在转圈。'''
+
+        worker = self._search_worker
+        if worker is not None and worker.isRunning():
+            try:
+                worker.cancel()
+            except RuntimeError:
+                pass
+        self._generation += 1
+        self.status_label.setText('加载超时')
+        self.loading_overlay.fail('加载超时，请检查网络后重试')
 
     def _on_search_done(self, generation, result):
         if generation != self._generation:
             return
+        self._search_timeout.stop()
         self._total = max(0, result.total)
         pages = max(1, math.ceil(self._total / self.PAGE_SIZE))
         if self._page > pages:
             self._page = pages
             self.search()
             return
-        self.loading_overlay.finish()
         self.pagination.set_pages(self._page, pages)
         self._render_projects(result.projects)
+        # 先完成列表绘制再结束遮罩，避免“没加载好就闪一下”的空列表。
+        self.loading_overlay.finish()
 
     def _on_search_error(self, generation, message):
         if generation != self._generation:
             return
+        self._search_timeout.stop()
         self._total = 0
         self._page = 1
         self.pagination.set_pages(1, 1)
@@ -2143,6 +2180,10 @@ class ModBrowserPage(QWidget):
         super().hideEvent(event)
 
     def shutdown(self):
+        try:
+            self._search_timeout.stop()
+        except Exception:
+            pass
         try:
             self.loading_overlay.stop()
         except Exception:

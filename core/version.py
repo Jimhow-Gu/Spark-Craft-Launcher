@@ -247,7 +247,11 @@ class VersionManager:
         dependency_ids = set()
         if not self.versions_dir.exists():
             return dependency_ids
-        for ver_dir in self.versions_dir.iterdir():
+        try:
+            version_dirs = [item for item in self.versions_dir.iterdir() if item.is_dir()]
+        except OSError:
+            return dependency_ids
+        for ver_dir in version_dirs:
             if not ver_dir.is_dir():
                 continue
             current = ver_dir.name
@@ -271,13 +275,19 @@ class VersionManager:
                     current = parent
         return dependency_ids
 
-    def get_installed_versions(self):
+    def get_installed_versions(self, strict=False):
         versions = []
         if not self.versions_dir.exists():
             return versions
         dependency_ids = self._dependency_version_ids()
         active_hidden = _active_install_hidden(self.versions_dir)
-        for ver_dir in self.versions_dir.iterdir():
+        try:
+            version_dirs = list(self.versions_dir.iterdir())
+        except OSError:
+            if strict:
+                raise
+            return versions
+        for ver_dir in version_dirs:
             if ver_dir.is_dir():
                 if ver_dir.name in active_hidden:
                     continue
@@ -319,7 +329,11 @@ class VersionManager:
             return result
         dependency_ids = self._dependency_version_ids()
         active_hidden = _active_install_hidden(self.versions_dir)
-        for ver_dir in self.versions_dir.iterdir():
+        try:
+            version_dirs = list(self.versions_dir.iterdir())
+        except OSError:
+            return result
+        for ver_dir in version_dirs:
             if not ver_dir.is_dir():
                 continue
             if ver_dir.name in active_hidden:
