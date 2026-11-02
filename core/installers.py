@@ -38,10 +38,21 @@ class ProgressMapper:
         self.base = base
         self.span = span
         self.callback = callback or (lambda _p: None)
+        self._last_time = 0.0
+        self._last_value = -1
 
     def __call__(self, percent):
         value = int(self.base + max(0, min(100, percent)) * self.span / 100)
-        self.callback(max(0, min(100, value)))
+        value = max(0, min(100, value))
+        now = time.monotonic()
+        # 安装器会按文件/线程高频回调；限制到约 10Hz，避免把 Qt 事件队列塞满。
+        if percent < 100 and (
+            value == self._last_value or now - self._last_time < 0.1
+        ):
+            return
+        self._last_time = now
+        self._last_value = value
+        self.callback(value)
 
 
 def make_lib_callback(status_cb, progress_mapper):

@@ -17,7 +17,6 @@ from urllib.parse import urlparse
 import certifi
 import requests
 from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 USER_AGENT = 'PMGL-Launcher/1.1 (Minecraft Launcher)'
 _NETWORK_STATE_LOCK = threading.Lock()
 _NETWORK_STATE = (0.0, True)
@@ -142,15 +141,15 @@ class DownloadGate:
     _lock = threading.Lock()
     _condition = threading.Condition(_lock)
     _active = 0
-    _max = 64
+    _max = 16
     @classmethod
     def configure(cls, limit):
         try:
             limit = int(limit)
         except Exception:
-            limit = 64
+            limit = 16
         with cls._condition:
-            cls._max = max(1, min(256, limit))
+            cls._max = max(1, min(64, limit))
             cls._condition.notify_all()
 
     @classmethod
@@ -228,14 +227,15 @@ class HttpClient:
         self._verify_certs = certifi.where() if verify else False
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': user_agent, 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.5', 'Connection': 'keep-alive'})
-        retry = Retry(total=retries, connect=retries, read=retries, backoff_factor=0.8, status_forcelist=(429, 500, 502, 503, 504), allowed_methods=frozenset(['GET', 'HEAD']), raise_on_status=False)
-        adapter = HTTPAdapter(max_retries=retry, pool_connections=8, pool_maxsize=8)
+        # 重试统一由上层 HttpClient/候选源逻辑控制，避免 urllib3 再乘一次重试，
+        # 在坏网络下产生几十倍连接尝试。
+        adapter = HTTPAdapter(max_retries=0, pool_connections=8, pool_maxsize=8)
         self.session.mount('http://', adapter)
         self.session.mount('https://', adapter)
         try:
             from core.config import ConfigManager
             config = ConfigManager()
-            DownloadGate.configure(config.get('download_threads', 64))
+            DownloadGate.configure(config.get('download_threads', 16))
             DownloadSpeedLimiter.configure(config.get('download_speed_limit', 0))
         except Exception:
             pass

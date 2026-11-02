@@ -1426,6 +1426,13 @@ class VersionPage(QWidget):
         worker = self._modpack_worker
         if worker and worker.isRunning():
             worker.cancel()
+        # 关闭页面时同时从下载管理移除任务，避免取消后进度条/任务卡在列表里。
+        if self._modpack_task_id:
+            try:
+                DownloadManager.instance().cancel_task(self._modpack_task_id)
+            except Exception:
+                pass
+            self._modpack_task_id = ''
         # 保留 worker 引用直到 finished 信号触发：
         # 否则取消后立刻再导入会与旧任务并发写同一个版本目录，导致未响应/崩溃
         page = self._modpack_page
@@ -1445,6 +1452,14 @@ class VersionPage(QWidget):
         if not task:
             return
         lowered = str(text or '')
+        now = time.monotonic()
+        important = any(
+            key in lowered
+            for key in ('导入完成', '失败', '错误', '取消', '解析', '下载整合包内容')
+        )
+        if not important and now - getattr(self, '_modpack_status_time', 0.0) < 0.15:
+            return
+        self._modpack_status_time = now
         floor = self._modpack_floor
         if any((key in lowered for key in ('解析', '准备', '读取'))):
             floor = max(floor, 5.0)

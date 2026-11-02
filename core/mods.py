@@ -169,17 +169,31 @@ class BaseSource:
 class ModrinthSource(BaseSource):
     name = 'Modrinth'
     def __init__(self):
-        self.http = HttpClient(timeout=15)
+        self.http = HttpClient(timeout=8, retries=1)
 
     def _get_json(self, url, params=None):
         last = None
         targets = [url]
         if url.startswith(MODRINTH_API):
             targets.append(url.replace(MODRINTH_API, 'https://mod.mcimirror.top/modrinth/v2', 1))
-        for attempt in range(3):
-            for target in targets:
+        if len(targets) == 1:
+            return self.http.get_json(url, params=params)
+        # 官方源与镜像并发请求，谁先成功用谁；避免坏网络下依次等满超时。
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def fetch(target):
+            client = HttpClient(timeout=8, retries=1)
+            try:
+                return client.get_json(target, params=params)
+            finally:
+                client.close()
+
+        pool = ThreadPoolExecutor(max_workers=len(targets))
+        try:
+            futures = [pool.submit(fetch, target) for target in targets]
+            for future in as_completed(futures):
                 try:
-                    return self.http.get_json(target, params=params)
+                    result = future.result()
                 except Exception as exc:
                     last = exc
                     status_code = getattr(exc, 'status_code', None)
@@ -187,15 +201,15 @@ class ModrinthSource(BaseSource):
                     if response is not None:
                         status_code = response.status_code
                     if status_code in (401, 403, 404):
+                        for pending in futures:
+                            pending.cancel()
                         raise
                     continue
-            if attempt < 2:
-                time.sleep(0.8)
-                try:
-                    self.http.close()
-                except Exception:
-                    pass
-                self.http = HttpClient(timeout=15)
+                for pending in futures:
+                    pending.cancel()
+                return result
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
         raise last
 
     def search(self, query, project_type, mc_version='', loader='', category='', sort='relevance', offset=0, limit=20):
@@ -395,7 +409,7 @@ class CurseForgeSource(BaseSource):
         base = (os.environ.get('CURSEFORGE_API_BASE', '').strip() or str(cfg.get('curseforge_api_base', '') or '').strip() or CURSEFORGE_API).rstrip('/')
         self.api_base = base
         self.mirror_base = 'https://mod.mcimirror.top/curseforge/v1'
-        self.http = HttpClient(timeout=15)
+        self.http = HttpClient(timeout=10, retries=1)
         self._category_cache = {}
 
     def _headers(self):

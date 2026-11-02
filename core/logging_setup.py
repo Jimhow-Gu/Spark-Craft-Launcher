@@ -54,11 +54,19 @@ def _is_log_handler(handler):
 
 def setup_logging():
     root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
+    # 下载器会在失败源上产生大量 urllib3 DEBUG 重试日志；全量写盘会占用
+    # 后台线程和 GIL，网络差时直接拖慢主界面。应用自身保留 INFO 即可。
+    root.setLevel(logging.INFO)
+    for name in (
+        'urllib3', 'urllib3.connectionpool', 'urllib3.util.retry',
+        'requests', 'charset_normalizer',
+    ):
+        logging.getLogger(name).setLevel(logging.ERROR)
     if sys.stderr is not None and not any(
         isinstance(h, logging.StreamHandler) for h in root.handlers
     ):
         stream = logging.StreamHandler()
+        stream.setLevel(logging.WARNING)
         stream.setFormatter(logging.Formatter(_FORMAT, _DATEFMT))
         root.addHandler(stream)
     if any((_is_log_handler(h) for h in root.handlers)):
@@ -68,7 +76,7 @@ def setup_logging():
     except OSError:
         return
     file_handler.setFormatter(logging.Formatter(_FORMAT, _DATEFMT))
-    file_handler.setLevel(logging.DEBUG)
+    file_handler.setLevel(logging.INFO)
     root.addHandler(file_handler)
 
 def clear_logs():

@@ -1008,8 +1008,8 @@ class LaunchManager:
         if jvm_text:
             jvm_args.extend(split_arguments(jvm_text))
         jvm_args.extend(gc_arguments(str(advanced('memory_gc', 'tuned_g1') or 'tuned_g1')))
-        if bool(advanced('use_high_performance_gpu', True)):
-            jvm_args.append('-Dorg.lwjgl.opengl.Display.allowSoftwareOpenGL=false')
+        # 不再强制 allowSoftwareOpenGL=false：该参数会在部分驱动/远程桌面
+        # 环境下直接导致 GLFW 65542，且并不能真正切换到高性能显卡。
         login_type = login_opts.get('login_type', 'offline')
         if login_type == 'thirdparty':
             try:
@@ -1511,11 +1511,38 @@ def _set_window_title_for_pid(pid: int, title: str) -> bool:
     except Exception:
         return False
 
+
+_FATAL_GRAPHICS_MARKERS = (
+    'glfw error 65542',
+    'wgl: the driver does not appear to support opengl',
+    'pixel format not accelerated',
+    'could not initialize glfw',
+    'failed to create window:',
+    'opengl is not supported',
+)
+
+
+def fatal_launch_message(text) -> str:
+    '''识别无法创建 OpenGL 窗口的致命日志；返回用户可执行的提示。'''
+
+    lowered = str(text or '').lower()
+    if not any(marker in lowered for marker in _FATAL_GRAPHICS_MARKERS):
+        return ''
+    return (
+        '游戏无法创建 OpenGL 窗口（GLFW 65542）。\n\n'
+        '请依次尝试：\n'
+        '1. 更新显卡驱动，并重启电脑；\n'
+        '2. 在 Windows「设置 → 系统 → 显示 → 图形」中把对应的 java.exe 设为「高性能」；\n'
+        '3. 如果正在使用远程桌面或虚拟机，请改用本机显示器和显卡后重试。'
+    )
+
+
 class LaunchWorker(QThread):
     launch_success = Signal()
     window_ready = Signal()
     window_missing = Signal()
     launch_error = Signal(str)
+    launch_fatal = Signal(str)
     process_exited = Signal(int)
     output_received = Signal(str)
     NO_WINDOW_WARN_SECONDS = 30.0
@@ -1533,6 +1560,7 @@ class LaunchWorker(QThread):
         self._exited_emitted = False
         self._window_ready_emitted = False
         self._window_missing_emitted = False
+        self._fatal_emitted = False
         self._watch_done = threading.Event()
         for i, arg in enumerate(command):
             if arg == '--version' and i + 1 < len(command):
@@ -1627,6 +1655,22 @@ class LaunchWorker(QThread):
                 self.process_exited.emit(exit_code)
             return
 
+    def _check_fatal_output(self, line):
+        if self._fatal_emitted:
+            return False
+        message = fatal_launch_message(line)
+        if not message:
+            return False
+        self._fatal_emitted = True
+        self.launch_fatal.emit(message)
+        # GLFW/WGL 失败后部分 Forge 进程不会自行退出；主动结束，避免界面一直
+        # 停在“等待游戏窗口”。
+        try:
+            self.stop_game()
+        except Exception as exc:
+            logger.warning(f'OpenGL 初始化失败后终止进程异常: {exc}')
+        return True
+
     def _read_output(self, proc):
         '''持续读取游戏 stdout；读取线程与进程退出检测解耦，避免管道被子进程占用时永远收不到退出。'''
 
@@ -1654,6 +1698,8 @@ class LaunchWorker(QThread):
                 if not line:
                     continue
                 batch.append(line)
+                if self._check_fatal_output(line):
+                    break
                 now = time.monotonic()
                 # 游戏窗口出现时日志会瞬间暴涨；合并后再发给 UI，
                 # 避免每个日志行都触发一次主线程事件和一次日志刷新。

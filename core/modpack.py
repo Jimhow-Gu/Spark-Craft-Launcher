@@ -540,6 +540,7 @@ class ModpackImportWorker(QThread):
             self.status_updated.emit(f'正在解析 {len(pending_curse)} 个 CurseForge 文件...')
             total = len(pending_curse)
             done = 0
+            last_progress = [0.0]
 
             def resolve(item):
                 source = CurseForgeSource()
@@ -568,7 +569,10 @@ class ModpackImportWorker(QThread):
                     else:
                         resolved[(item.project_id, item.file_id)] = mod_file
                     done += 1
-                    self.progress_updated.emit(55 + int(5 * done / total))
+                    now = time.monotonic()
+                    if done == total or now - last_progress[0] >= 0.25:
+                        last_progress[0] = now
+                        self.progress_updated.emit(55 + int(5 * done / total))
         for item in info.files:
             if item.env_client.lower() == 'unsupported':
                 continue
@@ -648,6 +652,7 @@ class ModpackImportWorker(QThread):
         state = {'done': 0, 'bytes': 0}
         state_lock = threading.Lock()
         last = [0.0, 0.0, time.time()]
+        last_status = [0.0]
 
         def report(force=False):
             now = time.time()
@@ -671,12 +676,15 @@ class ModpackImportWorker(QThread):
             report(False)
 
         def on_file_done(remote, ok, changed, error):
+            now = time.monotonic()
             with state_lock:
                 state['done'] += 1
                 state['bytes'] += int(remote.size or (remote.dest.stat().st_size if remote.dest.exists() else 0))
-            if ok:
-                self.status_updated.emit(f'已完成 {remote.label}（{state["done"]}/{total}）')
-            elif remote.optional:
+                done = state['done']
+            if ok and (done == total or now - last_status[0] >= 0.4):
+                last_status[0] = now
+                self.status_updated.emit(f'已完成 {remote.label}（{done}/{total}）')
+            elif not ok and remote.optional:
                 self.log_message.emit(f'可选文件下载失败: {remote.label} ({error})')
             report(False)
 

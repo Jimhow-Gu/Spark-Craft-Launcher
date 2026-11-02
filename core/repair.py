@@ -421,7 +421,7 @@ class RepairEngine:
         for category in category_totals:
             category_done[category] = 0
             self.phase(category, 0)
-        worker_count = max(1, min(DownloadGate.max_threads(), 32))
+        worker_count = max(1, min(DownloadGate.max_threads(), 16))
         completed = 0
         cancelled = False
         with ThreadPoolExecutor(max_workers=worker_count) as pool:

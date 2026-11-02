@@ -1308,6 +1308,7 @@ class HomePage(QWidget):
         self._starting_worker = worker
         worker.launch_success.connect((lambda w=worker: self._on_launch_success(w)))
         worker.launch_error.connect((lambda msg, w=worker: self._on_launch_error(w, msg)))
+        worker.launch_fatal.connect((lambda msg, w=worker: self._on_launch_fatal(w, msg)))
         worker.process_exited.connect((lambda code, w=worker: self._on_process_exited(w, code)))
         worker.output_received.connect((lambda line, w=worker: self._append_log(line, w)))
         worker.window_ready.connect((lambda w=worker: self._on_game_window_ready(w)))
@@ -1448,6 +1449,25 @@ class HomePage(QWidget):
             return
         QTimer.singleShot(500, (lambda w=worker: self._poll_game_window(w)))
 
+    def _on_launch_fatal(self, worker, message):
+        '''GLFW/OpenGL 初始化失败：立刻提示并结束残留进程，避免一直等待窗口。'''
+
+        info = self._instance_info.get(worker)
+        if info:
+            info['fatal_error'] = True
+        if self._starting_worker is worker:
+            self._starting_worker = None
+        self.action_btn.set_idle('启动游戏')
+        self.status_label.setText('游戏无法创建 OpenGL 窗口')
+        self._append_log(f'启动失败：{message}', worker)
+        try:
+            worker.stop_game()
+        except Exception:
+            pass
+        from ui.widgets.dark_dialog import show_severe_error
+        show_severe_error(self, '无法启动游戏', message)
+        self._refresh_all()
+
     def _on_launch_error(self, worker, msg):
         info = self._instance_info.get(worker)
         if self._starting_worker is worker:
@@ -1468,6 +1488,9 @@ class HomePage(QWidget):
         nickname = info['nickname']
         user_stopped = info.get('user_stopped', False)
         window_seen = bool(info.get('window_seen'))
+        fatal_error = bool(info.get('fatal_error')) or bool(
+            getattr(worker, '_fatal_emitted', False)
+        )
         if self._starting_worker is worker:
             self._starting_worker = None
         log_path = info.get('log_path')
@@ -1475,6 +1498,11 @@ class HomePage(QWidget):
         if self._starting_worker is None:
             self.action_btn.set_idle('启动游戏')
         self._finalize_instance(worker)
+        if fatal_error:
+            self.status_label.setText(f'{nickname} 无法创建 OpenGL 窗口')
+            self._restore_launcher_after_game()
+            self._refresh_all()
+            return
         if exit_code == 0:
             from ui.widgets.toast import show_toast
             if not window_seen and not user_stopped:
