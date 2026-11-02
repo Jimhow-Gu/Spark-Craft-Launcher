@@ -1,6 +1,7 @@
 '''版本独立 Mod 管理页面'''
 
 from __future__ import annotations
+import html
 import json
 import re
 import shutil
@@ -22,6 +23,7 @@ from ui.widgets.back_button import BackButton
 from ui.widgets.dark_dialog import ask_dark_question
 from ui.widgets.loading_overlay import LoadingOverlay
 from ui.widgets.toast import show_toast
+from ui.widgets.themed_text import themed_bilingual_html, themed_color
 
 def _toml_value(text, key):
     match = re.search(f'(?m)^\\s*{re.escape(key)}\\s*=\\s*"([^"]*)"', text)
@@ -370,12 +372,10 @@ class ModRowWidget(QWidget):
         text.setSpacing(2)
         title = QLabel()
         title.setTextFormat(Qt.RichText)
-        primary = info.get('translated_name') or chinese_only(info.get('name') or '', '')
-        secondary = info.get('english_name') or english_only(info.get('name') or info.get('filename'), '')
-        title.setText(
-            bilingual_html(primary, secondary, 13, 11)
-            + (f'<span style="font-size:11px;color:#8d939e;">    {info.get("version", "")}</span>' if info.get('version') else '')
-        )
+        self._title_primary = info.get('translated_name') or chinese_only(info.get('name') or '', '')
+        self._title_secondary = info.get('english_name') or english_only(info.get('name') or info.get('filename'), '')
+        self.title_label = title
+        self._refresh_title()
         title.setStyleSheet('background:transparent;')
         title.setWordWrap(True)
         title.setToolTip(
@@ -401,6 +401,21 @@ class ModRowWidget(QWidget):
             title.setStyleSheet('color:rgba(255,255,255,0.55); font-size:13px; font-weight:900;')
             return
         self.setStyleSheet('background: transparent;')
+
+    def _refresh_title(self):
+        version = str(self.info.get('version') or '')
+        text = themed_bilingual_html(
+            self._title_primary, self._title_secondary, 13, 11
+        )
+        if version:
+            text += (
+                f'<span style="font-size:11px;color:{themed_color(True)};">'
+                f'    {html.escape(version)}</span>'
+            )
+        self.title_label.setText(text)
+
+    def set_light(self, light):
+        self._refresh_title()
 
     def _make_icon(self):
         size = 48

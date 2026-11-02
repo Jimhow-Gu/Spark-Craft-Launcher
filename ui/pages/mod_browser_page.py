@@ -5,6 +5,7 @@
 '''
 
 from __future__ import annotations
+import html
 import json
 import math
 import re
@@ -30,6 +31,7 @@ from core.config import ConfigManager
 from core.launch import LaunchManager
 from core.mods import (LOADER_RELEVANT_TYPES, LOADERS, PROJECT_TYPES, SORTS, ModFile, ModProject, SearchResult, SourceUnavailable, _natural_key, cached_mc_versions as fetch_cached_mc_versions, download_candidates, fetch_mc_versions, get_source)
 from core.mod_translations import bilingual_html, bilingual_plain, translation_db
+from ui.widgets.themed_text import themed_bilingual_html, themed_color
 from core.net import (DownloadError, HttpClient, sanitize_filename, unique_path, is_network_error_text, network_available)
 from core.paths import scl_dir
 from ui.widgets.toast import notify_network_failure, show_toast
@@ -98,7 +100,7 @@ class VersionComboBox(QComboBox):
             self._arrow_btn,
             'chevron_up' if self._arrow_open else 'chevron_down',
             14,
-            '#cfd6e4',
+            '#555555' if self._light else '#cfd6e4',
         )
 
     def _toggle_popup(self):
@@ -611,8 +613,8 @@ class ProjectCard(QFrame):
         text_box.setSpacing(2)
         self.title_label = QLabel()
         self.title_label.setTextFormat(Qt.RichText)
-        self.title_label.setText(bilingual_html(project.translated_title, project.english_title, 13, 11))
         self.title_label.setStyleSheet('background: transparent;')
+        self._refresh_title()
         text_box.addWidget(self.title_label)
         summary_row = QHBoxLayout()
         summary_row.setContentsMargins(0, 0, 0, 0)
@@ -653,6 +655,14 @@ class ProjectCard(QFrame):
         meta_row.addWidget(self.source_label)
         text_box.addLayout(meta_row)
         layout.addLayout(text_box, 1)
+
+    def _refresh_title(self):
+        self.title_label.setText(themed_bilingual_html(
+            self.project.translated_title, self.project.english_title, 13, 11
+        ))
+
+    def set_light(self, light):
+        self._refresh_title()
 
     def set_icon(self, pix):
         if pix is None or pix.isNull():
@@ -884,10 +894,11 @@ class FileRow(QWidget):
         self.title.setTextFormat(Qt.RichText)
         self.title.setStyleSheet('background: transparent;')
         self.title.setWordWrap(True)
-        if main_title is not None:
-            self.title.setText(f'<span style="font-size:13px;color:#f0f0f0;">{main_title}</span>')
-        else:
-            self.title.setText(bilingual_html(project_translated, project_title or mod_file.display_name, 13, 11))
+        self._row_main_title = main_title
+        self._row_detail_title = detail_title
+        self._row_project_translated = project_translated
+        self._row_project_title = project_title
+        self._refresh_title()
         box.addWidget(self.title)
         versions = ', '.join(mod_file.game_versions[:6])
         meta = f'{mod_file.display_name or detail_title}  ·  {detail_title}  ·  {mod_file.release_type}  ·  {versions or "版本未知"}'
@@ -904,6 +915,22 @@ class FileRow(QWidget):
         self.setObjectName('FileRow')
         self.setAttribute(Qt.WA_StyledBackground, True)
         self._apply_style()
+
+    def _refresh_title(self):
+        if self._row_main_title is not None:
+            self.title.setText(
+                f'<span style="font-size:13px;color:{themed_color()};">'
+                f'{html.escape(str(self._row_main_title))}</span>'
+            )
+            return
+        self.title.setText(themed_bilingual_html(
+            self._row_project_translated,
+            self._row_project_title or self._row_detail_title,
+            13, 11,
+        ))
+
+    def set_light(self, light):
+        self._refresh_title()
 
     def _apply_style(self):
         if self._selected:
@@ -977,13 +1004,22 @@ class DependencyCard(QFrame):
         text.setSpacing(1)
         title = QLabel()
         title.setTextFormat(Qt.RichText)
-        title.setText(bilingual_html(project.translated_title, project.english_title, 13, 11))
         title.setStyleSheet('background:transparent;')
+        self.title_label = title
+        self._refresh_title()
         text.addWidget(title)
         sub = QLabel(project.source)
         sub.setStyleSheet('color:rgba(255,255,255,0.45); font-size:11px; background:transparent;')
         text.addWidget(sub)
         layout.addLayout(text, 1)
+
+    def _refresh_title(self):
+        self.title_label.setText(themed_bilingual_html(
+            self.project.translated_title, self.project.english_title, 13, 11
+        ))
+
+    def set_light(self, light):
+        self._refresh_title()
 
     def set_icon(self, pix):
         if pix and not pix.isNull():
@@ -1061,7 +1097,8 @@ class ProjectFilesDialog(QDialog):
             title_row.addWidget(back_btn)
         title = QLabel()
         title.setTextFormat(Qt.RichText)
-        title.setText(bilingual_html(project.translated_title, project.english_title, 16, 12))
+        title.setText(themed_bilingual_html(project.translated_title, project.english_title, 16, 12))
+        self.header_title_label = title
         title_row.addWidget(title)
         title_row.addStretch(1)
         layout.addLayout(title_row)
@@ -1175,6 +1212,13 @@ class ProjectFilesDialog(QDialog):
         self._worker.done.connect(self._on_files)
         self._worker.error.connect(self._on_error)
         _track_worker(self._worker)
+
+    def set_light(self, light):
+        label = getattr(self, 'header_title_label', None)
+        if label is not None:
+            label.setText(themed_bilingual_html(
+                self.project.translated_title, self.project.english_title, 16, 12
+            ))
 
     def _combo_style(self):
         return '\n            QComboBox {\n                background: rgba(255,255,255,0.06);\n                border: 1px solid rgba(255,255,255,0.12);\n                border-radius: 6px; color: #f0f0f0; padding: 4px 8px;\n            }\n            QComboBox::drop-down { border: none; }\n            QComboBox QAbstractItemView { background: #2a2a2a; color: #f0f0f0; }\n        '
