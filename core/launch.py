@@ -341,21 +341,46 @@ class LaunchManager:
         java_home = os.environ.get('JAVA_HOME', '')
         if java_home:
             drive_roots.append(java_home)
-        for drive in self._fixed_drive_letters():
+        drives = self._fixed_drive_letters()
+        for drive in drives:
+            # 全盘符根目录：有些机器把 Java 放在 E:\java、D:\tools\jdk 等
+            # 非标准目录，不能只扫描 Program Files。
+            drive_roots.append(f'{drive}:\\')
             for sub in sub_dirs:
                 drive_roots.append(f'{drive}:\\{sub}')
+        skip_root_dirs = {
+            'windows', '$recycle.bin', 'system volume information',
+            'recovery', 'perflogs', 'config.msi', 'msocache',
+            'node_modules', '.git', '__pycache__', 'site-packages',
+            'venv', '.venv',
+        }
         for base in drive_roots:
             if not os.path.isdir(base):
                 continue
+            is_drive_root = (
+                len(base) <= 3 and len(base) >= 2 and base[1:2] == ':'
+            )
+            max_depth = 3 if is_drive_root else 4
+            walked = 0
             try:
                 for root, dirs, files in os.walk(base):
-                    depth = root[len(base):].count(os.sep)
-                    if depth >= 4:
+                    walk = root[len(base):]
+                    depth = walk.count(os.sep)
+                    if is_drive_root:
+                        dirs[:] = [
+                            name for name in dirs
+                            if name.lower() not in skip_root_dirs
+                        ]
+                    if depth >= max_depth:
                         dirs[:] = []
                     if 'javaw.exe' in files:
                         add_candidate(os.path.join(root, 'javaw.exe'))
                     elif 'java.exe' in files:
                         add_candidate(os.path.join(root, 'java.exe'))
+                    walked += 1
+                    if walked % 32 == 0:
+                        # 全盘查找时定期让出 GIL，避免后台扫描拖慢界面。
+                        time.sleep(0)
             except OSError:
                 continue
         # 3) 启动器自带/官方自动下载的运行时
@@ -380,7 +405,7 @@ class LaunchManager:
 
     @staticmethod
     def _fixed_drive_letters():
-        '''返回本机固定磁盘盘符（跳过高延迟的网络盘/光驱）。'''
+        '''返回本机可枚举的本地盘符（固定盘/可移动盘，跳过网络盘/光驱）。'''
 
         if sys.platform != 'win32':
             return []
@@ -393,8 +418,8 @@ class LaunchManager:
                 if not (bitmask >> i) & 1:
                     continue
                 letter = chr(ord('A') + i)
-                # 3 = DRIVE_FIXED；跳过网络盘(4)/光驱(5)/可移动(2)避免长时间枚举
-                if drive_type(f'{letter}:\\') == 3:
+                # 2=可移动盘，3=固定盘，6=RAM 盘；跳过网络盘(4)/光驱(5)。
+                if drive_type(f'{letter}:\\') in (2, 3, 6):
                     letters.append(letter)
             return letters
         except Exception:
