@@ -546,6 +546,35 @@ def _version_summary(versions):
     return ', '.join(years[:3]) + suffix
 
 
+class _ElidedLabel(QLabel):
+    '''单行省略标签：侧栏展开/窗口缩窄时保持文字不被裁掉。'''
+
+    def __init__(self, text='', parent=None):
+        super().__init__(parent)
+        self._full_text = ''
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setMinimumWidth(0)
+        self.setText(text)
+
+    def setText(self, text):
+        self._full_text = ' '.join(str(text or '').split())
+        self._apply_elide()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_elide()
+
+    def _apply_elide(self):
+        width = self.width()
+        if width <= 0:
+            super().setText(self._full_text)
+            return
+        text = self.fontMetrics().elidedText(
+            self._full_text, Qt.ElideRight, max(24, width)
+        )
+        super().setText(text)
+
+
 class ProjectCard(QFrame):
     clicked = Signal(object)
     download_clicked = Signal(object)
@@ -587,10 +616,9 @@ class ProjectCard(QFrame):
             tag = QLabel(str(category))
             tag.setStyleSheet(tag_style)
             summary_row.addWidget(tag, 0, Qt.AlignTop)
-        self.desc_label = QLabel(' '.join(str(project.description or '暂无描述').split()))
-        self.desc_label.setWordWrap(True)
-        self.desc_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        self.desc_label.setMaximumHeight(38)
+        self.desc_label = _ElidedLabel(' '.join(str(project.description or '暂无描述').split()))
+        self.desc_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.desc_label.setFixedHeight(18)
         self.desc_label.setToolTip(project.description or '暂无描述')
         self.desc_label.setStyleSheet('color: rgba(255,255,255,0.55); font-size: 12px; background: transparent;')
         summary_row.addWidget(self.desc_label, 1)
@@ -1465,6 +1493,7 @@ class ModBrowserPage(QWidget):
         self._search_timer.setSingleShot(True)
         self._search_timer.timeout.connect(self.search)
         self._search_worker = None
+        self._render_token = 0
         self._search_timeout = QTimer(self)
         self._search_timeout.setSingleShot(True)
         self._search_timeout.setInterval(15000)
@@ -1658,7 +1687,8 @@ class ModBrowserPage(QWidget):
             self.mc_combo.setCurrentIndex(-1)
             self.mc_combo.setEditText('')
         self.mc_combo.blockSignals(False)
-        self._trigger_search()
+        # 这里只更新版本下拉框，不要再触发搜索：页面激活时已经发起过一次搜索，
+        # 版本列表稍后返回会再搜一次，导致列表闪一下并重复请求。
 
     def _on_target_changed(self):
         pass
@@ -1787,8 +1817,6 @@ class ModBrowserPage(QWidget):
             return
         self.pagination.set_pages(self._page, pages)
         self._render_projects(result.projects)
-        # 先完成列表绘制再结束遮罩，避免“没加载好就闪一下”的空列表。
-        self.loading_overlay.finish()
 
     def _on_search_error(self, generation, message):
         if generation != self._generation:
@@ -1801,6 +1829,8 @@ class ModBrowserPage(QWidget):
             reason = '未连接到互联网，无法获取搜索结果'
         else:
             reason = str(message or '').strip() or '获取搜索结果失败'
+        self._render_token += 1
+        self.results_list.setUpdatesEnabled(True)
         self.results_list.clear()
         self._cards.clear()
         self.status_label.setText('')
@@ -1845,6 +1875,8 @@ class ModBrowserPage(QWidget):
         self.status_label.setText(f'共 {self._total} 个结果，本页显示 {shown}/{len(self._cards)} 个')
 
     def _render_projects(self, projects):
+        self._render_token += 1
+        token = self._render_token
         self.results_list.setUpdatesEnabled(False)
         self.results_list.clear()
         self._cards.clear()
@@ -1852,8 +1884,17 @@ class ModBrowserPage(QWidget):
             self.status_label.setText('未找到匹配的内容')
             self.status_label.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 12px;')
             self.results_list.setUpdatesEnabled(True)
+            self.loading_overlay.finish()
             return
-        for project in projects:
+        self._render_project_batch(token, list(projects), 0)
+
+    def _render_project_batch(self, token, projects, start):
+        '''分帧创建项目卡片，避免社区页一次性构建 20 个卡片造成可见卡顿。'''
+
+        if token != self._render_token:
+            return
+        end = min(start + 1, len(projects))
+        for project in projects[start:end]:
             card = ProjectCard(project)
             card.clicked.connect(self._download_project)
             card.download_clicked.connect(self._download_project)
@@ -1868,9 +1909,19 @@ class ModBrowserPage(QWidget):
                 card.set_icon(pix)
             elif project.icon_url:
                 self.icon_loader.request(project.icon_url)
+        # QListWidget 的 item widget 是 viewport 的子控件，批量插入后可能盖住
+        # 遮罩层；每次插入后重新置顶，保证加载图片始终在列表上方。
+        self.loading_overlay.raise_()
+        if end < len(projects):
+            QTimer.singleShot(
+                0,
+                lambda: self._render_project_batch(token, projects, end),
+            )
+            return
         self.results_list.setUpdatesEnabled(True)
         self.status_label.setText(f'第 {self._page} 页 · 共 {self._total} 个结果 · 来源 {self.source_combo.currentText()}')
         self.status_label.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 12px;')
+        self.loading_overlay.finish()
 
     def _on_icon_ready(self, url, pix):
         for card in self._cards:
@@ -1982,6 +2033,8 @@ class ModBrowserPage(QWidget):
         return text
 
     def _show_loading(self, text='正在加载...'):
+        self._render_token += 1
+        self.results_list.setUpdatesEnabled(True)
         self.results_list.clear()
         self._cards.clear()
         self.status_label.setText('')
@@ -2180,6 +2233,11 @@ class ModBrowserPage(QWidget):
         super().hideEvent(event)
 
     def shutdown(self):
+        self._render_token += 1
+        try:
+            self.results_list.setUpdatesEnabled(True)
+        except Exception:
+            pass
         try:
             self._search_timeout.stop()
         except Exception:

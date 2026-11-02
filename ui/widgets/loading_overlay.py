@@ -20,7 +20,9 @@ from core.app_font import ui_font
 from ui.widgets.toast import show_toast
 
 _IMAGES_DIR = Path(__file__).resolve().parent.parent / 'imgs'
-_LOADING_GIF = _IMAGES_DIR / 'Loading.gif'
+_LOADING_GIF = _IMAGES_DIR / 'Loading_small.gif'
+if not _LOADING_GIF.is_file():
+    _LOADING_GIF = _IMAGES_DIR / 'Loading.gif'
 
 
 def _error_pixmap(size=64):
@@ -299,10 +301,6 @@ class LoadingOverlay(QWidget):
         self._mode = 'finishing'
         self._auto_timer.stop()
         self._error_timer.stop()
-        try:
-            self._movie.stop()
-        except RuntimeError:
-            pass
         self._percent = 100
         self._animate_progress(100, 220)
         QTimer.singleShot(300, self._hide_after_finish)
@@ -312,6 +310,10 @@ class LoadingOverlay(QWidget):
             return
         self._mode = 'idle'
         self._progress_anim.stop()
+        try:
+            self._movie.stop()
+        except RuntimeError:
+            pass
         self._display_percent = 100.0
         self.status_label.setText('正在加载 - 100%')
         self.hide()

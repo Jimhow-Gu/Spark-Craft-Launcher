@@ -192,6 +192,12 @@ def main():
     from ui.widgets.scrollbar_style import ScrollBarStyler
     app._scrollbar_styler = ScrollBarStyler(app)
     app.installEventFilter(app._scrollbar_styler)
+    # 社区译名缓存较大，提前在后台分片加载；不要等打开社区页时再抢 GIL。
+    try:
+        from core.mod_translations import translation_db
+        translation_db.start_background_load()
+    except Exception:
+        pass
     from ui.widgets.text_context_menu import TextContextMenuFilter
     app._text_context_menu = TextContextMenuFilter(app)
     app.installEventFilter(app._text_context_menu)

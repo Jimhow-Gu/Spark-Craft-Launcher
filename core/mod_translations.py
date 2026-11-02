@@ -274,7 +274,10 @@ class TranslationDB:
         mod_name = dict(self._mod_name)
         modpack_name = dict(self._modpack_name)
         zh_entries = dict(self._zh_entries)
-        for row in mod_rows:
+        for index, row in enumerate(mod_rows):
+            if index % 256 == 255:
+                # 让出 GIL，避免在社区页加载时一次性占用主线程造成可见卡顿。
+                time.sleep(0.001)
             if not isinstance(row, (list, tuple)) or len(row) < 5:
                 continue
             slug_cf, slug_mr, zh, en, ids = (row[0], row[1], row[2], row[3], row[4])
@@ -291,7 +294,9 @@ class TranslationDB:
                 token = _norm_slug(token)
                 if token:
                     modid[token] = entry
-        for row in modpack_rows:
+        for index, row in enumerate(modpack_rows):
+            if index % 256 == 255:
+                time.sleep(0.001)
             if not isinstance(row, (list, tuple)) or len(row) < 4:
                 continue
             slug_cf, slug_mr, zh, en = (row[0], row[1], row[2], row[3])
