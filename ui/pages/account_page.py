@@ -7,10 +7,10 @@ import shutil
 import webbrowser
 from pathlib import Path
 from urllib.parse import urlparse
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QGroupBox, QScrollArea, QMessageBox, QComboBox, QFileDialog, QApplication, QMenu, QDialog, QListWidget, QListWidgetItem, QCheckBox, QToolButton, QListView, QSizePolicy)
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QGroupBox, QScrollArea, QMessageBox, QComboBox, QFileDialog, QApplication, QMenu, QDialog, QListWidget, QListWidgetItem, QCheckBox, QToolButton, QListView, QSizePolicy, QStylePainter, QStyleOptionComboBox, QStyle)
 from ui.widgets.themed_checkbox import ThemedCheckBox
 from PySide6.QtCore import (Qt, Signal, QUrl, QThread, QTimer, QSize, QObject, QPropertyAnimation, QEasingCurve, QEvent)
-from PySide6.QtGui import (QFont, QPixmap, QPainter, QColor, QPainterPath, QImage, QAction, QIcon)
+from PySide6.QtGui import (QFont, QPixmap, QPainter, QColor, QPainterPath, QImage, QAction, QIcon, QPalette)
 from PySide6.QtNetwork import (QNetworkAccessManager, QNetworkReply, QNetworkRequest)
 from core.app_font import ui_font
 from core.config import ConfigManager
@@ -38,6 +38,44 @@ def _show_microsoft_login_notice(parent, message: str, kind: str='general'):
     text = friendly_auth_error(message, kind)
     dialog = DarkQuestionDialog(parent, '登录失败', text, actions=[('确定', 'ok', True)])
     dialog.exec()
+
+class AvatarComboBox(QComboBox):
+    '''关闭状态下手动绘制当前头像，避免 QComboBox 按文字行高裁掉头像下半部分。'''
+
+    def paintEvent(self, event):
+        painter = QStylePainter(self)
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        option.currentIcon = QIcon()
+        option.currentText = ''
+        painter.drawComplexControl(QStyle.CC_ComboBox, option)
+        edit_rect = self.style().subControlRect(
+            QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxEditField, self
+        )
+        icon = self.itemIcon(self.currentIndex())
+        text_rect = edit_rect
+        if not icon.isNull():
+            size = self.iconSize()
+            pix = icon.pixmap(size)
+            if not pix.isNull():
+                x = edit_rect.left()
+                y = edit_rect.center().y() - pix.height() // 2 + 1
+                painter.drawPixmap(x, y, pix)
+                text_rect = edit_rect.adjusted(pix.width() + 10, 0, 0, 0)
+        painter.setPen(self.palette().color(QPalette.ButtonText))
+        painter.setFont(self.font())
+        elided = self.fontMetrics().elidedText(
+            self.currentText(), Qt.ElideRight, max(0, text_rect.width())
+        )
+        painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, elided)
+        arrow_rect = self.style().subControlRect(
+            QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxArrow, self
+        )
+        if arrow_rect.isValid():
+            arrow_option = QStyleOptionComboBox(option)
+            arrow_option.rect = arrow_rect
+            painter.drawPrimitive(QStyle.PE_IndicatorArrowDown, arrow_option)
+
 
 class AvatarLabel(QLabel):
     all_failed = Signal()
@@ -1093,7 +1131,7 @@ class AccountPage(QWidget):
         ms_accounts_layout = QHBoxLayout(self.ms_accounts_row)
         ms_accounts_layout.setContentsMargins(0, 0, 0, 0)
         ms_accounts_layout.setSpacing(10)
-        self.ms_accounts_combo = QComboBox()
+        self.ms_accounts_combo = AvatarComboBox()
         self.ms_accounts_combo.setIconSize(QSize(42, 42))
         self.ms_accounts_combo.setMinimumHeight(60)
         self.ms_accounts_combo.setMinimumWidth(210)
@@ -2251,7 +2289,17 @@ class AccountPage(QWidget):
         return QIcon(AvatarLabel._rounded(pixmap, 10))
 
     def _ms_entry_icon(self, entry: dict):
-        # 96x96 头像缓存已经是从皮肤裁好的完整头部，直接用它，避免再按皮肤坐标裁一次。
+        # 优先使用完整 64x64 皮肤裁头，确保第二层（帽子/外套）也参与合成。
+        try:
+            from core.skin import microsoft_skin_cache_path
+            path = microsoft_skin_cache_path(entry.get('uuid', ''), entry.get('name', ''))
+            if path.is_file():
+                pix = QPixmap(str(path))
+                if not pix.isNull():
+                    return self._combo_icon(AvatarLabel._head_from_skin(pix, 42))
+        except Exception:
+            pass
+        # 没有完整皮肤时再用已经裁好的头像缓存。
         try:
             from core.paths import scl_dir
             key = str(entry.get('uuid') or entry.get('name') or 'unknown')
@@ -2260,15 +2308,6 @@ class AccountPage(QWidget):
                 pix = QPixmap(str(avatar_path))
                 if not pix.isNull():
                     return self._combo_icon(pix)
-        except Exception:
-            pass
-        try:
-            from core.skin import microsoft_skin_cache_path
-            path = microsoft_skin_cache_path(entry.get('uuid', ''), entry.get('name', ''))
-            if path.is_file():
-                pix = QPixmap(str(path))
-                if not pix.isNull():
-                    return self._combo_icon(AvatarLabel._head_from_skin(pix, 42))
         except Exception:
             pass
         steve = Path(__file__).resolve().parent.parent / 'imgs' / 'steve_head.png'
