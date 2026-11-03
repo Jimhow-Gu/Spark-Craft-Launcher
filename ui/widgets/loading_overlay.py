@@ -1,9 +1,11 @@
-'''统一的加载遮罩：主题圆角卡片、旋转指示器、实时百分比和失败状态。'''
+'''统一的加载遮罩：主题圆角卡片、循环 GIF、实时百分比和失败状态。'''
 
 from __future__ import annotations
 
-from PySide6.QtCore import QElapsedTimer, QEvent, QRectF, Qt, QTimer, QVariantAnimation, QEasingCurve, Signal
-from PySide6.QtGui import QBrush, QColor, QConicalGradient, QPainter, QPalette, QPen, QPixmap
+from pathlib import Path
+
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, QVariantAnimation, QEasingCurve, Signal
+from PySide6.QtGui import QColor, QMovie, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -16,6 +18,11 @@ from PySide6.QtWidgets import (
 
 from core.app_font import ui_font
 from ui.widgets.toast import show_toast
+
+_IMAGES_DIR = Path(__file__).resolve().parent.parent / 'imgs'
+_LOADING_GIF = _IMAGES_DIR / 'Loading_small.gif'
+if not _LOADING_GIF.is_file():
+    _LOADING_GIF = _IMAGES_DIR / 'Loading.gif'
 
 
 def _error_pixmap(size=64):
@@ -36,80 +43,41 @@ def _error_pixmap(size=64):
     return pixmap
 
 
-class _SpinnerLabel(QWidget):
-    '''主题色旋转指示器，直接绘制圆弧以避免 GIF 边缘的白圈和缩放模糊。'''
+class _MovieLabel(QLabel):
+    '''按帧平滑缩放的 GIF 标签（避免 QMovie 直接缩放导致的锯齿）。'''
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._error = None
-        self._angle = 0.0
-        self._clock = QElapsedTimer()
-        self._timer = QTimer(self)
-        self._timer.setInterval(16)
-        self._timer.timeout.connect(self._tick)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self.setFixedSize(84, 84)
+        self._movie = None
 
-    def start(self):
-        self._error = None
-        if not self._timer.isActive():
-            self._clock.start()
-            self._timer.start()
-        self.update()
+    def set_movie(self, movie):
+        if self._movie is not None:
+            try:
+                self._movie.frameChanged.disconnect(self._on_frame)
+            except (RuntimeError, TypeError):
+                pass
+        self._movie = movie
+        if movie is not None:
+            movie.frameChanged.connect(self._on_frame)
+            self._on_frame(0)
 
-    def stop(self):
-        self._timer.stop()
-        self._error = None
-        self.update()
-
-    def show_error(self, pixmap):
-        self._timer.stop()
-        self._error = pixmap
-        self.update()
-
-    def _tick(self):
-        if self._clock.isValid():
-            self._angle = self._clock.elapsed() / 1100.0 * 360.0 % 360.0
-        self.update()
-
-    def paintEvent(self, _event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        if self._error is not None and not self._error.isNull():
-            side = min(self.width(), self.height())
-            pix = self._error.scaled(side, side, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            painter.drawPixmap(
-                (self.width() - pix.width()) // 2,
-                (self.height() - pix.height()) // 2,
-                pix,
-            )
+    def _on_frame(self, _frame):
+        if self._movie is None:
             return
-        side = min(self.width(), self.height())
-        thickness = max(5.0, side * 0.09)
-        margin = side * 0.17
-        rect = QRectF(
-            (self.width() - side) / 2 + margin,
-            (self.height() - side) / 2 + margin,
-            side - margin * 2,
-            side - margin * 2,
+        pix = self._movie.currentPixmap()
+        if pix.isNull():
+            return
+        try:
+            dpr = max(1.0, float(self.devicePixelRatioF()))
+        except Exception:
+            dpr = 1.0
+        target = self.size() * dpr
+        scaled = pix.scaled(
+            target, Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
-        accent = self.palette().color(QPalette.Highlight)
-        if not accent.isValid():
-            accent = QColor('#88DDDD')
-        track = QColor(accent)
-        track.setAlpha(42)
-        painter.setPen(QPen(track, thickness, Qt.SolidLine, Qt.RoundCap))
-        painter.drawEllipse(rect)
-        tail = QColor(accent)
-        tail.setAlpha(0)
-        gradient = QConicalGradient(rect.center(), 90.0 - self._angle)
-        gradient.setColorAt(0.0, accent)
-        gradient.setColorAt(0.58, accent)
-        gradient.setColorAt(0.82, tail)
-        gradient.setColorAt(1.0, tail)
-        painter.setPen(QPen(QBrush(gradient), thickness, Qt.SolidLine, Qt.RoundCap))
-        painter.drawEllipse(rect)
-        painter.end()
+        # 用物理像素绘制并标记 DPR，避免高 DPI 下先缩到逻辑尺寸再被放大变糊。
+        scaled.setDevicePixelRatio(dpr)
+        self.setPixmap(scaled)
 
 
 class LoadingOverlay(QWidget):
@@ -150,8 +118,10 @@ class LoadingOverlay(QWidget):
         media_layout = QVBoxLayout(self.media)
         media_layout.setContentsMargins(4, 4, 4, 4)
         media_layout.setAlignment(Qt.AlignCenter)
-        self.image_label = _SpinnerLabel()
+        self.image_label = _MovieLabel()
+        self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setProperty('_theme_ignore', True)
+        self.image_label.setFixedSize(84, 84)
         media_layout.addWidget(self.image_label)
         card_layout.addWidget(self.media, 0, Qt.AlignHCenter)
         self.status_label = QLabel('正在加载 - 0%')
@@ -169,6 +139,8 @@ class LoadingOverlay(QWidget):
         self._shadow.setOffset(0, 6)
         self.card.setGraphicsEffect(self._shadow)
 
+        self._movie = QMovie(str(_LOADING_GIF), parent=self)
+        self._movie.setCacheMode(QMovie.CacheAll)
         self._display_percent = 0.0
         self._progress_anim = QVariantAnimation(self)
         self._progress_anim.setDuration(220)
@@ -266,7 +238,8 @@ class LoadingOverlay(QWidget):
         self._display_percent = float(self._percent)
         self.media.show()
         self.media.setStyleSheet('QFrame#LoadingMedia { background:transparent; border:none; }')
-        self.image_label.start()
+        self.image_label.set_movie(self._movie)
+        self._movie.start()
         self.status_label.setText(f'正在加载 - {self._percent}%')
         self._apply_theme()
         if self._host is not None:
@@ -349,7 +322,10 @@ class LoadingOverlay(QWidget):
             return
         self._mode = 'idle'
         self._progress_anim.stop()
-        self.image_label.stop()
+        try:
+            self._movie.stop()
+        except RuntimeError:
+            pass
         self._display_percent = 100.0
         self.status_label.setText('正在加载 - 100%')
         self.hide()
@@ -360,7 +336,12 @@ class LoadingOverlay(QWidget):
         self._reason = str(reason or '').strip() or '请检查网络后重试'
         self._auto_timer.stop()
         self._progress_anim.stop()
-        self.image_label.show_error(_error_pixmap(58))
+        try:
+            self._movie.stop()
+        except RuntimeError:
+            pass
+        self.image_label.setMovie(None)
+        self.image_label.setPixmap(_error_pixmap(58))
         self.media.setStyleSheet('QFrame#LoadingMedia { background:transparent; border:none; }')
         self.status_label.setText('加载失败')
         self.status_label.setStyleSheet(
@@ -382,7 +363,10 @@ class LoadingOverlay(QWidget):
         self._auto_timer.stop()
         self._error_timer.stop()
         self._progress_anim.stop()
-        self.image_label.stop()
+        try:
+            self._movie.stop()
+        except RuntimeError:
+            pass
         self.hide()
 
     # ---------- 输入拦截 ----------
