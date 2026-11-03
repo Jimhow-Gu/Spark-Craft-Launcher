@@ -224,6 +224,13 @@ class HttpClient:
     def __init__(self, timeout=20, retries=3, user_agent=USER_AGENT, verify=True):
         self.timeout = timeout
         self.retries = retries
+        # 设置页的“验证 SSL 证书”是全局开关；默认关闭以兼容机房代理。
+        if verify is True:
+            try:
+                from core.config import ConfigManager
+                verify = bool(ConfigManager().get('verify_ssl', True))
+            except Exception:
+                pass
         self._verify_certs = certifi.where() if verify else False
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': user_agent, 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.5', 'Connection': 'keep-alive'})

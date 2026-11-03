@@ -104,15 +104,20 @@ def avatar_urls_for_account(account: dict) -> list:
 
     # 官方纹理直链优先：机房/校园网常封第三方头像镜像，但官方域名可能可用。
     skin_url = str(account.get('skin_url') or '')
-    if skin_url.startswith('http://textures.minecraft.net'):
-        skin_url = 'https://' + skin_url[len('http://'):]
     if 'textures.minecraft.net' in skin_url:
-        add(skin_url)
+        https_url = skin_url
+        if https_url.startswith('http://'):
+            https_url = 'https://' + https_url[len('http://'):]
+        add(https_url)
+        # 部分机房只放行 HTTP，或只对 HTTPS 做 SNI 拦截，保留 HTTP 回退。
+        if https_url.startswith('https://'):
+            add('http://' + https_url[len('https://'):])
     add(account.get('avatar_url'))
     if uuid:
         add(f'https://minotar.net/helm/{uuid}/96.png')
         add(f'https://mineskin.eu/avatar/{uuid}/96')
         add(f'https://crafthead.net/helm/{uuid}/96')
+        add(f'https://api.mineatar.io/face/{uuid}?scale=3')
         add(f'https://mc-heads.net/avatar/{uuid}/96')
         add(f'https://crafatar.com/avatars/{uuid}?size=96&overlay')
         add(f'https://visage.surgeplay.com/face/96/{uuid}')

@@ -2275,15 +2275,8 @@ class AccountPage(QWidget):
             except Exception:
                 cached = Path()
             if not cached.is_file():
-                uid = entry.get('uuid') or entry.get('name') or ''
-                urls = []
-                if entry.get('skin_url'):
-                    urls.append(entry['skin_url'])
-                if uid:
-                    urls.extend([f'https://mc-heads.net/avatar/{uid}/64', f'https://minotar.net/helm/{uid}/64.png'])
-                if entry.get('name'):
-                    urls.append(f'https://mc-heads.net/avatar/{entry["name"]}/64')
-                self._ms_icon_loader.request(entry.get('id', ''), urls)
+                from core.skin import avatar_urls_for_account
+                self._ms_icon_loader.request(entry.get('id', ''), avatar_urls_for_account(entry))
         select_index = 0
         if previous_id:
             for index in range(self.ms_accounts_combo.count()):

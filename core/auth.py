@@ -187,10 +187,11 @@ class AuthManager:
         if not token:
             raise AuthError('请先登录微软正版账号')
         headers = {'Authorization': f'Bearer {token}', 'Accept': 'application/json', 'User-Agent': 'PMGL-Launcher/1.1'}
+        verify_ssl = bool(self.config.get('verify_ssl', True))
         last_exc = None
         for attempt in range(2):
             try:
-                resp = requests.request(method, url, headers=headers, json=payload, timeout=30)
+                resp = requests.request(method, url, headers=headers, json=payload, timeout=30, verify=verify_ssl)
             except Exception as exc:
                 last_exc = exc
                 if attempt == 0:
@@ -250,11 +251,12 @@ class AuthManager:
         uid = str(uuid or account.get('uuid') or '').replace('-', '').strip()
         player_name = str(name or account.get('name') or '').strip()
         headers = {'User-Agent': 'PMGL-Launcher/1.1', 'Accept': 'application/json'}
+        verify_ssl = bool(self.config.get('verify_ssl', True))
         if not uid and player_name:
             try:
                 resp = requests.get(
                     f'{MOJANG_PROFILE_BY_NAME_URL}/{quote(player_name)}',
-                    headers=headers, timeout=15,
+                    headers=headers, timeout=15, verify=verify_ssl,
                 )
                 if resp.status_code == 200:
                     uid = str((resp.json() or {}).get('id') or '').replace('-', '')
@@ -264,7 +266,7 @@ class AuthManager:
             raise AuthError('无法解析正版账号 UUID，请检查网络后重试。', 'general')
         resp = requests.get(
             f'{MOJANG_SESSION_PROFILE_URL}/{uid}',
-            headers=headers, timeout=20,
+            headers=headers, timeout=20, verify=verify_ssl,
         )
         if resp.status_code != 200:
             raise AuthError(f'官方资料服务器返回 HTTP {resp.status_code}', 'general')

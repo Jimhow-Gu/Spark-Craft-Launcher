@@ -184,6 +184,13 @@ def main():
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
     app = QApplication(sys.argv)
+    # 机房/校园网通常通过系统代理上网；QtNetwork 默认不读取 Windows 代理，
+    # 会导致登录和下载正常、头像却一直空白。这里统一启用系统代理。
+    try:
+        from PySide6.QtNetwork import QNetworkProxyFactory
+        QNetworkProxyFactory.setUseSystemConfiguration(True)
+    except Exception:
+        pass
     from ui.widgets.checkbox_style import CheckBoxProxyStyle
     app.setStyle(CheckBoxProxyStyle())
     from ui.widgets.smooth_scroll import SmoothScroller
