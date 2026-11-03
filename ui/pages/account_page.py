@@ -102,8 +102,18 @@ class AvatarLabel(QLabel):
         return out
 
     @staticmethod
+    def _is_skin_image(pixmap):
+        '''只有标准皮肤比例才按头部分区裁剪；96x96 等头像图不能当皮肤切。'''
+        if pixmap is None or pixmap.isNull():
+            return False
+        width, height = pixmap.width(), pixmap.height()
+        if width < 64 or width % 64 != 0:
+            return False
+        return height in (32, 64) or (height >= 64 and height % 64 == 0)
+
+    @staticmethod
     def _head_from_skin(pixmap, size=96):
-        if pixmap.width() >= 64 and pixmap.height() >= 32:
+        if AvatarLabel._is_skin_image(pixmap):
             # HD 皮肤（128/256）的头部坐标要按 64 基准等比放大
             scale = max(1, int(round(pixmap.width() / 64.0)))
             out = QImage(8, 8, QImage.Format_ARGB32_Premultiplied)
@@ -139,7 +149,7 @@ class AvatarLabel(QLabel):
             if not cached.isNull():
                 self._image_urls = []
                 self._fallback_head = ''
-                if cached.width() >= 64 and cached.height() >= 32:
+                if self._is_skin_image(cached):
                     cached = self._head_from_skin(cached, self._size)
                 else:
                     cached = hidpi_pixmap(cached, self._size, self._size)
@@ -1085,11 +1095,11 @@ class AccountPage(QWidget):
         ms_accounts_layout.setSpacing(10)
         self.ms_accounts_combo = QComboBox()
         self.ms_accounts_combo.setIconSize(QSize(42, 42))
-        self.ms_accounts_combo.setMinimumHeight(50)
+        self.ms_accounts_combo.setMinimumHeight(60)
         self.ms_accounts_combo.setMinimumWidth(210)
         self.ms_accounts_combo.setMaximumWidth(340)
         self.ms_accounts_combo.setMaxVisibleItems(10)
-        self.ms_accounts_combo.setStyleSheet('\n            QComboBox {\n                background: rgba(30,41,41,0.62); color:#f0f0f0;\n                border:1px solid rgba(255,255,255,0.16); border-radius:8px;\n                padding:5px 10px; font-size:13px;\n            }\n            QComboBox:hover { border-color: rgba(136,221,221,0.55); }\n            QComboBox::drop-down { border:none; width:22px; }\n            QComboBox QAbstractItemView {\n                background:#24262c; color:#f0f0f0; outline:none;\n                border:1px solid rgba(255,255,255,0.16);\n                selection-background-color:#88DDDD;\n            }\n            QComboBox QAbstractItemView::item { min-height:48px; padding:4px 8px; }\n        ')
+        self.ms_accounts_combo.setStyleSheet('\n            QComboBox {\n                background: rgba(30,41,41,0.62); color:#f0f0f0;\n                border:1px solid rgba(255,255,255,0.16); border-radius:8px;\n                padding:5px 10px; font-size:13px;\n            }\n            QComboBox:hover { border-color: rgba(136,221,221,0.55); }\n            QComboBox::drop-down { border:none; width:22px; }\n            QComboBox QAbstractItemView {\n                background:#24262c; color:#f0f0f0; outline:none;\n                border:1px solid rgba(255,255,255,0.16);\n                selection-background-color:#88DDDD;\n            }\n            QComboBox QAbstractItemView::item { min-height:54px; padding:4px 8px; }\n        ')
         ms_accounts_layout.addWidget(self.ms_accounts_combo, 1)
         self.ms_saved_login_btn = QPushButton('登录')
         self.ms_saved_login_btn.setMinimumHeight(40)
@@ -2229,6 +2239,17 @@ class AccountPage(QWidget):
         if self.config.get('login_type', 'offline') == 'thirdparty':
             self._refresh_thirdparty_skin_async(user_initiated=False)
 
+    @staticmethod
+    def _combo_icon(pixmap):
+        '''QComboBox 的 QIcon 不会可靠处理 DPR；统一转成 42px 逻辑图，避免只显示左上角。'''
+        if pixmap is None or pixmap.isNull():
+            return QIcon()
+        size = 42
+        if pixmap.width() != size or pixmap.height() != size or pixmap.devicePixelRatio() != 1.0:
+            pixmap = pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            pixmap.setDevicePixelRatio(1.0)
+        return QIcon(AvatarLabel._rounded(pixmap, 10))
+
     def _ms_entry_icon(self, entry: dict):
         try:
             from core.skin import microsoft_skin_cache_path
@@ -2236,16 +2257,14 @@ class AccountPage(QWidget):
             if path.is_file():
                 pix = QPixmap(str(path))
                 if not pix.isNull():
-                    head = AvatarLabel._head_from_skin(pix, 42)
-                    return QIcon(AvatarLabel._rounded(head, 10))
+                    return self._combo_icon(AvatarLabel._head_from_skin(pix, 42))
         except Exception:
             pass
         steve = Path(__file__).resolve().parent.parent / 'imgs' / 'steve_head.png'
         if steve.is_file():
             pix = QPixmap(str(steve))
             if not pix.isNull():
-                pix = pix.scaled(42, 42, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                return QIcon(AvatarLabel._rounded(pix, 10))
+                return self._combo_icon(pix)
         return QIcon()
 
     def _refresh_ms_accounts_list(self):
@@ -2296,7 +2315,7 @@ class AccountPage(QWidget):
         for index in range(combo.count()):
             entry = combo.itemData(index) or {}
             if isinstance(entry, dict) and entry.get('id') == account_id:
-                combo.setItemIcon(index, QIcon(AvatarLabel._rounded(pixmap, 10)))
+                combo.setItemIcon(index, self._combo_icon(pixmap))
                 break
 
     def _on_ms_saved_login(self):
