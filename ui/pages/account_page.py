@@ -2251,6 +2251,17 @@ class AccountPage(QWidget):
         return QIcon(AvatarLabel._rounded(pixmap, 10))
 
     def _ms_entry_icon(self, entry: dict):
+        # 96x96 头像缓存已经是从皮肤裁好的完整头部，直接用它，避免再按皮肤坐标裁一次。
+        try:
+            from core.paths import scl_dir
+            key = str(entry.get('uuid') or entry.get('name') or 'unknown')
+            avatar_path = scl_dir() / 'icon_cache' / f'microsoft_avatar_{key}.png'
+            if avatar_path.is_file():
+                pix = QPixmap(str(avatar_path))
+                if not pix.isNull():
+                    return self._combo_icon(pix)
+        except Exception:
+            pass
         try:
             from core.skin import microsoft_skin_cache_path
             path = microsoft_skin_cache_path(entry.get('uuid', ''), entry.get('name', ''))
