@@ -379,7 +379,7 @@ class ModRowWidget(QWidget):
         title.setStyleSheet('background:transparent;')
         title.setWordWrap(True)
         title.setToolTip(
-            f'{bilingual_plain(primary, secondary)}\n'
+            f'{bilingual_plain(self._title_primary, self._title_secondary)}\n'
             f'{info.get("filename", "")}\n{info.get("description", "")}'
         )
         text.addWidget(title)
