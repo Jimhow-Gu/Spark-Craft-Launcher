@@ -66,6 +66,12 @@ _drop_names = {
     "qdirect2d.dll", "qminimal.dll", "qoffscreen.dll",
     "qicns.dll", "qtga.dll", "qtiff.dll", "qwbmp.dll",
     "qcertonlybackend.dll",
+    # 界面只使用 PNG/ICO/GIF，不包含 SVG；去掉未使用的 SVG 模块和插件。
+    "qt6svg.dll", "qsvg.dll", "qsvgicon.dll",
+    # QtMultimedia/Gui 均不依赖 OpenGL 模块，且启动器使用光栅绘制。
+    "qt6opengl.dll",
+    # 触摸屏插件未使用。
+    "qtuiotouchplugin.dll",
 }
 
 
@@ -79,9 +85,12 @@ def _keep_binary(entry):
 
 a.binaries = [entry for entry in a.binaries if _keep_binary(entry)]
 # translations 也可能被收集进 datas；启动器界面全部自带文本，不需要 Qt 翻译包。
+# Loading.gif 是旧版备用图，实际使用 Loading_small.gif；打包时去掉大图。
+_drop_datas = {"ui/imgs/loading.gif", "ui/imgs/alex_head.png"}
 a.datas = [
     entry for entry in a.datas
     if "/translations/" not in str(entry[0]).replace(chr(92), "/").lower()
+    and str(entry[0]).replace(chr(92), "/").lower() not in _drop_datas
 ]
 
 # PyInstaller 遇到带 CFG 的 Qt DLL 会自动跳过 UPX；用户要求 Qt DLL 也压缩，
