@@ -25,6 +25,9 @@ from core.net import (DownloadCancelled, DownloadError, DownloadGate, HttpClient
 
 BMCLAPI = 'https://bmclapi2.bangbang93.com'
 OPENBMCLAPI = 'https://openbmclapi.bangbang93.com'
+# Mojang 官方对象 CDN。部分校园网/机房会屏蔽 piston-data.mojang.com，
+# 但同源的 launcher-cdn.azureedge.net 仍然可用，路径完全一致。
+MOJANG_CDN = 'https://launcher-cdn.azureedge.net'
 MOJANG_LIBS = 'https://libraries.minecraft.net'
 MOJANG_RESOURCES = 'https://resources.download.minecraft.net'
 FORGE_MAVEN = 'https://maven.minecraftforge.net'
@@ -180,6 +183,11 @@ def client_urls(version_id, downloads=None, source=None):
     urls = []
     official = str(client.get('url') or '')
     if official:
+        # CDN 与官方对象存储内容一致，但域名在部分受限网络下可直连。
+        for official_host in ('https://piston-data.mojang.com', 'https://launcher.mojang.com'):
+            if official.startswith(official_host):
+                urls.append(MOJANG_CDN + official[len(official_host):])
+                break
         urls.append(official)
         if 'piston-data.mojang.com' in official:
             urls.append(official.replace('piston-data.mojang.com', 'launcher.mojang.com'))

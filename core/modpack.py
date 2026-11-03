@@ -373,7 +373,9 @@ class ModpackImportWorker(QThread):
         self.mc_dir = str(Path(mc_dir))
         self.pack_name = pack_name
         self._cancelled = False
-        self._file_deadline = 90
+        # 整合包内大文件（100MB+ 的模组/资源包）在慢速网络下极易超过 90 秒，
+        # 这里放宽到 15 分钟；真正的卡死仍由 20 秒读超时和用户取消处理。
+        self._file_deadline = 900
         self._alias_id = ''
         self._config = ConfigManager()
         self._before_dirs = None
@@ -686,10 +688,30 @@ class ModpackImportWorker(QThread):
                 self.status_updated.emit(f'已完成 {remote.label}（{done}/{total}）')
             elif not ok and remote.optional:
                 self.log_message.emit(f'可选文件下载失败: {remote.label} ({error})')
+            elif not ok:
+                self.log_message.emit(f'下载失败: {remote.label} ({error})')
             report(False)
 
         try:
             result = downloader.download_many(remotes, workers=min(8, DownloadGate.max_threads(), total), cancel=(lambda: self._cancelled), on_file_done=on_file_done, on_progress=on_progress)
+            if result.failed:
+                # 并发下载时个别大文件可能因连接抖动失败；再串行重试一次，
+                # 避免整个整合包因为少数文件而回滚。
+                failed_labels = set(result.failed_items)
+                retry_files = [remote for remote in remotes if remote.label in failed_labels]
+                if retry_files:
+                    self.status_updated.emit(f'正在重试 {len(retry_files)} 个下载失败的文件...')
+                    for remote in retry_files:
+                        self._check_cancel()
+                        try:
+                            downloader.download(remote, cancel=(lambda: self._cancelled))
+                        except (InstallCancelled, DownloadCancelled):
+                            raise
+                        except Exception as exc:
+                            self.log_message.emit(f'重试失败: {remote.label} ({exc})')
+                    still_failed = [remote for remote in remotes if not remote.optional and not remote.valid('full')]
+                    result.failed = len(still_failed)
+                    result.failed_items = [remote.label for remote in still_failed[:10]]
         finally:
             downloader.close()
         report(True)
