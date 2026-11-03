@@ -179,7 +179,10 @@ class LaunchManager:
         if not java_path or not os.path.isfile(java_path):
             return (False, 'Java 路径无效')
         try:
-            result = subprocess.run([java_path, '-version'], capture_output=True, text=True, timeout=5)
+            result = subprocess.run(
+                [java_path, '-version'], capture_output=True, text=True, timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0,
+            )
             if result.returncode == 0:
                 version_info = result.stderr or result.stdout
                 if version_info:
