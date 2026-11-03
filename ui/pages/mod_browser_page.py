@@ -1949,13 +1949,11 @@ class ModBrowserPage(QWidget):
     def _render_projects(self, projects):
         self._render_token += 1
         token = self._render_token
-        self.results_list.setUpdatesEnabled(False)
         self.results_list.clear()
         self._cards.clear()
         if not projects:
             self.status_label.setText('未找到匹配的内容')
             self.status_label.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 12px;')
-            self.results_list.setUpdatesEnabled(True)
             self._finish_project_loading(token)
             return
         self._render_project_batch(token, list(projects), 0)
@@ -1990,10 +1988,10 @@ class ModBrowserPage(QWidget):
                 lambda: self._render_project_batch(token, projects, end),
             )
             return
-        self.results_list.setUpdatesEnabled(True)
+        self.loading_overlay.raise_()
         self.status_label.setText(f'第 {self._page} 页 · 共 {self._total} 个结果 · 来源 {self.source_combo.currentText()}')
         self.status_label.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 12px;')
-        # 至少留出一帧让列表完成布局/绘制，再进入 100% 并隐藏遮罩。
+        # 列表保持正常重绘，遮罩全程留在最上层，避免“先消失、再以 100% 闪回”。
         QTimer.singleShot(
             120,
             lambda: self._finish_project_loading(token),
