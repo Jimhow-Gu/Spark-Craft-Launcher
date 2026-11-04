@@ -90,7 +90,7 @@ class AccountCard(QFrame):
 
     def set_account(
         self, name, mode, urls=None, skin_path=None, head_path=None,
-        avatar_cache=None, mode_kind='offline', fallback_head=None,
+        avatar_cache=None, mode_kind='offline',
     ):
         self.name_label.setText(name or '未登录')
         self._mode_text = str(mode or '')
@@ -107,9 +107,7 @@ class AccountCard(QFrame):
             self.avatar.set_skin_file(skin_path)
             return
         if urls:
-            self.avatar.set_image_url(
-                urls, cache_path=avatar_cache, fallback_head=fallback_head
-            )
+            self.avatar.set_image_url(urls, cache_path=avatar_cache)
             return
         steve_head = Path(__file__).resolve().parent.parent / 'imgs' / 'steve_head.png'
         if steve_head.is_file():

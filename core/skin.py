@@ -89,19 +89,6 @@ def skin_size_error(path: str | Path) -> str:
 CAPE_PALETTE = {'Moonlight Trail': ('#12233f', '#3e64a8', '#c7dcff'), '樱花披风': ('#5c2438', '#c96a8c', '#ffe1ec'), '入侵披风': ('#102a17', '#2f7d3f', '#9dff9d'), '紫色心形披风': ('#2b1038', '#7137a8', '#f0b6ff'), '家园披风': ('#3b2413', '#a56a32', '#ffe0ab'), '薄煎饼披风': ('#6b4314', '#d9a441', '#fff1c4'), '村民救援披风': ('#1c2a38', '#50708c', '#c4e2ff'), '建造者披风': ('#3c2a10', '#9c7736', '#ffe08a'), '15 周年纪念披风': ('#1b1b1b', '#555555', '#ffcf3f'), 'Hero': ('#3a1414', '#a62b2b', '#ffd36b'), '极光披风': ('#0c2430', '#1f8a8a', '#9ffff1'), '铜披风': ('#4a2410', '#b8642c', '#ffd2a1'), '僵尸马披风': ('#223016', '#5d7a33', '#d5ff8f'), 'Mojang 办公室披风': ('#2c1f0e', '#8c6b2f', '#f4d58a'), '渴望披风': ('#2b0d2b', '#8f2d8f', '#ffb3ff'), '普通披风': ('#333333', '#8a8a8a', '#e8e8e8'), 'MCC 15 周年披风': ('#1a0f2e', '#6241a8', '#d8c7ff'), 'Twisted': ('#12302c', '#2f7d70', '#a9fff1'), '追随者披风': ('#1f1f1f', '#6b6b6b', '#cfcfcf')}
 
 
-def bundled_avatar_for_account(account: dict) -> str:
-    '''作者账号的预置头像：网络不可用时先显示，联网后再被新头像覆盖。'''
-
-    account = dict(account or {})
-    name = str(account.get('name') or '').strip().lower()
-    uid = str(account.get('uuid') or '').replace('-', '').strip().lower()
-    if name == 'gubwon' or uid == '0d59f29d82584f15adf017d3c11e61f5':
-        path = Path(__file__).resolve().parent.parent / 'ui' / 'imgs' / 'gubwon_head.png'
-        if path.is_file():
-            return str(path)
-    return ''
-
-
 def avatar_urls_for_account(account: dict) -> list:
     """正版/第三方账号头像候选地址：官方纹理优先，镜像兜底。"""
 

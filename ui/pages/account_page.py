@@ -91,14 +91,8 @@ class AvatarLabel(QLabel):
         self._manager.finished.connect(self._on_image_loaded)
         self._replies = set()
         self._image_urls = []
-        self._retry_urls = []
-        self._loaded_from_network = False
         self._fallback_head = ''
         self._cache_path = None
-        self._retry_timer = QTimer(self)
-        self._retry_timer.setSingleShot(True)
-        self._retry_timer.setInterval(20000)
-        self._retry_timer.timeout.connect(self._retry_images)
         self._set_default()
 
     @staticmethod
@@ -179,8 +173,6 @@ class AvatarLabel(QLabel):
         return hidpi_pixmap(pixmap, size, size, smooth=False)
 
     def setText(self, text):
-        self._retry_timer.stop()
-        self._loaded_from_network = True
         self._name = text or '?'
         self._set_default()
 
@@ -188,17 +180,13 @@ class AvatarLabel(QLabel):
         if isinstance(urls, str):
             urls = [urls]
         from ui.widgets.settings_widgets import hidpi_pixmap
-        self._retry_timer.stop()
-        self._loaded_from_network = False
         self._cache_path = Path(cache_path) if cache_path else None
         # 有缓存时直接使用，不再等待网络（断网/机房封锁环境秒开）
         if self._cache_path is not None and self._cache_path.is_file():
             cached = QPixmap(str(self._cache_path))
             if not cached.isNull():
                 self._image_urls = []
-                self._retry_urls = []
                 self._fallback_head = ''
-                self._loaded_from_network = True
                 if self._is_skin_image(cached):
                     cached = self._head_from_skin(cached, self._size)
                 else:
@@ -206,7 +194,6 @@ class AvatarLabel(QLabel):
                 self.setPixmap(self._rounded(cached, self._radius))
                 return
         self._image_urls = [u for u in urls or [] if u]
-        self._retry_urls = list(self._image_urls)
         if fallback_head is None:
             fallback_head = Path(__file__).resolve().parent.parent / 'imgs' / 'steve_head.png'
         self._fallback_head = str(fallback_head) if fallback_head and Path(fallback_head).is_file() else ''
@@ -216,13 +203,13 @@ class AvatarLabel(QLabel):
     def _try_next_image(self):
         if not self._image_urls:
             fallback = self._fallback_head
+            self._fallback_head = ''
             if fallback:
                 self.set_head_file(fallback)
             try:
                 self.all_failed.emit()
             except RuntimeError:
                 pass
-            self._schedule_retry()
             return
         url = self._image_urls.pop(0)
         req = QNetworkRequest(QUrl(url))
@@ -237,21 +224,6 @@ class AvatarLabel(QLabel):
                 lambda _errors, r=reply: r.ignoreSslErrors()
             )
         self._replies.add(reply)
-
-    def _schedule_retry(self):
-        if self._retry_urls and not self._loaded_from_network and self.isVisible():
-            self._retry_timer.start()
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        if self._retry_urls and not self._loaded_from_network:
-            self._schedule_retry()
-
-    def _retry_images(self):
-        if self._loaded_from_network or not self.isVisible() or not self._retry_urls:
-            return
-        self._image_urls = list(self._retry_urls)
-        self._try_next_image()
 
     def _on_image_loaded(self, reply):
         self._replies.discard(reply)
@@ -283,15 +255,10 @@ class AvatarLabel(QLabel):
                             pass
                 loaded = True
         reply.deleteLater()
-        if loaded:
-            self._loaded_from_network = True
-            self._retry_timer.stop()
-        else:
+        if not loaded:
             self._try_next_image()
 
     def set_skin_file(self, path):
-        self._retry_timer.stop()
-        self._loaded_from_network = True
         pix = QPixmap(str(path)) if path else QPixmap()
         if pix.isNull():
             self._set_default()
@@ -2343,15 +2310,6 @@ class AccountPage(QWidget):
                     return self._combo_icon(pix)
         except Exception:
             pass
-        try:
-            from core.skin import bundled_avatar_for_account
-            bundled = bundled_avatar_for_account(entry)
-            if bundled and Path(bundled).is_file():
-                pix = QPixmap(bundled)
-                if not pix.isNull():
-                    return self._combo_icon(pix)
-        except Exception:
-            pass
         steve = Path(__file__).resolve().parent.parent / 'imgs' / 'steve_head.png'
         if steve.is_file():
             pix = QPixmap(str(steve))
@@ -2581,18 +2539,16 @@ class AccountPage(QWidget):
             show_toast(f'第三方皮肤刷新失败（原因：{message}）', 'error', self)
 
     def _set_microsoft_avatar_urls(self, account: dict):
-        from core.skin import avatar_urls_for_account, bundled_avatar_for_account
+        from core.skin import avatar_urls_for_account
         try:
             from core.paths import scl_dir
             key = str(account.get('uuid') or account.get('name') or 'unknown')
             cache_path = scl_dir() / 'icon_cache' / f'microsoft_avatar_{key}.png'
         except Exception:
             cache_path = None
-        fallback = bundled_avatar_for_account(account)
-        if not fallback:
-            fallback = Path(__file__).resolve().parent.parent / 'imgs' / 'steve_head.png'
+        steve = Path(__file__).resolve().parent.parent / 'imgs' / 'steve_head.png'
         self.avatar.set_image_url(
-            avatar_urls_for_account(account), fallback_head=fallback, cache_path=cache_path
+            avatar_urls_for_account(account), fallback_head=steve, cache_path=cache_path
         )
 
     def _on_ms_device_login(self):

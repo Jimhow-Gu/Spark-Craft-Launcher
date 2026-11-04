@@ -983,20 +983,16 @@ class MainWindow(QMainWindow):
                 else:
                     urls = ['https://mc-heads.net/avatar/MHF_Steve/96', 'https://minotar.net/helm/MHF_Steve/96.png']
         avatar_cache = None
-        fallback_head = None
         try:
             if login_type in ('microsoft', 'thirdparty'):
                 from core.paths import scl_dir
-                from core.skin import bundled_avatar_for_account
                 key = str(account.get('uuid') or name or 'unknown')
                 avatar_cache = scl_dir() / 'icon_cache' / f'{login_type}_avatar_{key}.png'
-                fallback_head = bundled_avatar_for_account(account) or None
         except Exception:
             avatar_cache = None
-            fallback_head = None
         self.account_card.set_account(
             name or '未登录', mode, urls, skin_path, head_path, avatar_cache,
-            mode_kind=mode_kind, fallback_head=fallback_head,
+            mode_kind=mode_kind,
         )
 
     def _on_version_selected(self, version_id):

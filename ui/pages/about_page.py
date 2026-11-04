@@ -202,15 +202,16 @@ class AboutPage(QWidget):
         self._load_local(label, 'bigmodel.png', '智', '#3859FF')
 
     def _load_gubwon(self, label):
+        # 先显示预缓存头像，避免机房网络不可用时直接变成史蒂夫；
+        # 同时继续请求官方资料，网络恢复后自动替换为最新头像。
         cache = scl_dir() / 'icon_cache' / 'gubwon_head.png'
-        if cache.is_file():
-            pixmap = QPixmap(str(cache))
-            if not pixmap.isNull():
-                self._set_icon(label, pixmap)
-                return
-        steve = _IMAGES_DIR / 'steve_head.png'
-        fallback = QPixmap(str(steve)) if steve.is_file() else QPixmap()
-        self._set_icon(label, fallback)
+        bundled = _IMAGES_DIR / 'gubwon_head.png'
+        initial = cache if cache.is_file() else bundled
+        pixmap = QPixmap(str(initial)) if initial.is_file() else QPixmap()
+        if pixmap.isNull():
+            steve = _IMAGES_DIR / 'steve_head.png'
+            pixmap = QPixmap(str(steve)) if steve.is_file() else QPixmap()
+        self._set_icon(label, pixmap)
         self._request(
             'https://api.mojang.com/users/profiles/minecraft/Gubwon',
             lambda reply: self._on_uuid_reply(label, reply),
@@ -220,6 +221,14 @@ class AboutPage(QWidget):
         request = QNetworkRequest(QUrl(url))
         request.setRawHeader(b'User-Agent', b'PMGL-Launcher/1.1')
         reply = self._net.get(request)
+        try:
+            from core.config import ConfigManager
+            if not bool(ConfigManager().get('verify_ssl', False)):
+                reply.sslErrors.connect(
+                    lambda _errors, r=reply: r.ignoreSslErrors()
+                )
+        except Exception:
+            pass
         reply.finished.connect(lambda: done(reply))
 
     def _on_uuid_reply(self, label, reply):
@@ -282,7 +291,7 @@ class AboutPage(QWidget):
 
     def _fallback_skin(self, label):
         self._request(
-            'https://mc-heads.net/Gubwon/44',
+            'https://mc-heads.net/avatar/Gubwon/44',
             lambda r: self._on_heads_reply(label, r),
         )
 
