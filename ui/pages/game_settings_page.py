@@ -235,6 +235,7 @@ class GameSettingsPage(QWidget):
         self._mod_manager_page = None
         self._loader_modify_page = None
         self._mod_tab_ready = False
+        self._tab_build_token = 0
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.tabs.currentChanged.connect(self._animate_tab_switch)
         settings_hint = QLabel('这些设置只对该游戏版本生效，不影响其他版本。')
@@ -562,7 +563,20 @@ class GameSettingsPage(QWidget):
         self._refresh_tab_icons()
 
     def _on_tab_changed(self, index):
-        widget = self.tabs.widget(index)
+        # 快速来回切换时只构建最后停留的 TAB，避免重复创建页面/线程造成卡死。
+        self._tab_build_token += 1
+        token = self._tab_build_token
+        QTimer.singleShot(0, lambda: self._build_tab(index, token))
+
+    def _build_tab(self, index, token):
+        if token != getattr(self, '_tab_build_token', -1):
+            return
+        try:
+            if self.tabs.currentIndex() != index:
+                return
+            widget = self.tabs.widget(index)
+        except RuntimeError:
+            return
         if widget is self.export_tab:
             if self._export_tab_ready:
                 return

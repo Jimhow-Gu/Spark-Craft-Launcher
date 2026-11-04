@@ -421,7 +421,8 @@ class RepairEngine:
         for category in category_totals:
             category_done[category] = 0
             self.phase(category, 0)
-        worker_count = max(1, min(DownloadGate.max_threads(), 16))
+        # 低配机器上 16 个并发下载会抢占磁盘/网络并拖慢 UI；按 CPU 核心数收敛。
+        worker_count = max(1, min(DownloadGate.max_threads(), 16, max(2, (os.cpu_count() or 4) * 2)))
         completed = 0
         cancelled = False
         with ThreadPoolExecutor(max_workers=worker_count) as pool:

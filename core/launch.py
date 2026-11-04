@@ -535,7 +535,12 @@ class LaunchManager:
             return 1
 
     def _select_best_java(self, required_version, max_version=None):
-        if self._cached_java_list is None:
+        # 后台 Java 扫描完成后会更新全局共享列表；不能继续使用本实例的旧缓存，
+        # 否则新装的 Java 要重启启动器才能被识别。
+        fresh = self.peek_cached_java_list()
+        if fresh is not None:
+            self._cached_java_list = fresh
+        elif self._cached_java_list is None:
             self._cached_java_list = self.get_cached_java_list()
         java_list = self._cached_java_list or []
         candidates = []
@@ -1589,6 +1594,9 @@ class LaunchWorker(QThread):
         self._window_ready_emitted = False
         self._window_missing_emitted = False
         self._fatal_emitted = False
+        self._graphics_error_seen = False
+        self._graphics_error_message = ''
+        self._graphics_error_time = 0.0
         self._watch_done = threading.Event()
         for i, arg in enumerate(command):
             if arg == '--version' and i + 1 < len(command):
@@ -1684,20 +1692,23 @@ class LaunchWorker(QThread):
             return
 
     def _check_fatal_output(self, line):
-        if self._fatal_emitted:
+        '''只记录 OpenGL 报错，不立刻杀进程。
+
+        部分整合包/LWJGL 版本会先打印 GLFW 警告，随后仍能成功创建窗口；
+        旧逻辑听到关键字就结束进程并弹“升级驱动”，会误杀 PCL/HMCL 能正常
+        启动的版本。真正失败由“进程退出且没有窗口”或长时间无窗口来判定。
+        '''
+
+        if self._fatal_emitted or self._graphics_error_seen:
             return False
         message = fatal_launch_message(line)
         if not message:
             return False
-        self._fatal_emitted = True
-        self.launch_fatal.emit(message)
-        # GLFW/WGL 失败后部分 Forge 进程不会自行退出；主动结束，避免界面一直
-        # 停在“等待游戏窗口”。
-        try:
-            self.stop_game()
-        except Exception as exc:
-            logger.warning(f'OpenGL 初始化失败后终止进程异常: {exc}')
-        return True
+        self._graphics_error_seen = True
+        self._graphics_error_message = message
+        self._graphics_error_time = time.monotonic()
+        logger.warning('检测到 OpenGL 错误日志，继续等待游戏窗口以确认是否可恢复')
+        return False
 
     def _read_output(self, proc):
         '''持续读取游戏 stdout；读取线程与进程退出检测解耦，避免管道被子进程占用时永远收不到退出。'''
@@ -1854,6 +1865,10 @@ class LaunchWorker(QThread):
                         time.sleep(0.5)
                 self._watch_done.set()
                 reader.join(timeout=1.0)
+                if (exit_code != 0 and self._graphics_error_seen
+                        and not self._window_ready_emitted and not self._fatal_emitted):
+                    self._fatal_emitted = True
+                    self.launch_fatal.emit(self._graphics_error_message or fatal_launch_message('glfw error 65542'))
                 with self._stop_lock:
                     if not self._exited_emitted:
                         self._exited_emitted = True

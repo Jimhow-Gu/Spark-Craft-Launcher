@@ -380,6 +380,22 @@ class ModpackImportWorker(QThread):
         self._config = ConfigManager()
         self._before_dirs = None
         self._install_token = f'modpack-{id(self)}-{int(time.time() * 1000)}'
+        self._last_status_emit = 0.0
+        self._last_log_emit = 0.0
+
+    def _throttled_status(self, text):
+        now = time.monotonic()
+        if now - self._last_status_emit < 0.12:
+            return
+        self._last_status_emit = now
+        self.status_updated.emit(str(text))
+
+    def _throttled_log(self, text):
+        now = time.monotonic()
+        if now - self._last_log_emit < 0.15:
+            return
+        self._last_log_emit = now
+        self.log_message.emit(str(text))
 
     def cancel(self):
         self._cancelled = True
@@ -505,7 +521,7 @@ class ModpackImportWorker(QThread):
 
     def _install_dependencies(self, info, alias_id):
         progress = ProgressMapper(5, 50, self.progress_updated.emit)
-        common = dict(status_cb=self.status_updated.emit, progress_cb=progress, log_cb=self.log_message.emit, cancel=(lambda: self._cancelled))
+        common = dict(status_cb=self._throttled_status, progress_cb=progress, log_cb=self._throttled_log, cancel=(lambda: self._cancelled))
         if info.loader_id == 'fabric':
             install_fabric(info.mc_version, info.loader_version, self.mc_dir, alias_id, **common)
             return
@@ -526,7 +542,7 @@ class ModpackImportWorker(QThread):
                 raise DownloadError('整合包未指定 NeoForge 版本')
             install_neoforge(info.mc_version, info.loader_version, self.mc_dir, alias_id, **common)
             return
-        install_vanilla(info.mc_version, self.mc_dir, status_cb=self.status_updated.emit, progress_cb=ProgressMapper(5, 50, self.progress_updated.emit), log_cb=self.log_message.emit, cancel=(lambda: self._cancelled))
+        install_vanilla(info.mc_version, self.mc_dir, status_cb=self._throttled_status, progress_cb=ProgressMapper(5, 50, self.progress_updated.emit), log_cb=self._throttled_log, cancel=(lambda: self._cancelled))
         create_alias(self.mc_dir, alias_id, info.mc_version, jar_id=info.mc_version)
         self.progress_updated.emit(55)
 
@@ -554,7 +570,7 @@ class ModpackImportWorker(QThread):
                     except Exception:
                         pass
 
-            with ThreadPoolExecutor(max_workers=max(1, min(8, total))) as pool:
+            with ThreadPoolExecutor(max_workers=max(1, min(4, total, os.cpu_count() or 4))) as pool:
                 future_map = {pool.submit(resolve, item): item for item in pending_curse}
                 for future in as_completed(future_map):
                     self._check_cancel()
@@ -693,7 +709,8 @@ class ModpackImportWorker(QThread):
             report(False)
 
         try:
-            result = downloader.download_many(remotes, workers=min(8, DownloadGate.max_threads(), total), cancel=(lambda: self._cancelled), on_file_done=on_file_done, on_progress=on_progress)
+            worker_count = min(6, max(2, os.cpu_count() or 4), DownloadGate.max_threads(), total)
+            result = downloader.download_many(remotes, workers=worker_count, cancel=(lambda: self._cancelled), on_file_done=on_file_done, on_progress=on_progress)
             if result.failed:
                 # 并发下载时个别大文件可能因连接抖动失败；再串行重试一次，
                 # 避免整个整合包因为少数文件而回滚。

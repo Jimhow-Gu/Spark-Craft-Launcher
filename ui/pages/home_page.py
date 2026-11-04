@@ -9,7 +9,7 @@ import re
 import sys
 import logging
 from pathlib import Path
-from PySide6.QtCore import (Qt, Signal, QTimer, QThread, QSize)
+from PySide6.QtCore import (Qt, Signal, QTimer, QThread, QSize, QEvent)
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QFrame, QListWidget, QListWidgetItem, QGroupBox, QScrollArea, QMessageBox, QStackedWidget, QSizePolicy, QApplication)
 from PySide6.QtGui import (QFont, QColor, QPalette, QPixmap, QIcon)
 from core.app_font import ui_font
@@ -1316,17 +1316,50 @@ class HomePage(QWidget):
         worker.finished.connect(worker.deleteLater)
         worker.start()
 
+    def _running_row_light(self):
+        try:
+            return QApplication.palette().color(QPalette.Window).lightness() > 128
+        except Exception:
+            return False
+
+    def _running_row_label_color(self):
+        return '#2f6f6f' if self._running_row_light() else '#A8E6E6'
+
+    def _running_row_background(self):
+        return 'rgba(0,0,0,0.05)' if self._running_row_light() else 'rgba(255,255,255,0.04)'
+
+    def _refresh_running_row_styles(self):
+        color = self._running_row_label_color()
+        background = self._running_row_background()
+        for row, _btn in getattr(self, '_running_rows', {}).values():
+            try:
+                row.setStyleSheet(f'background: {background}; border-radius: 6px;')
+                for label in row.findChildren(QLabel):
+                    if label.text().startswith('运行中'):
+                        label.setStyleSheet(
+                            f'color: {color}; font-size: 13px; background: transparent;'
+                        )
+            except RuntimeError:
+                continue
+
+    def changeEvent(self, event):
+        if event.type() in (QEvent.PaletteChange, QEvent.StyleChange):
+            self._refresh_running_row_styles()
+        super().changeEvent(event)
+
     def _add_running_row(self, worker):
         info = self._instance_info.get(worker)
         if not info:
             return
         row = QWidget()
-        row.setStyleSheet('background: rgba(255,255,255,0.04); border-radius: 6px;')
+        row.setStyleSheet(f'background: {self._running_row_background()}; border-radius: 6px;')
         layout = QHBoxLayout(row)
         layout.setContentsMargins(10, 8, 10, 8)
         pid_text = f'  (PID {info["pid"]})' if info.get('pid') else ''
         label = QLabel(f'运行中：{info["nickname"]}{pid_text}')
-        label.setStyleSheet('color: #A8E6E6; font-size: 13px; background: transparent;')
+        label.setStyleSheet(
+            f'color: {self._running_row_label_color()}; font-size: 13px; background: transparent;'
+        )
         btn = QPushButton(f'结束 {info["nickname"]} 的进程')
         btn.setStyleSheet('\n            QPushButton { background:#6c2a2a; color:white; border:none;\n                          border-radius:5px; padding:5px 12px; }\n            QPushButton:hover { background:#8a3a3a; }\n            QPushButton:disabled { background:#333; color:#777; }\n        ')
         btn.clicked.connect((lambda checked=False, w=worker: self._stop_game(w)))
