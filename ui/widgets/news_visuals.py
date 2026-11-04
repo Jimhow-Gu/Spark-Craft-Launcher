@@ -2,13 +2,42 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPainter
+from PySide6.QtCore import QBuffer, QByteArray, Qt
+from PySide6.QtGui import QImageReader, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from ui.widgets.fireworks_loader import FireworksLoader
+
+MAX_IMAGE_PIXELS = 40_000_000
+
+
+def pixmap_from_data(data, max_pixels=MAX_IMAGE_PIXELS):
+    '''限制解码后的图片像素数，避免异常图片耗尽内存。'''
+
+    if not data:
+        return QPixmap()
+    buffer = QBuffer()
+    try:
+        buffer.setData(QByteArray(data))
+        if not buffer.open(QBuffer.ReadOnly):
+            return QPixmap()
+        reader = QImageReader(buffer)
+        size = reader.size()
+        if size.isValid() and size.width() * size.height() > max_pixels:
+            return QPixmap()
+        image = reader.read()
+        if image.isNull():
+            return QPixmap()
+        return QPixmap.fromImage(image)
+    except Exception:
+        return QPixmap()
+    finally:
+        try:
+            buffer.close()
+        except Exception:
+            pass
 
 
 class NewsImageLabel(QWidget):

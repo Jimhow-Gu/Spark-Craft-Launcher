@@ -1426,7 +1426,7 @@ class HomePage(QWidget):
         if is_current:
             self._starting_worker = None
             self.action_btn.set_idle('启动游戏')
-        # 慢整合包可能超过 30 秒才出现窗口；此时没有其他启动任务时仍要补报成功。
+        # 慢整合包可能超过 2 分钟才出现窗口；此时没有其他启动任务时仍要补报成功。
         can_update = is_current or self._starting_worker is None
         if nickname:
             self._append_log(f'{nickname} 游戏窗口已出现', worker)

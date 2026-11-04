@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import logging
 import re
 from pathlib import Path
 
@@ -21,12 +22,15 @@ from PySide6.QtWidgets import (
 
 from core.app_font import ui_font
 from core.config import ConfigManager
-from core.paths import scl_dir
+from core.paths import safe_rmtree, scl_dir
 from ui.pages.news_detail import VersionDetailPage
-from ui.widgets.news_visuals import NewsImageLabel, TranslationPending
+from ui.widgets.news_visuals import NewsImageLabel, TranslationPending, pixmap_from_data
 from ui.widgets.toast import show_toast
 
 NEWS_URL = 'https://mcnews.meloong.com'
+MAX_NEWS_XAML_BYTES = 8 * 1024 * 1024
+MAX_IMAGE_BYTES = 20 * 1024 * 1024
+logger = logging.getLogger('NewsPage')
 NEWS_SOURCE_URL = 'https://github.com/Light-Beacon/PCL2-NewsHomepage'
 NEWS_UA = 'PCL2/2.13'
 
@@ -148,6 +152,10 @@ class NewsCard(QFrame):
         self.body = QWidget()
         self._expanded = bool(expanded)
         self._body_anim = None
+        self._page = page
+        self._image_urls = list(data.get('images') or [])
+        self._image_requested = False
+        self.image_label = None
         self.body.setMaximumHeight(16777215 if expanded else 0)
         body_layout = QVBoxLayout(self.body)
         body_layout.setContentsMargins(0, 0, 0, 0)
@@ -158,11 +166,11 @@ class NewsCard(QFrame):
         meta.setStyleSheet('color:#bfe3e3; font-size:12px;')
         body_layout.addWidget(meta)
 
-        images = data.get('images') or []
-        if images:
+        if self._image_urls:
             self.image_label = NewsImageLabel()
             body_layout.addWidget(self.image_label)
-            page.request_image(self.image_label, images)
+            if expanded:
+                self._load_image()
 
         if data.get('translation_pending'):
             body_layout.addWidget(TranslationPending())
@@ -223,9 +231,19 @@ class NewsCard(QFrame):
     def _toggle(self):
         self._animate_body(not self._expanded)
 
+    def _load_image(self):
+        '''折叠卡片的图片延迟到展开时再下载，减少启动资源占用。'''
+
+        if self._image_requested or self.image_label is None:
+            return
+        self._image_requested = True
+        self._page.request_image(self.image_label, self._image_urls)
+
     def _animate_body(self, expand):
         self._expanded = bool(expand)
         self.toggle_btn.setText('▲' if expand else '▼')
+        if expand:
+            self._load_image()
         if self._body_anim is not None:
             try:
                 self._body_anim.stop()
@@ -327,6 +345,7 @@ class NewsPage(QWidget):
         self._error_notice_timer.setSingleShot(True)
         self._error_notice_timer.timeout.connect(self._show_refresh_error_toast)
         self._last_error_reason = ''
+        self._cache_prune_scheduled = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -408,6 +427,8 @@ class NewsPage(QWidget):
         self.stack.setVisible(visible)
         if visible and self.isVisible() and not self._loaded:
             self.load()
+        elif not visible:
+            self._release_detail_pages()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -415,6 +436,12 @@ class NewsPage(QWidget):
             return
         if not self._loaded:
             self.load()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        # 离开主页后详情页不会被再次显示（返回主页会先回到新闻列表），
+        # 及时释放大文档和图片，避免长期占用内存。
+        self._release_detail_pages()
 
     def shutdown(self):
         self._error_notice_timer.stop()
@@ -446,14 +473,20 @@ class NewsPage(QWidget):
             except OSError:
                 cached = ''
             if cached:
-                items = parse_news_page(cached)
-                if items:
-                    self._news_signature = hashlib.sha1(cached.encode('utf-8')).hexdigest()[:16]
-                    self._error_notice_timer.stop()
-                    self._render(items)
+                try:
+                    items = parse_news_page(cached)
+                    if items:
+                        self._news_signature = hashlib.sha1(cached.encode('utf-8')).hexdigest()[:16]
+                        self._error_notice_timer.stop()
+                        self._render(items)
+                except Exception:
+                    logger.warning('解析缓存的新闻内容失败', exc_info=True)
         self._loaded = True
         self.refresh_btn.setEnabled(False)
         self._request_news()
+        if not self._cache_prune_scheduled:
+            self._cache_prune_scheduled = True
+            QTimer.singleShot(2500, self._prune_caches)
 
     def _request_news(self):
         request = QNetworkRequest(QUrl(NEWS_URL))
@@ -483,9 +516,20 @@ class NewsPage(QWidget):
         if reply.error() != QNetworkReply.NoError:
             error = reply.errorString() or '网络请求失败'
         else:
-            text = bytes(reply.readAll()).decode('utf-8', errors='replace')
-            if '<local:MyCard' not in text:
-                error = '新闻源返回内容异常'
+            try:
+                length = int(reply.header(QNetworkRequest.ContentLengthHeader) or 0)
+            except Exception:
+                length = 0
+            if length > MAX_NEWS_XAML_BYTES:
+                error = '新闻源返回内容过大'
+            else:
+                raw = bytes(reply.readAll())
+                if len(raw) > MAX_NEWS_XAML_BYTES:
+                    error = '新闻源返回内容过大'
+                else:
+                    text = raw.decode('utf-8', errors='replace')
+                    if '<local:MyCard' not in text:
+                        error = '新闻源返回内容异常'
         reply.deleteLater()
         if error:
             self._on_news_error(error)
@@ -493,22 +537,27 @@ class NewsPage(QWidget):
             self._on_news_loaded(text)
 
     def _on_news_loaded(self, text):
-        signature = hashlib.sha1(text.encode('utf-8')).hexdigest()[:16]
-        if self._cards and signature == self._news_signature:
-            self._error_notice_timer.stop()
-            return
-        items = parse_news_page(text)
-        if not items:
-            self._on_news_error('新闻源没有可用的版本新闻')
-            return
-        self._news_signature = signature
         try:
-            cache = self._cache_path()
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_text(text, encoding='utf-8')
-        except OSError:
-            pass
-        self._render(items)
+            signature = hashlib.sha1(text.encode('utf-8')).hexdigest()[:16]
+            if self._cards and signature == self._news_signature:
+                self._error_notice_timer.stop()
+                return
+            items = parse_news_page(text)
+            if not items:
+                self._on_news_error('新闻源没有可用的版本新闻')
+                return
+            self._news_signature = signature
+            try:
+                cache = self._cache_path()
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                cache.write_text(text, encoding='utf-8')
+            except OSError:
+                pass
+            self._render(items)
+        except Exception as exc:
+            logger.warning('渲染新闻内容失败', exc_info=True)
+            reason = str(exc).strip() or type(exc).__name__
+            self._on_news_error(f'新闻内容解析失败：{reason}')
 
     def _on_news_error(self, message):
         # 保留已缓存的新闻卡片，只延迟提示刷新失败。
@@ -554,7 +603,7 @@ class NewsPage(QWidget):
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
-        self._cards = items
+        self._cards = []
         versions = [item for item in items if item.get('kind') == 'version']
         for index, data in enumerate(versions):
             self.cards_layout.addWidget(
@@ -566,6 +615,39 @@ class NewsPage(QWidget):
         if history:
             self.cards_layout.addWidget(HistoryCard(history))
         self.cards_layout.addStretch(1)
+        self._cards = items
+
+    def _prune_caches(self):
+        '''限制新闻相关磁盘缓存，避免长期使用后无限增长。'''
+
+        root = scl_dir() / 'cache'
+        try:
+            image_root = root / 'mcnews_images'
+            dirs = [path for path in image_root.iterdir() if path.is_dir()]
+            dirs.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+            keep = {self._news_signature or 'default'}
+            kept = 0
+            for path in dirs:
+                if path.name in keep:
+                    continue
+                if kept < 2:
+                    kept += 1
+                    continue
+                safe_rmtree(path)
+        except Exception:
+            pass
+        for name, limit in (('mcnews_detail_images', 80), ('mcnews_details', 40)):
+            try:
+                folder = root / name
+                files = [path for path in folder.iterdir() if path.is_file()]
+                files.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+                for path in files[limit:]:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+            except Exception:
+                continue
 
     def _image_cache_path(self, url):
         key = hashlib.sha1(str(url).encode('utf-8')).hexdigest()
@@ -596,7 +678,7 @@ class NewsPage(QWidget):
             page.back_requested.connect(self.show_news_home)
             self.stack.addWidget(page)
             self._detail_pages[key] = page
-            while len(self._detail_pages) > 3:
+            while len(self._detail_pages) > 2:
                 old_key = next(
                     (k for k, v in self._detail_pages.items() if v is not page),
                     None,
@@ -614,6 +696,21 @@ class NewsPage(QWidget):
 
     def show_news_home(self):
         self.stack.setCurrentWidget(self.news_view)
+
+    def _release_detail_pages(self):
+        if not self._detail_pages:
+            return
+        pages = list(self._detail_pages.values())
+        self._detail_pages.clear()
+        if self.stack.currentWidget() is not self.news_view:
+            self.stack.setCurrentWidget(self.news_view)
+        for page in pages:
+            self.stack.removeWidget(page)
+            try:
+                page.shutdown()
+            except RuntimeError:
+                pass
+            page.deleteLater()
 
     def request_image(self, label, urls):
         urls = [u for u in urls or [] if u]
@@ -658,11 +755,17 @@ class NewsPage(QWidget):
         if label is None:
             reply.deleteLater()
             return
-        pixmap = QPixmap()
         data = b''
         if reply.error() == QNetworkReply.NoError:
-            data = reply.readAll()
-            pixmap.loadFromData(data)
+            try:
+                length = int(reply.header(QNetworkRequest.ContentLengthHeader) or 0)
+            except Exception:
+                length = 0
+            if length <= MAX_IMAGE_BYTES:
+                raw = bytes(reply.readAll())
+                if len(raw) <= MAX_IMAGE_BYTES:
+                    data = raw
+        pixmap = pixmap_from_data(data)
         reply.deleteLater()
         if not pixmap.isNull():
             try:

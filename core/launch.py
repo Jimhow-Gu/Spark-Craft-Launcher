@@ -1578,7 +1578,7 @@ class LaunchWorker(QThread):
     launch_fatal = Signal(str)
     process_exited = Signal(int)
     output_received = Signal(str)
-    NO_WINDOW_WARN_SECONDS = 30.0
+    NO_WINDOW_WARN_SECONDS = 120.0
 
     def __init__(self, command: list[str], mc_dir: str, pre_launch_command: str='', window_title: str=''):
         super().__init__()
@@ -1768,7 +1768,7 @@ class LaunchWorker(QThread):
         activated = False
         last_rect = None
         stable = 0
-        for _ in range(240):
+        for _ in range(360):
             if self._stop_flag or self._watch_done.is_set():
                 return
             if proc.poll() is not None and len(_process_tree_pids(pid)) <= 1:

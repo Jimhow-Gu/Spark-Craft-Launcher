@@ -191,6 +191,8 @@ def main():
         QNetworkProxyFactory.setUseSystemConfiguration(True)
     except Exception:
         pass
+    from core.error_guard import install_error_guard
+    install_error_guard(app)
     from ui.widgets.checkbox_style import CheckBoxProxyStyle
     app.setStyle(CheckBoxProxyStyle())
     from ui.widgets.smooth_scroll import SmoothScroller
@@ -270,7 +272,23 @@ def main():
     apply_packaged_defaults_once()
     init_game_dirs()
 
-    window = MainWindow()
+    try:
+        window = MainWindow()
+    except Exception:
+        logging.getLogger('Startup').exception('主窗口初始化失败')
+        try:
+            from PySide6.QtWidgets import QMessageBox
+            from core.logging_setup import LOG_FILE
+            QMessageBox.critical(
+                None, '启动失败',
+                '启动器界面初始化失败，请查看日志后重试。'
+                + chr(10) * 2
+                + '日志：'
+                + str(LOG_FILE),
+            )
+        except Exception:
+            pass
+        sys.exit(1)
     window.setWindowIcon(app.windowIcon())
     if ico_path.exists():
         apply_windows_window_icon(window, ico_path)
@@ -295,7 +313,15 @@ def main():
     window.setWindowState(Qt.WindowNoState)
     # 首帧绘制后再后台扫描 Java，避免启动卡顿
 
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    # 退出时可能仍有网络/日志线程在运行。交给 Python 析构 QThread 会触发
+    # “QThread: Destroyed while thread is still running” 甚至崩溃；
+    # 事件循环结束后直接结束进程，由操作系统回收线程。
+    try:
+        logging.shutdown()
+    except Exception:
+        pass
+    os._exit(int(exit_code or 0))
 
 if __name__ == "__main__":
     main()

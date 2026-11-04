@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import logging
 import re
 
 from PySide6.QtCore import QEvent, QTimer, Qt, Signal, QUrl
@@ -18,9 +19,12 @@ from core.config import ConfigManager
 from core.paths import scl_dir
 from ui.widgets.back_button import BackButton
 from ui.widgets.fireworks_loader import FireworksLoader
-from ui.widgets.news_visuals import NewsImageLabel
+from ui.widgets.news_visuals import NewsImageLabel, pixmap_from_data
 
 NEWS_UA = 'PCL2/2.13'
+MAX_DETAIL_XAML_BYTES = 8 * 1024 * 1024
+MAX_IMAGE_BYTES = 20 * 1024 * 1024
+logger = logging.getLogger('NewsDetail')
 
 
 def _text(value):
@@ -245,9 +249,20 @@ class VersionDetailPage(QWidget):
             error = reply.errorString()
             text = ''
         else:
-            text = bytes(reply.readAll()).decode('utf-8', errors='replace')
-            if '<FlowDocument>' not in text:
-                error = '版本详情内容异常'
+            try:
+                length = int(reply.header(QNetworkRequest.ContentLengthHeader) or 0)
+            except Exception:
+                length = 0
+            if length > MAX_DETAIL_XAML_BYTES:
+                error = '版本详情内容过大'
+            else:
+                raw = bytes(reply.readAll())
+                if len(raw) > MAX_DETAIL_XAML_BYTES:
+                    error = '版本详情内容过大'
+                else:
+                    text = raw.decode('utf-8', errors='replace')
+                    if '<FlowDocument>' not in text:
+                        error = '版本详情内容异常'
         reply.deleteLater()
         if error:
             self._on_error(error)
@@ -323,11 +338,17 @@ class VersionDetailPage(QWidget):
             reply.deleteLater()
             return
         self._image_reply = None
-        pixmap = QPixmap()
         data = b''
         if reply.error() == QNetworkReply.NoError:
-            data = bytes(reply.readAll())
-            pixmap.loadFromData(data)
+            try:
+                length = int(reply.header(QNetworkRequest.ContentLengthHeader) or 0)
+            except Exception:
+                length = 0
+            if length <= MAX_IMAGE_BYTES:
+                raw = bytes(reply.readAll())
+                if len(raw) <= MAX_IMAGE_BYTES:
+                    data = raw
+        pixmap = pixmap_from_data(data)
         reply.deleteLater()
         if not pixmap.isNull():
             try:
@@ -376,16 +397,23 @@ class VersionDetailPage(QWidget):
             return
         self._rendered_signature = signature
         old_scroll = self.scroll.verticalScrollBar().value()
-        html_text = detail_xaml_to_html(content, self._is_light())
-        if not html_text:
+        try:
+            html_text = detail_xaml_to_html(content, self._is_light())
+            if not html_text:
+                self.loading_icon.hide()
+                self.loading_text.setText('无法解析版本详情内容')
+                return
+            self._load_images(content)
+            self.browser.setHtml(html_text)
+            self._fit_browser()
+            QTimer.singleShot(0, self._fit_browser)
+            self.scroll.verticalScrollBar().setValue(old_scroll)
+        except Exception as exc:
+            logger.warning('渲染版本详情失败', exc_info=True)
+            reason = str(exc).strip() or type(exc).__name__
             self.loading_icon.hide()
-            self.loading_text.setText('无法解析版本详情内容')
+            self.loading_text.setText(f'版本详情内容加载失败：{reason}')
             return
-        self._load_images(content)
-        self.browser.setHtml(html_text)
-        self._fit_browser()
-        QTimer.singleShot(0, self._fit_browser)
-        self.scroll.verticalScrollBar().setValue(old_scroll)
         self.loading_icon.hide()
         self.loading_text.setText('')
 
@@ -394,7 +422,7 @@ class VersionDetailPage(QWidget):
             cache = self._cache_path(version)
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(text, encoding='utf-8')
-        except OSError:
+        except Exception:
             pass
         self._render(text)
 
