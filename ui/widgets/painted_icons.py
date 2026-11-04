@@ -72,6 +72,19 @@ def _draw_download(painter, color, stroke):
     painter.drawPath(path)
     painter.drawLine(QPointF(5, 19), QPointF(19, 19))
 
+def _draw_home(painter, color, stroke):
+    painter.setPen(_pen(color, stroke))
+    painter.setBrush(Qt.NoBrush)
+    path = QPainterPath()
+    path.moveTo(3.5, 11)
+    path.lineTo(12, 4)
+    path.lineTo(20.5, 11)
+    painter.drawPath(path)
+    painter.drawLine(QPointF(5.5, 10), QPointF(5.5, 20))
+    painter.drawLine(QPointF(18.5, 10), QPointF(18.5, 20))
+    painter.drawLine(QPointF(5.5, 20), QPointF(18.5, 20))
+    painter.drawRoundedRect(QRectF(9.8, 14.5, 4.4, 5.5), 1.0, 1.0)
+
 def _draw_components(painter, color, stroke):
     painter.setPen(_pen(color, stroke))
     painter.setBrush(Qt.NoBrush)
@@ -339,6 +352,8 @@ def painted_icon(name, size=20, color='#e6edf3', stroke=1.8, light_safe=False):
             _draw_stop(painter, color, stroke)
         elif name == 'download':
             _draw_download(painter, color, stroke)
+        elif name == 'home':
+            _draw_home(painter, color, stroke)
         elif name == 'components':
             _draw_components(painter, color, stroke)
         elif name == 'package':

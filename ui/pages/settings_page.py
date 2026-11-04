@@ -40,6 +40,7 @@ class SettingsPage(QWidget):
     background_refresh = Signal()
     title_changed = Signal(str)
     theme_changed = Signal(str)
+    homepage_mode_changed = Signal(str)
     video_music_changed = Signal(bool)
     video_volume_changed = Signal(int)
     def __init__(self, parent=None):
@@ -146,6 +147,50 @@ class SettingsPage(QWidget):
         theme_row.addStretch(1)
         theme_layout.addLayout(theme_row)
         layout.addWidget(theme_group)
+
+        nav_group = self._create_group('默认导航页')
+        nav_layout = nav_group.layout()
+        nav_row = QHBoxLayout()
+        nav_row.setSpacing(20)
+        self.default_nav_group = QButtonGroup(self)
+        self.default_nav_group.setExclusive(True)
+        self.default_nav_buttons = {}
+        for value, label in (('home', '主页'), ('launch', '启动')):
+            radio = QRadioButton(label)
+            radio.setStyleSheet(RADIO_BUTTON_STYLE)
+            radio.toggled.connect(
+                lambda checked, key=value: self._on_default_nav_changed(key, checked)
+            )
+            self.default_nav_group.addButton(radio)
+            self.default_nav_buttons[value] = radio
+            nav_row.addWidget(radio)
+        nav_row.addStretch(1)
+        nav_layout.addLayout(nav_row)
+        layout.addWidget(nav_group)
+
+        home_group = self._create_group('主页')
+        home_layout = home_group.layout()
+        home_row = QHBoxLayout()
+        home_row.setSpacing(20)
+        self.home_mode_group = QButtonGroup(self)
+        self.home_mode_group.setExclusive(True)
+        self.home_mode_buttons = {}
+        for value, label in (('blank', '空白'), ('preset', '预设')):
+            radio = QRadioButton(label)
+            radio.setStyleSheet(RADIO_BUTTON_STYLE)
+            radio.setToolTip(
+                '不显示标题和内容，仅欣赏背景' if value == 'blank' else '显示 Minecraft 新闻主页'
+            )
+            radio.toggled.connect(
+                lambda checked, key=value: self._on_homepage_mode_changed(key, checked)
+            )
+            self.home_mode_group.addButton(radio)
+            self.home_mode_buttons[value] = radio
+            home_row.addWidget(radio)
+        home_row.addStretch(1)
+        home_layout.addLayout(home_row)
+        layout.addWidget(home_group)
+
         java_group = self._create_group('Java 列表')
         java_group_layout = java_group.layout()
         java_row = QHBoxLayout()
@@ -765,7 +810,7 @@ class SettingsPage(QWidget):
             startup_layout.addWidget(group)
         startup_layout.addStretch(1)
         startup_layout.addWidget(self.version_settings_btn, 0, Qt.AlignHCenter)
-        for group in (theme_group, bg_group, music_group, title_group):
+        for group in (theme_group, nav_group, home_group, bg_group, music_group, title_group):
             personal_layout.addWidget(group)
         personal_layout.addStretch(1)
         for group in (java_group, thread_group, community_group, mirror_group, mod_source_group, lang_group, log_group, reset_group):
@@ -1359,6 +1404,20 @@ class SettingsPage(QWidget):
             button.blockSignals(True)
             button.setChecked(key == theme)
             button.blockSignals(False)
+        default_nav = str(self.config.get('default_nav_page', 'home') or 'home')
+        if default_nav not in self.default_nav_buttons:
+            default_nav = 'home'
+        for key, button in self.default_nav_buttons.items():
+            button.blockSignals(True)
+            button.setChecked(key == default_nav)
+            button.blockSignals(False)
+        homepage_mode = str(self.config.get('homepage_mode', 'preset') or 'preset')
+        if homepage_mode not in self.home_mode_buttons:
+            homepage_mode = 'preset'
+        for key, button in self.home_mode_buttons.items():
+            button.blockSignals(True)
+            button.setChecked(key == homepage_mode)
+            button.blockSignals(False)
         java_list = self.launch_mgr.peek_cached_java_list()
         if java_list is None:
             self.java_combo.blockSignals(True)
@@ -1652,6 +1711,18 @@ class SettingsPage(QWidget):
         self.title_image_edit.setText(str(self.config.get('global_title_image', '') or ''))
         self._apply_title_mode_visibility()
         self._update_background_count()
+
+    def _on_default_nav_changed(self, value, checked):
+        if not checked:
+            return
+        self.config.set('default_nav_page', str(value or 'home'))
+
+    def _on_homepage_mode_changed(self, value, checked):
+        if not checked:
+            return
+        mode = 'blank' if str(value) == 'blank' else 'preset'
+        self.config.set('homepage_mode', mode)
+        self.homepage_mode_changed.emit(mode)
 
     def _on_theme_selected(self, theme):
         theme = str(theme or 'system')

@@ -87,7 +87,7 @@ def is_network_error(exc):
             return True
     return is_network_error_text(exc)
 
-def network_available(timeout=0.8):
+def network_available(timeout=0.35):
     '''快速检查本机是否真的能访问外网，结果短时间缓存。'''
 
     global _NETWORK_STATE

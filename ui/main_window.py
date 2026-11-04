@@ -10,6 +10,7 @@ from core.music import BackgroundMusicPlayer
 from ui.pages import (HomePage, VersionPage, AccountPage, SettingsPage, GameSettingsPage)
 from ui.pages.about_page import AboutPage
 from ui.pages.download_manager_page import DownloadManagerPage
+from ui.pages.news_page import NewsPage
 from ui.widgets.account_card import AccountCard
 from ui.widgets.download_status_bar import DownloadStatusBar
 from ui.widgets.painted_icons import set_button_icon
@@ -134,6 +135,7 @@ class MainWindow(QMainWindow):
         self.account_card.avatar_failed.connect(self._on_avatar_failed)
         left_layout.addWidget(self.account_card, 0, Qt.AlignHCenter)
         self.nav_list = SideNavList()
+        self._add_nav_item('主页', 6, None, 'home')
         self._add_nav_item('启动', 0, None, 'play')
         self._add_nav_header('游戏版本')
         self._add_nav_item('下载', 1, 'available', 'download')
@@ -643,6 +645,8 @@ class MainWindow(QMainWindow):
         self.download_manager_page = DownloadManagerPage(self)
         self.download_manager_page.back_requested.connect(self.close_download_manager_page)
         self.page_stack.addWidget(self.download_manager_page)
+        self.news_page = NewsPage(self)
+        self.page_stack.addWidget(self.news_page)
         self._page_animation = None
         self._page_fade_overlay = None
         self.page_stack.currentChanged.connect(self._animate_page_change)
@@ -652,6 +656,7 @@ class MainWindow(QMainWindow):
             self.settings_page.background_refresh.connect((lambda: self._refresh_background(force=True)))
             self.settings_page.title_changed.connect(self._apply_title)
             self.settings_page.settings_changed.connect(self._on_settings_changed)
+            self.settings_page.homepage_mode_changed.connect(self._on_homepage_mode_changed)
             self.settings_page.video_music_changed.connect(self._on_video_music_changed)
             self.settings_page.video_volume_changed.connect(self.central.set_video_volume)
             try:
@@ -673,7 +678,7 @@ class MainWindow(QMainWindow):
         self.central.reload()
         self._apply_ui_depth()
         self._apply_title()
-        self._select_nav(0)
+        self._apply_default_nav_page()
         self.theme_manager = ThemeManager(self)
         try:
             self.settings_page.theme_changed.connect(self._on_theme_changed)
@@ -1006,6 +1011,24 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _apply_default_nav_page(self):
+        try:
+            page = str(self.settings_page.config.get('default_nav_page', 'home') or 'home')
+        except Exception:
+            page = 'home'
+        if page == 'launch':
+            self._select_nav(0)
+            self.page_stack.setCurrentIndex(0)
+        else:
+            self._select_nav(6)
+            self.page_stack.setCurrentIndex(6)
+
+    def _on_homepage_mode_changed(self, mode):
+        try:
+            self.news_page.apply_homepage_mode(mode)
+        except Exception:
+            pass
+
     def _on_settings_changed(self):
         '''全局设置里切换了游戏目录等：同步首页与版本页的版本列表。'''
 
@@ -1109,6 +1132,9 @@ class MainWindow(QMainWindow):
             return
         page_index, section = data
         self.page_stack.setCurrentIndex(page_index)
+        if page_index == 6:
+            self.news_page.show_news_home()
+            return
         if page_index == 0:
             self.home_page.refresh_versions()
             return
@@ -1517,6 +1543,8 @@ class MainWindow(QMainWindow):
                 self.account_page.shutdown()
             if self.settings_page:
                 self.settings_page.shutdown()
+            if self.news_page:
+                self.news_page.shutdown()
             if self.game_settings_page:
                 self.game_settings_page.close()
             app = QApplication.instance()
