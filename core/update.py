@@ -20,7 +20,7 @@ from core.paths import safe_rmtree, scl_dir
 CURRENT_VERSION = '1.10.0'
 VERSION_DISPLAY = 'V1.10.0（正式版）'
 # DLL 构建号在同一版本内递增；每次发布新大版本时重置为 1。
-EXECUTABLE_BUILD = '25'
+EXECUTABLE_BUILD = '26'
 REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
 API_ACCELERATED = f'https://gh-proxy.com/{API_LATEST}'
@@ -243,7 +243,13 @@ def _extract_exe(asset_path):
     if path.suffix.lower() != '.zip':
         raise DownloadError('不支持的更新附件格式')
     with zipfile.ZipFile(path) as zf:
-        members = [name for name in zf.namelist() if Path(name).suffix.lower() == '.exe']
+        # 只允许取启动器本体 exe。SCL 是用户运行数据，更新包即使包含
+        # SCL/ 也必须忽略，绝不整体覆盖或搬移。
+        members = [
+            name for name in zf.namelist()
+            if Path(name).suffix.lower() == '.exe'
+            and 'scl' not in {part.lower() for part in Path(name).parts}
+        ]
         member = next((name for name in members if Path(name).name.lower() in ('spark craft launcher.exe', 'sparkcraftlauncher.exe')), '')
         if not member and len(members) == 1:
             member = members[0]
@@ -436,6 +442,8 @@ def apply_update_inplace(asset_path, version):
         if not moved:
             raise DownloadError(f'无法重命名当前 exe：{last_error}')
         shutil.copy2(new_exe, target)
+        # 更新只替换本体 exe；SCL 目录中的日志、皮肤、缓存和用户数据保持原位。
+        write_update_log('inplace: exe replaced, SCL preserved')
         with target.open('rb') as handle:
             magic = handle.read(2)
         if magic != b'MZ' or target.stat().st_size != new_exe.stat().st_size:
