@@ -1865,7 +1865,7 @@ class LaunchWorker(QThread):
                         time.sleep(0.5)
                 self._watch_done.set()
                 reader.join(timeout=1.0)
-                if (exit_code != 0 and self._graphics_error_seen
+                if (exit_code != 0 and self._graphics_error_seen and not self._stop_flag
                         and not self._window_ready_emitted and not self._fatal_emitted):
                     self._fatal_emitted = True
                     self.launch_fatal.emit(self._graphics_error_message or fatal_launch_message('glfw error 65542'))
