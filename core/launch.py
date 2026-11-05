@@ -1084,7 +1084,7 @@ class LaunchManager:
             from minecraft_launcher_lib.command import (get_arguments, get_arguments_string, get_libraries)
             merged = self._load_merged_version(final_id, mc_dir)
             options['nativesDirectory'] = str(Path(mc_dir) / 'versions' / final_id / 'natives')
-            options['gameDirectory'] = str(mc_dir)
+            options['gameDirectory'] = str(self.get_game_dir(final_id))
             classpath = get_libraries(merged, mc_dir)
             command = [java_path] + jvm_args
             arguments = merged.get('arguments') if isinstance(merged.get('arguments'), dict) else {}
@@ -1603,6 +1603,20 @@ class LaunchWorker(QThread):
                 self.version_id = command[i + 1]
                 break
 
+    def _working_directory(self):
+        '''以 --gameDir 为工作目录启动，保证 Forge 的相对 mods 路径可用。'''
+
+        for index, arg in enumerate(self.command):
+            if arg == '--gameDir' and index + 1 < len(self.command):
+                game_dir = self.command[index + 1]
+                try:
+                    if Path(game_dir).is_dir():
+                        return game_dir
+                except OSError:
+                    pass
+                break
+        return self.mc_dir
+
     def _ensure_chinese_options(self):
         config = ConfigManager()
         if not config.get('auto_set_chinese', True):
@@ -1817,7 +1831,7 @@ class LaunchWorker(QThread):
         if self.pre_launch_command:
             self.output_received.emit(f'[启动前命令] {self.pre_launch_command}')
             try:
-                result = subprocess.run(self.pre_launch_command, shell=True, cwd=self.mc_dir, capture_output=True, text=True, timeout=300, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
+                result = subprocess.run(self.pre_launch_command, shell=True, cwd=self._working_directory(), capture_output=True, text=True, timeout=300, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
                 output = (result.stdout or '') + (result.stderr or '')
                 for line in output.splitlines():
                     if line.strip():
@@ -1842,7 +1856,7 @@ class LaunchWorker(QThread):
                 # 不再使用 STARTUPINFO/SW_HIDE：部分显卡驱动或 Java 弹窗会继承隐藏状态，
                 # 导致进程存在但游戏窗口永远不可见。CREATE_NO_WINDOW 已足够隐藏 java 控制台。
                 creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-                proc = subprocess.Popen(self.command, cwd=self.mc_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, encoding='utf-8', errors='replace', creationflags=creationflags)
+                proc = subprocess.Popen(self.command, cwd=self._working_directory(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, encoding='utf-8', errors='replace', creationflags=creationflags)
                 self._process = proc
                 self.launch_success.emit()
                 reader = threading.Thread(target=self._read_output, args=(proc,), daemon=True)
