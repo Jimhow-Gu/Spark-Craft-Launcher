@@ -56,6 +56,29 @@ def _library_applies(lib: dict) -> bool:
             allowed = True
     return allowed
 
+def _existing_classpath(classpath):
+    '''过滤 classpath 中不存在的路径。
+
+    minecraft_launcher_lib 会为只有 natives 分类器的库生成一个并不存在的
+    artifact 路径（例如 jinput-platform）。部分 Forge 模组会遍历
+    java.class.path，遇到不存在的条目会直接抛 NoSuchFileException；
+    过滤后既不影响类加载，也避免这类启动崩溃。
+    '''
+
+    kept = []
+    for entry in str(classpath or '').split(os.pathsep):
+        if not entry:
+            continue
+        try:
+            if Path(entry).exists():
+                kept.append(entry)
+            else:
+                logger.debug(f'忽略不存在的 classpath 条目: {entry}')
+        except OSError:
+            logger.debug(f'无法访问的 classpath 条目已忽略: {entry}')
+    return os.pathsep.join(kept)
+
+
 def normalize_java_executable(java_path) -> str:
     '''统一使用 java.exe：传入 javaw.exe 时自动换成同目录的 java.exe。'''
 
@@ -1085,7 +1108,7 @@ class LaunchManager:
             merged = self._load_merged_version(final_id, mc_dir)
             options['nativesDirectory'] = str(Path(mc_dir) / 'versions' / final_id / 'natives')
             options['gameDirectory'] = str(self.get_game_dir(final_id))
-            classpath = get_libraries(merged, mc_dir)
+            classpath = _existing_classpath(get_libraries(merged, mc_dir))
             command = [java_path] + jvm_args
             arguments = merged.get('arguments') if isinstance(merged.get('arguments'), dict) else {}
             main_class = str(merged.get('mainClass') or '')

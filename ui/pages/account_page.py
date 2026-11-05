@@ -522,7 +522,11 @@ class DeviceCodeDialog(FramelessDialog):
 class AccountSwitchDialog(FramelessDialog):
     def __init__(self, accounts, current_id='', parent=None):
         super().__init__(parent, '切换账号')
-        self.accounts = accounts
+        # 切换窗口只展示正版账号；第三方/离线账号在各自入口处理。
+        self.accounts = [
+            account for account in (accounts or [])
+            if isinstance(account, dict) and account.get('type') == 'microsoft'
+        ]
         self.deleted = False
         self._new_account_entry = None
         self._login_worker = None
@@ -546,7 +550,7 @@ class AccountSwitchDialog(FramelessDialog):
         self.list.setStyleSheet('\n            QListWidget { background: rgba(30,41,41,0.62); border:1px solid rgba(255,255,255,0.16); border-radius:8px; }\n            QListWidget::item { padding:10px 12px; color:#ddd; border-bottom:1px solid rgba(255,255,255,0.05); }\n            QListWidget::item:selected { background: rgba(136,221,221,0.35); }\n        ')
         type_labels = {'microsoft': '正版账号', 'thirdparty': '第三方', 'offline': '离线'}
         current_row = 0
-        for index, account in enumerate(accounts):
+        for index, account in enumerate(self.accounts):
             kind = account.get('type', '')
             name = account.get('name', '未命名')
             detail = account.get('email') or account.get('api') or ''
@@ -564,7 +568,7 @@ class AccountSwitchDialog(FramelessDialog):
         _font.setBold(True)
         new_item.setFont(_font)
         self.list.addItem(new_item)
-        if accounts:
+        if self.accounts:
             self.list.setCurrentRow(current_row)
         else:
             self.list.setCurrentRow(0)
@@ -1476,7 +1480,10 @@ class AccountPage(QWidget):
         menu.exec(self.edit_action_btn.mapToGlobal(self.edit_action_btn.rect().bottomLeft()))
 
     def _show_account_switcher(self):
-        accounts = self.auth.get_saved_accounts()
+        accounts = [
+            entry for entry in self.auth.get_saved_accounts()
+            if isinstance(entry, dict) and entry.get('type') == 'microsoft'
+        ]
         dialog = AccountSwitchDialog(accounts, self._current_account_id(), self)
         if dialog.exec() != QDialog.Accepted:
             if dialog.deleted:

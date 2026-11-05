@@ -1992,7 +1992,7 @@ class LoaderModifyPage(QWidget):
             self._base_mc, load_optional=True, load_optifabric=False
         )
         self._versions_worker.partial.connect(self._on_versions_loaded)
-        self._versions_worker.finished.connect(self._on_versions_finished)
+        self._versions_worker.loaded.connect(self._on_versions_finished)
         self._versions_worker.start()
         self._loading_watchdog.start()
         self.status_label.setText('')
