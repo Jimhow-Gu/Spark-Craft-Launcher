@@ -18,6 +18,9 @@ hiddenimports = [
     "ui.widgets.update_dialog",
 ]
 hiddenimports += collect_submodules("minecraft_launcher_lib")
+# 官方构建的 CurseForge Key 放在本地忽略文件中；开源构建没有该文件时跳过。
+if Path("core/_curseforge_key.py").is_file():
+    hiddenimports.append("core._curseforge_key")
 
 # 只打包界面实际使用的可选依赖，避免把 OpenSSL/cryptography 等带入安装包
 excludes = [

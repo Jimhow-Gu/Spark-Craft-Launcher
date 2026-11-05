@@ -7,7 +7,6 @@ import os
 import subprocess
 import re
 import sys
-import webbrowser
 from pathlib import Path
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QGroupBox, QFileDialog, QScrollArea, QListWidget, QListWidgetItem, QMessageBox, QApplication, QRadioButton, QButtonGroup, QSlider, QCheckBox, QLineEdit, QSpinBox, QTabWidget, QGraphicsOpacityEffect, QProgressBar)
 from ui.widgets.themed_checkbox import ThemedCheckBox
@@ -668,33 +667,6 @@ class SettingsPage(QWidget):
         version_row.addWidget(self.version_source_combo, 1)
         mirror_layout.addLayout(version_row)
         layout.addWidget(mirror_group)
-        mod_source_group = self._create_group('模组下载源')
-        mod_source_layout = mod_source_group.layout()
-        source_tip = QLabel('下载中心默认使用 Modrinth，无需配置即可使用。CurseForge 需要官方 API Key（免费申请）。')
-        source_tip.setWordWrap(True)
-        source_tip.setStyleSheet('color: rgba(255,255,255,0.6); font-size: 12px;')
-        mod_source_layout.addWidget(source_tip)
-        cf_row = QHBoxLayout()
-        cf_label = QLabel('CurseForge API Key')
-        cf_label.setFixedWidth(140)
-        cf_label.setStyleSheet('color: rgba(255,255,255,0.7);')
-        self.cf_key_edit = QLineEdit()
-        self.cf_key_edit.setEchoMode(QLineEdit.Password)
-        self.cf_key_edit.setPlaceholderText('粘贴 CurseForge API Key（留空则不可用）')
-        self.cf_key_edit.setStyleSheet('\n            QLineEdit {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.1);\n                border-radius: 6px; color: #f0f0f0; padding: 4px 8px;\n            }\n        ')
-        self.cf_key_edit.editingFinished.connect(self._save_cf_key)
-        cf_row.addWidget(cf_label)
-        cf_row.addWidget(self.cf_key_edit, 1)
-        get_key_btn = QPushButton('申请 Key')
-        get_key_btn.setStyleSheet('QPushButton { background:#3a3a3a; color:white; border:none; border-radius:6px; padding:6px 12px; } QPushButton:hover { background:#4a4a4a; }')
-        get_key_btn.clicked.connect((lambda: webbrowser.open('https://console.curseforge.com/')))
-        cf_row.addWidget(get_key_btn)
-        mod_source_layout.addLayout(cf_row)
-        self.cf_key_status = QLabel('')
-        self.cf_key_status.setWordWrap(True)
-        self.cf_key_status.setStyleSheet('color: rgba(255,255,255,0.45); font-size: 12px;')
-        mod_source_layout.addWidget(self.cf_key_status)
-        layout.addWidget(mod_source_group)
         lang_group = self._create_group('语言设置')
         lang_layout = QHBoxLayout()
         self.chinese_checkbox = ThemedCheckBox('启动时自动设置游戏语言为简体中文')
@@ -813,7 +785,7 @@ class SettingsPage(QWidget):
         for group in (theme_group, nav_group, home_group, bg_group, music_group, title_group):
             personal_layout.addWidget(group)
         personal_layout.addStretch(1)
-        for group in (java_group, thread_group, community_group, mirror_group, mod_source_group, lang_group, log_group, reset_group):
+        for group in (java_group, thread_group, community_group, mirror_group, lang_group, log_group, reset_group):
             other_layout.addWidget(group)
         other_layout.addStretch(1)
         main_layout.addWidget(header)
@@ -1485,10 +1457,6 @@ class SettingsPage(QWidget):
         self.game_height_spin.setValue(int(self.config.get('game_window_height', 480) or 480))
         self.game_height_spin.blockSignals(False)
         self.custom_size_widget.setVisible(self.game_window_size_combo.currentData() == 'custom')
-        self.cf_key_edit.blockSignals(True)
-        self.cf_key_edit.setText(self.config.get('curseforge_api_key', '') or '')
-        self.cf_key_edit.blockSignals(False)
-        self._update_cf_key_status()
         self.chinese_checkbox.blockSignals(True)
         auto_chinese = self.config.get('auto_set_chinese', True)
         self.chinese_checkbox.setChecked(auto_chinese)
@@ -1498,20 +1466,6 @@ class SettingsPage(QWidget):
         self._load_music_ui()
         self._load_community_ui()
         self._update_version_settings_button()
-
-    def _save_cf_key(self):
-        key = self.cf_key_edit.text().strip()
-        self.config.set('curseforge_api_key', key)
-        self._update_cf_key_status()
-        self.settings_changed.emit()
-
-    def _update_cf_key_status(self):
-        if self.cf_key_edit.text().strip():
-            self.cf_key_status.setText('CurseForge 源已启用；Modrinth 仍为默认下载源。')
-            self.cf_key_status.setStyleSheet('color: #4ade80; font-size: 12px;')
-            return
-        self.cf_key_status.setText('未填写 API Key：CurseForge 源不可用，下载中心将使用 Modrinth。')
-        self.cf_key_status.setStyleSheet('color: rgba(255,255,255,0.45); font-size: 12px;')
 
     def _save_chinese_opt(self):
         val = self.chinese_checkbox.isChecked()

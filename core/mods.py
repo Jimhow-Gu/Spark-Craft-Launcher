@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import (Any, Dict, List, Optional, Tuple)
 from urllib.parse import quote
 from core.config import ConfigManager
+from core.curseforge_builtin import builtin_curseforge_key
 from core.net import DownloadError, HttpClient
 from core.paths import scl_dir
 MODRINTH_API = 'https://api.modrinth.com/v2'
@@ -416,7 +417,9 @@ class CurseForgeSource(BaseSource):
     name = 'CurseForge'
     def __init__(self):
         cfg = ConfigManager()
-        self.api_key = os.environ.get('CURSEFORGE_API_KEY', '').strip() or str(cfg.get('curseforge_api_key', '') or '').strip()
+        self.api_key = (os.environ.get('CURSEFORGE_API_KEY', '').strip()
+                        or str(cfg.get('curseforge_api_key', '') or '').strip()
+                        or builtin_curseforge_key())
         base = (os.environ.get('CURSEFORGE_API_BASE', '').strip() or str(cfg.get('curseforge_api_base', '') or '').strip() or CURSEFORGE_API).rstrip('/')
         self.api_base = base
         self.mirror_base = 'https://mod.mcimirror.top/curseforge/v1'
