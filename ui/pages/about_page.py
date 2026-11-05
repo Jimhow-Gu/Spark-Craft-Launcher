@@ -3,21 +3,89 @@
 from __future__ import annotations
 
 import base64
+import html
 import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QPainter, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+)
 
 from core.app_font import ui_font
 from core.paths import scl_dir
 from core.update import VERSION_DISPLAY
 from ui.widgets.settings_widgets import hidpi_pixmap, rounded_pixmap, trim_transparent
+from ui.widgets.collapsible_section import CollapsibleSection
 
 _IMAGES_DIR = Path(__file__).resolve().parent.parent / 'imgs'
 _VERSION_TEXT = VERSION_DISPLAY
+_THANKS = (
+    ('bangbang93', '提供 BMCLAPI 镜像源和 Forge 安装工具，详见 ', 'https://bmclapi.bangbang93.com'),
+    ('白咻', '制作了 SCL 的启动器图片和加载图标！', ''),
+    ('Ruiovo', '测试启动器找到一堆 bug！', ''),
+    ('MC百科', '提供了 Mod 名称的中文翻译和更多相关信息！', ''),
+    ('龙腾猫跃', 'PCL 制作者，他的仓库为我们的启动器提供了很多参考', ''),
+    ('huanghongxun', 'HMCL 制作者，他的仓库为我们的启动器提供了很多参考', ''),
+)
+_LICENSES = (
+    (
+        'Python', 'Copyright © Python Software Foundation',
+        'Licensed under the PSF License.',
+        'https://www.python.org/', 'https://docs.python.org/3/license.html',
+    ),
+    (
+        'PySide6', 'Copyright © The Qt Company Ltd.',
+        'Licensed under the LGPL v3.',
+        'https://www.qt.io/qt-for-python', 'https://www.gnu.org/licenses/lgpl-3.0.html',
+    ),
+    (
+        'Qt 6', 'Copyright © The Qt Company Ltd.',
+        'Licensed under the LGPL v3.',
+        'https://www.qt.io/', 'https://www.gnu.org/licenses/lgpl-3.0.html',
+    ),
+    (
+        'FFmpeg', 'Copyright © FFmpeg developers',
+        'Licensed under the LGPL v2.1 or later.',
+        'https://ffmpeg.org/', 'https://ffmpeg.org/legal.html',
+    ),
+    (
+        'minecraft_launcher_lib', 'Copyright © JakobDev',
+        'Licensed under the BSD 2-Clause License.',
+        'https://github.com/JakobDev/minecraft-launcher-lib',
+        'https://github.com/JakobDev/minecraft-launcher-lib/blob/master/LICENSE',
+    ),
+    (
+        'requests', 'Copyright © Kenneth Reitz',
+        'Licensed under the Apache License, Version 2.0.',
+        'https://requests.readthedocs.io/', 'https://www.apache.org/licenses/LICENSE-2.0',
+    ),
+    (
+        'urllib3', 'Copyright © Andrey Petrov and contributors',
+        'Licensed under the MIT License.',
+        'https://urllib3.readthedocs.io/',
+        'https://github.com/urllib3/urllib3/blob/main/LICENSE.txt',
+    ),
+    (
+        'certifi', 'Copyright © Kenneth Reitz',
+        'Licensed under the Mozilla Public License 2.0.',
+        'https://github.com/certifi/python-certifi',
+        'https://github.com/certifi/python-certifi/blob/master/LICENSE',
+    ),
+    (
+        'authlib-injector', 'Copyright © yushijinhun',
+        'Licensed under the AGPL v3.0.',
+        'https://github.com/yushijinhun/authlib-injector',
+        'https://github.com/yushijinhun/authlib-injector/blob/develop/COPYING.md',
+    ),
+    (
+        'HarmonyOS Sans', 'Copyright © Huawei Device Co., Ltd.',
+        'Licensed under the HarmonyOS Sans Fonts License Agreement.',
+        'https://developer.harmonyos.com/', '',
+    ),
+)
 def _card_style(object_name):
     return (
         f'QWidget#{object_name} {{ background: rgba(30,41,41,0.84);'
@@ -69,9 +137,22 @@ class AboutPage(QWidget):
         super().__init__(parent)
         self.setObjectName('AboutPage')
         self._net = QNetworkAccessManager(self)
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.setStyleSheet(
+            'QScrollArea { background: transparent; border: none; }'
+            'QScrollArea > QWidget > QWidget { background: transparent; }'
+        )
+        content = QWidget()
+        content.setStyleSheet('background: transparent;')
+        root = QVBoxLayout(content)
         root.setContentsMargins(0, 24, 0, 24)
+        self.scroll.setWidget(content)
+        outer.addWidget(self.scroll)
         group = QWidget()
         group.setObjectName('AboutCard')
         group.setAttribute(Qt.WA_StyledBackground, True)
@@ -133,13 +214,18 @@ class AboutPage(QWidget):
         thanks_title = QLabel('特别鸣谢')
         thanks_title.setStyleSheet('color:rgba(255,255,255,0.6); font-size:13px; font-weight:900;')
         thanks_layout.addWidget(thanks_title)
-        thanks_first = QLabel('24软件全体MC成员')
-        thanks_first.setStyleSheet('color:rgba(255,255,255,0.55); font-size:12px;')
-        thanks_layout.addWidget(thanks_first)
-        thanks_second = QLabel('白咻')
-        thanks_second.setStyleSheet('color:rgba(255,255,255,0.55); font-size:12px;')
-        thanks_layout.addWidget(thanks_second)
+        for name, desc, url in _THANKS:
+            thanks_layout.addWidget(self._thanks_line(name, desc, url))
         root.addWidget(thanks_group)
+
+        self.license_section = CollapsibleSection('许可与版权声明', expanded=False)
+        self.license_section.title_label.setStyleSheet(
+            'color:#A8E6E6; font-size:15px; font-weight:900; background:transparent;'
+        )
+        self.license_section.content_layout.setSpacing(16)
+        for entry in _LICENSES:
+            self.license_section.content_layout.addLayout(self._license_row(*entry))
+        root.addWidget(self.license_section)
         root.addStretch(1)
         logo_row = QHBoxLayout()
         logo_row.addStretch(1)
@@ -181,6 +267,74 @@ class AboutPage(QWidget):
         text.addWidget(name_label)
         text.addWidget(desc_label)
         row.addLayout(text, 1)
+        return row
+
+    def _thanks_line(self, name, desc, url=''):
+        label = QLabel()
+        label.setTextFormat(Qt.RichText)
+        label.setWordWrap(True)
+        text = (
+            '<span style="color:rgba(255,255,255,0.9); font-weight:700;">'
+            + html.escape(str(name))
+            + '</span><span style="color:rgba(255,255,255,0.55);">——'
+            + html.escape(str(desc))
+        )
+        if url:
+            text += (
+                '<a href="' + html.escape(str(url), quote=True)
+                + '" style="color:#88DDDD;">' + html.escape(str(url)) + '</a>'
+            )
+        label.setText(text + '</span>')
+        label.setOpenExternalLinks(True)
+        label.setStyleSheet('font-size:12px; background:transparent;')
+        return label
+
+    def _license_row(self, name, copyright_text, license_text, site_url, license_url):
+        row = QHBoxLayout()
+        row.setSpacing(18)
+        name_label = QLabel(str(name))
+        name_label.setFixedWidth(170)
+        name_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        name_label.setWordWrap(True)
+        name_label.setStyleSheet(
+            'color:rgba(255,255,255,0.9); font-size:13px; font-weight:900;'
+        )
+        row.addWidget(name_label, 0, Qt.AlignTop)
+        text_col = QVBoxLayout()
+        text_col.setSpacing(3)
+        copyright_label = QLabel(str(copyright_text))
+        copyright_label.setWordWrap(True)
+        copyright_label.setStyleSheet(
+            'color:rgba(255,255,255,0.78); font-size:12px;'
+        )
+        text_col.addWidget(copyright_label)
+        license_label = QLabel(str(license_text))
+        license_label.setWordWrap(True)
+        license_label.setStyleSheet(
+            'color:rgba(255,255,255,0.55); font-size:12px;'
+        )
+        text_col.addWidget(license_label)
+        buttons = QHBoxLayout()
+        buttons.setSpacing(8)
+        for label, url in (('查看来源网站', site_url), ('查看许可文档', license_url)):
+            if not url:
+                continue
+            button = QPushButton(label)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setFixedSize(118, 30)
+            button.setStyleSheet(
+                'QPushButton { background:transparent; color:#A8E6E6;'
+                ' border:1px solid rgba(136,221,221,0.48); border-radius:5px;'
+                ' font-size:11px; }'
+                'QPushButton:hover { background:rgba(136,221,221,0.18); }'
+            )
+            button.clicked.connect(
+                lambda checked=False, target=url: QDesktopServices.openUrl(QUrl(target))
+            )
+            buttons.addWidget(button)
+        buttons.addStretch(1)
+        text_col.addLayout(buttons)
+        row.addLayout(text_col, 1)
         return row
 
     def _set_icon(self, label, pixmap):

@@ -5,6 +5,7 @@ import os
 import stat
 import shutil
 import sys
+import time
 from pathlib import Path
 SCL_FOLDER_NAME = 'SCL'
 RUNTIME_FOLDERS = ('log', 'background', 'music', 'temp_install', 'skins', 'icon_cache')
@@ -16,6 +17,63 @@ def _is_reparse_point(path):
     except (OSError, AttributeError):
         return os.path.islink(str(path))
     return bool(attrs & getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400))
+
+
+def _windows_recycle_bin(path):
+    '''调用 Windows Shell 把文件/文件夹移入回收站。'''
+
+    import ctypes
+    from ctypes import wintypes
+
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [
+            ('hwnd', wintypes.HWND),
+            ('wFunc', wintypes.UINT),
+            ('pFrom', wintypes.LPCWSTR),
+            ('pTo', wintypes.LPCWSTR),
+            ('fFlags', wintypes.WORD),
+            ('fAnyOperationsAborted', wintypes.BOOL),
+            ('hNameMappings', ctypes.c_void_p),
+            ('lpszProgressTitle', wintypes.LPCWSTR),
+        ]
+
+    FO_DELETE = 3
+    FOF_SILENT = 0x0004
+    FOF_NOCONFIRMATION = 0x0010
+    FOF_ALLOWUNDO = 0x0040
+    FOF_NOERRORUI = 0x0400
+    operation = SHFILEOPSTRUCTW()
+    operation.hwnd = None
+    operation.wFunc = FO_DELETE
+    operation.pFrom = str(Path(path).resolve()) + chr(0)
+    operation.pTo = None
+    operation.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI
+    result = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(operation))
+    if result != 0 or operation.fAnyOperationsAborted:
+        raise OSError(f'移动到回收站失败（Shell 错误码 {result}）')
+    if Path(path).exists():
+        raise OSError('移动到回收站后文件仍然存在')
+
+
+def move_to_recycle_bin(path):
+    '''优先移动到系统回收站；非 Windows 环境回退到本地 SCL/trash。'''
+
+    target = Path(path)
+    if not target.exists():
+        return
+    if sys.platform == 'win32':
+        _windows_recycle_bin(target)
+        return
+    try:
+        from send2trash import send2trash
+        send2trash(str(target))
+        return
+    except Exception:
+        pass
+    trash_dir = scl_dir() / 'trash'
+    trash_dir.mkdir(parents=True, exist_ok=True)
+    destination = trash_dir / f'{int(time.time() * 1000)}_{target.name}'
+    shutil.move(str(target), str(destination))
 
 
 def safe_rmtree(path, ignore_errors=True):

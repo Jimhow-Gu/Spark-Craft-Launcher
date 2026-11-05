@@ -19,6 +19,7 @@ from core.net import HttpClient, hash_file
 from core.download_manager import DownloadManager
 from core.mods import download_candidates
 from core.mod_translations import bilingual_html, bilingual_plain, chinese_only, english_only, translation_db
+from core.paths import move_to_recycle_bin
 from ui.widgets.back_button import BackButton
 from ui.widgets.dark_dialog import ask_dark_question
 from ui.widgets.loading_overlay import LoadingOverlay
@@ -870,18 +871,18 @@ class ModManagerPage(QWidget):
         selected = self._selected()
         if not selected:
             return
-        reply = ask_dark_question(self, '删除 Mod', f'确定删除选中的 {len(selected)} 个 Mod 文件吗？此操作不可撤销。', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        reply = ask_dark_question(self, '删除 Mod', f'确定将选中的 {len(selected)} 个 Mod 文件移到回收站吗？', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply != QMessageBox.Yes:
             return
         errors = []
         for info in selected:
             try:
-                Path(info['path']).unlink()
+                move_to_recycle_bin(info['path'])
             except OSError as exc:
                 errors.append(f'{info["filename"]}: {exc}')
                 continue
         if errors:
-            self._notify(chr(10).join(errors[:8]), 'error', '部分删除失败')
+            self._notify(chr(10).join(errors[:8]), 'error', '部分 Mod 未能移到回收站')
         self.refresh()
 
     def _notify(self, text, level='info', title=''):
