@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QListWidgetItem, QLabel, QMessageBox, QApplication, QSizeGrip, QGraphicsColorizeEffect, QPushButton, QGraphicsOpacityEffect, QFrame)
+from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QListWidgetItem, QLabel, QMessageBox, QApplication, QSizeGrip, QGraphicsColorizeEffect, QPushButton, QGraphicsOpacityEffect, QFrame, QDialog)
 from PySide6.QtCore import (Qt, QPoint, QPropertyAnimation, QVariantAnimation, QEasingCurve, QTimer, QSize, QEvent, QRect)
 from PySide6.QtGui import QColor, QCursor, QFont, QPixmap
 import os
@@ -1406,7 +1406,7 @@ class MainWindow(QMainWindow):
         dialog.download_completed.connect(self._on_update_downloaded)
         self._update_dialog = dialog
         try:
-            accepted = dialog.exec() == dialog.Accepted
+            accepted = dialog.exec() == QDialog.Accepted
         finally:
             self._update_dialog = None
         if not dialog.asset_path:

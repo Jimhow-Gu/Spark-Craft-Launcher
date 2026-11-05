@@ -1,7 +1,7 @@
 '''
 模组/整合包/资源包/光影包/数据包数据源
 - Modrinth（默认，无需 API Key）
-- CurseForge（需要 API Key，可在全局设置中填写）
+- CurseForge（官方构建已内置 API Key）
 所有网络请求都在调用线程内同步执行，由 QThread Worker 调用；每个 Worker 使用独立 HttpClient。
 '''
 
@@ -417,9 +417,8 @@ class CurseForgeSource(BaseSource):
     name = 'CurseForge'
     def __init__(self):
         cfg = ConfigManager()
-        self.api_key = (os.environ.get('CURSEFORGE_API_KEY', '').strip()
-                        or str(cfg.get('curseforge_api_key', '') or '').strip()
-                        or builtin_curseforge_key())
+        # 官方构建使用固定内置 Key；不再接受环境变量或配置文件覆盖。
+        self.api_key = builtin_curseforge_key()
         base = (os.environ.get('CURSEFORGE_API_BASE', '').strip() or str(cfg.get('curseforge_api_base', '') or '').strip() or CURSEFORGE_API).rstrip('/')
         self.api_base = base
         self.mirror_base = 'https://mod.mcimirror.top/curseforge/v1'
