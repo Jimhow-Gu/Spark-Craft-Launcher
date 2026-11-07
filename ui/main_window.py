@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QListWidgetItem, QLabel, QMessageBox, QApplication, QSizeGrip, QGraphicsColorizeEffect, QPushButton, QGraphicsOpacityEffect, QFrame, QDialog)
-from PySide6.QtCore import (Qt, QPoint, QPropertyAnimation, QVariantAnimation, QEasingCurve, QTimer, QSize, QEvent, QRect)
-from PySide6.QtGui import QColor, QCursor, QFont, QPixmap
+from PySide6.QtCore import (Qt, QPoint, QPropertyAnimation, QVariantAnimation, QEasingCurve, QTimer, QSize, QEvent, QRect, QRectF)
+from PySide6.QtGui import QColor, QCursor, QFont, QPainterPath, QPixmap, QRegion
 import os
 import time
 from pathlib import Path
@@ -18,6 +18,8 @@ from ui.widgets.media_button import MediaButton
 from ui.widgets.title_bar import WindowTitleBar
 from ui.widgets.no_wheel import WheelGuard
 from ui.widgets.background_widget import BackgroundWidget
+from ui.widgets.snow_effect import SnowOverlay
+from ui.widgets.fireworks_effect import TitleFireworksOverlay
 from ui.widgets.window_border import WindowBorderOverlay
 from ui.widgets.side_panel import SidePanel
 from ui.widgets.side_nav import SideNavList, NAV_HEADER_ROLE, NAV_ICON_ROLE
@@ -26,12 +28,16 @@ from ui.theme import ThemeManager
 from core.download_manager import DownloadManager
 from core.build_info import BUILD_LABEL, RELEASE_BUILD, RESOURCE_PACK_SEQUENCE, EXECUTABLE_BUILD
 from core.update import CURRENT_VERSION
+from core.seasonal import is_fireworks_period, is_snow_period
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setAutoFillBackground(False)
+        self.setStyleSheet('QMainWindow { background: transparent; }')
         self.setWindowState(Qt.WindowNoState)
         screen = QApplication.primaryScreen()
         available = screen.availableGeometry() if screen is not None else None
@@ -60,6 +66,16 @@ class MainWindow(QMainWindow):
         self._video_resume_pending = False
         self._music_resume_pending = False
         self._music_auto_started = False
+        try:
+            self._snow_available = bool(is_snow_period())
+        except Exception:
+            self._snow_available = False
+        try:
+            self._fireworks_available = bool(is_fireworks_period())
+        except Exception:
+            self._fireworks_available = False
+        self._snow_enabled = True
+        self._fireworks_enabled = True
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self)
@@ -153,15 +169,39 @@ class MainWindow(QMainWindow):
         media_row.setFixedHeight(28)
         media_row.setStyleSheet('background:transparent;')
         self.video_toggle_btn = MediaButton(media_row)
-        self.video_toggle_btn.setFixedSize(30, 28)
+        self.video_toggle_btn.setFixedSize(28, 28)
         self.video_toggle_btn.setIconSize(QSize(16, 16))
         self.video_toggle_btn.setToolTip('播放/暂停背景视频')
         self.video_toggle_btn.clicked.connect(self._toggle_background_video)
         self.music_toggle_btn = MediaButton(media_row)
-        self.music_toggle_btn.setFixedSize(30, 28)
+        self.music_toggle_btn.setFixedSize(28, 28)
         self.music_toggle_btn.setIconSize(QSize(16, 16))
         self.music_toggle_btn.setToolTip('播放/暂停背景音乐')
         self.music_toggle_btn.clicked.connect(self._toggle_background_music)
+        self.snow_toggle_btn = MediaButton(media_row)
+        self.snow_toggle_btn.setFixedSize(28, 28)
+        self.snow_toggle_btn.setIconSize(QSize(16, 16))
+        self.snow_toggle_btn.clicked.connect(self._toggle_snow_effect)
+        self.snow_toggle_btn.hide()
+        self.fireworks_toggle_btn = MediaButton(media_row)
+        self.fireworks_toggle_btn.setFixedSize(28, 28)
+        self.fireworks_toggle_btn.setIconSize(QSize(16, 16))
+        self.fireworks_toggle_btn.clicked.connect(self._toggle_fireworks_effect)
+        self.fireworks_toggle_btn.hide()
+        if self._snow_available:
+            try:
+                from core.config import ConfigManager
+                self._snow_enabled = bool(ConfigManager().get('lidong_snow_enabled', True))
+            except Exception:
+                self._snow_enabled = True
+        if self._fireworks_available:
+            try:
+                from core.config import ConfigManager
+                self._fireworks_enabled = bool(ConfigManager().get('newyear_fireworks_enabled', True))
+            except Exception:
+                self._fireworks_enabled = True
+        self._update_snow_button()
+        self._update_fireworks_button()
         self.media_row = media_row
         left_layout.addWidget(media_row)
         self.status_label = QLabel(f'V{CURRENT_VERSION}')
@@ -210,8 +250,20 @@ class MainWindow(QMainWindow):
         self.init_all_pages()
         self.nav_list.currentItemChanged.connect(self._on_page_changed)
         self.nav_list.itemClicked.connect(self._on_nav_clicked)
+        self.snow_overlay = SnowOverlay(self.central)
+        self.snow_overlay.setGeometry(self.central.rect())
+        self.snow_overlay.set_active(self._snow_available and self._snow_enabled)
+        self.fireworks_overlay = TitleFireworksOverlay(self.title_bar)
+        self.title_bar.attach_fireworks(self.fireworks_overlay)
+        self._update_fireworks_button()
+        self.fireworks_overlay.set_active(self._fireworks_available and self._fireworks_enabled)
+        self._snow_check_timer = QTimer(self)
+        self._snow_check_timer.setInterval(30 * 60 * 1000)
+        self._snow_check_timer.timeout.connect(self._refresh_snow_season)
+        self._snow_check_timer.start()
         self._fade_anim = None
         self.start_fade_anim()
+        QTimer.singleShot(800, self._apply_window_mask)
 
     def _add_nav_header(self, text):
         item = QListWidgetItem(text)
@@ -455,28 +507,23 @@ class MainWindow(QMainWindow):
     def _media_button_targets(self, width):
         total = max(0, int(width))
         buttons = [
-            button for button in (self.video_toggle_btn, self.music_toggle_btn)
-            if button.isVisible()
+            button for button in (
+                self.video_toggle_btn,
+                self.music_toggle_btn,
+                getattr(self, 'snow_toggle_btn', None),
+                getattr(self, 'fireworks_toggle_btn', None),
+            )
+            if button is not None and button.isVisible()
         ]
         if not buttons:
             return []
-        button_w = 30
-        if len(buttons) == 1:
-            return [(buttons[0], max(0, (total - button_w) // 2))]
-        collapsed = self._sidebar_collapsed_width
-        expanded = self._sidebar_expanded_width
-        progress = 0.0
-        if expanded > collapsed:
-            progress = max(0.0, min(1.0, (total - collapsed) / (expanded - collapsed)))
-        pair_width = button_w * 2 + 6
-        start = (collapsed - pair_width) // 2
-        x1_collapsed = start
-        x2_collapsed = start + button_w + 6
-        x1_expanded = expanded // 4 - button_w // 2
-        x2_expanded = expanded * 3 // 4 - button_w // 2
+        button_w = 28
+        gap = 2 if len(buttons) >= 3 else 6
+        group_width = button_w * len(buttons) + gap * (len(buttons) - 1)
+        start = max(0, (total - group_width) // 2)
         return [
-            (buttons[0], int(x1_collapsed + (x1_expanded - x1_collapsed) * progress)),
-            (buttons[1], int(x2_collapsed + (x2_expanded - x2_collapsed) * progress)),
+            (button, start + index * (button_w + gap))
+            for index, button in enumerate(buttons)
         ]
 
     def _position_media_buttons(self, width=None):
@@ -748,9 +795,100 @@ class MainWindow(QMainWindow):
             '#e6edf3',
         )
         self.music_toggle_btn.setToolTip('暂停背景音乐' if audible else '播放背景音乐')
+        snow_visible = bool(getattr(self, '_snow_available', False))
+        fireworks_visible = bool(getattr(self, '_fireworks_available', False))
+        if hasattr(self, 'snow_toggle_btn'):
+            self.snow_toggle_btn.setVisible(snow_visible)
+            self._update_snow_button()
+        if hasattr(self, 'fireworks_toggle_btn'):
+            self.fireworks_toggle_btn.setVisible(fireworks_visible)
+            self._update_fireworks_button()
         if hasattr(self, 'media_row'):
-            self.media_row.setVisible(video_available or has_music)
+            self.media_row.setVisible(video_available or has_music or snow_visible or fireworks_visible)
             self._position_media_buttons()
+
+    def _update_snow_button(self):
+        button = getattr(self, 'snow_toggle_btn', None)
+        if button is None:
+            return
+        button.setVisible(bool(getattr(self, '_snow_available', False)))
+        enabled = bool(getattr(self, '_snow_enabled', True))
+        set_button_icon(button, 'snow' if enabled else 'snow_off', 16, '#e6edf3')
+        button.setToolTip('关闭节日雪花粒子' if enabled else '开启节日雪花粒子')
+
+    def _update_fireworks_button(self):
+        button = getattr(self, 'fireworks_toggle_btn', None)
+        if button is None:
+            return
+        button.setVisible(bool(getattr(self, '_fireworks_available', False)))
+        enabled = bool(getattr(self, '_fireworks_enabled', True))
+        set_button_icon(button, 'firework' if enabled else 'firework_off', 16, '#e6edf3')
+        button.setToolTip('关闭节日烟花' if enabled else '开启节日烟花')
+
+    def _toggle_snow_effect(self):
+        if not getattr(self, '_snow_available', False):
+            return
+        self._snow_enabled = not bool(getattr(self, '_snow_enabled', True))
+        try:
+            from core.config import ConfigManager
+            config = ConfigManager()
+            config.set('lidong_snow_enabled', self._snow_enabled)
+            config.save()
+        except Exception:
+            pass
+        if hasattr(self, 'snow_overlay'):
+            self.snow_overlay.set_enabled(self._snow_enabled)
+        self._update_snow_button()
+
+    def _refresh_snow_season(self):
+        try:
+            snow_available = bool(is_snow_period())
+            fireworks_available = bool(is_fireworks_period())
+        except Exception:
+            return
+        snow_changed = snow_available != getattr(self, '_snow_available', False)
+        fireworks_changed = fireworks_available != getattr(self, '_fireworks_available', False)
+        if not snow_changed and not fireworks_changed:
+            return
+        if snow_changed:
+            self._snow_available = snow_available
+            if snow_available:
+                try:
+                    from core.config import ConfigManager
+                    self._snow_enabled = bool(ConfigManager().get('lidong_snow_enabled', True))
+                except Exception:
+                    self._snow_enabled = True
+            self._update_snow_button()
+            if hasattr(self, 'snow_overlay'):
+                self.snow_overlay.set_active(snow_available and self._snow_enabled)
+        if fireworks_changed:
+            self._fireworks_available = fireworks_available
+            if fireworks_available:
+                try:
+                    from core.config import ConfigManager
+                    self._fireworks_enabled = bool(ConfigManager().get('newyear_fireworks_enabled', True))
+                except Exception:
+                    self._fireworks_enabled = True
+            self._update_fireworks_button()
+            if hasattr(self, 'fireworks_overlay'):
+                self.fireworks_overlay.set_active(fireworks_available and self._fireworks_enabled)
+        self._position_media_buttons()
+        self._update_media_buttons()
+
+    def _toggle_fireworks_effect(self):
+        if not getattr(self, '_fireworks_available', False):
+            return
+        self._fireworks_enabled = not bool(getattr(self, '_fireworks_enabled', True))
+        try:
+            from core.config import ConfigManager
+            config = ConfigManager()
+            config.set('newyear_fireworks_enabled', self._fireworks_enabled)
+            config.save()
+        except Exception:
+            pass
+        if hasattr(self, 'fireworks_overlay'):
+            self.fireworks_overlay.set_enabled(self._fireworks_enabled)
+        self._update_fireworks_button()
 
     def _toggle_background_video(self):
         self.central.toggle_video()
@@ -806,6 +944,10 @@ class MainWindow(QMainWindow):
                 self.music_player.pause(remember=False)
         except Exception:
             self._music_resume_pending = False
+        if hasattr(self, 'snow_overlay'):
+            self.snow_overlay.set_paused(True)
+        if hasattr(self, 'fireworks_overlay'):
+            self.fireworks_overlay.set_paused(True)
         self._update_media_buttons()
 
     def _resume_background_media(self):
@@ -824,6 +966,10 @@ class MainWindow(QMainWindow):
                 pass
         self._video_resume_pending = False
         self._music_resume_pending = False
+        if hasattr(self, 'snow_overlay'):
+            self.snow_overlay.set_paused(False)
+        if hasattr(self, 'fireworks_overlay'):
+            self.fireworks_overlay.set_paused(False)
         self._update_media_buttons()
 
     @staticmethod
@@ -1235,8 +1381,20 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
+    def _apply_window_mask(self):
+        '''给无边框窗口加圆角裁切，避免四角露出方形底色。'''
+
+        try:
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(self.rect()), 14.0, 14.0)
+            self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+        except Exception:
+            pass
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._apply_window_mask()
+        QTimer.singleShot(0, self._apply_window_mask)
         try:
             self.size_grip.move(max(0, self.central.width() - 18), max(0, self.central.height() - 18))
             self.size_grip.raise_()
@@ -1251,16 +1409,31 @@ class MainWindow(QMainWindow):
             self.border_overlay.raise_()
         except Exception:
             pass
+        try:
+            self.snow_overlay.setGeometry(self.central.rect())
+            if self.snow_overlay.isVisible():
+                self.snow_overlay.raise_()
+        except Exception:
+            pass
         self._update_sidebar_geometry()
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._apply_window_mask()
+        QTimer.singleShot(0, self._apply_window_mask)
+        QTimer.singleShot(120, self._apply_window_mask)
         if getattr(self, '_fade_in_done', False):
             return
         self._fade_in_done = True
         try:
             self.border_overlay.setGeometry(self.central.rect())
             self.border_overlay.raise_()
+        except Exception:
+            pass
+        try:
+            self.snow_overlay.setGeometry(self.central.rect())
+            if self.snow_overlay.isVisible():
+                self.snow_overlay.raise_()
         except Exception:
             pass
         self._update_sidebar_geometry()

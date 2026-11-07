@@ -55,7 +55,7 @@ class SideNavDelegate(QStyledItemDelegate):
                 font.setWeight(QFont.Medium)
                 painter.setFont(font)
                 painter.drawText(
-                    rect.adjusted(33, 0, -8, 0),
+                    rect.adjusted(33, 0, -33, 0),
                     Qt.AlignLeft | Qt.AlignVCenter,
                     index.data(Qt.DisplayRole) or '',
                 )
@@ -86,14 +86,10 @@ class SideNavDelegate(QStyledItemDelegate):
             icon_color = ON_ACCENT
         else:
             icon_color = '#4f5866' if self.light else '#c5cbd6'
-        if icon_name:
-            icon = painted_icon(str(icon_name), size, icon_color, light_safe=True)
-            pixmap = icon.pixmap(QSize(size, size))
-            # 图标中心固定在简化栏的中线上，展开时只向右延展文字。
-            x = 45.0 - size / 2.0
-            y = body.center().y() - size / 2.0
-            painter.drawPixmap(int(round(x)), int(round(y)), pixmap)
 
+        icon_x = rect.left() + 33.0
+        text = ''
+        text_rect = QRectF()
         if not self.collapsed:
             text = str(index.data(Qt.DisplayRole) or '')
             font = QFont(option.font)
@@ -101,10 +97,24 @@ class SideNavDelegate(QStyledItemDelegate):
             font.setWeight(QFont.Medium)
             painter.setFont(font)
             metrics = QFontMetrics(font)
-            text_rect = rect.adjusted(62.0, 0, -8.0, 0)
-            text = metrics.elidedText(
-                text, Qt.ElideRight, max(0, int(text_rect.width()))
+            # 图标与“通用”等分组小字共用左侧起点；右侧留白与左侧相同。
+            text_left = rect.left() + 62.0
+            max_text_width = max(0.0, rect.right() - 33.0 - text_left)
+            text = metrics.elidedText(text, Qt.ElideRight, int(max_text_width))
+            text_rect = QRectF(
+                text_left,
+                rect.top(),
+                max(0.0, max_text_width),
+                rect.height(),
             )
+
+        if icon_name:
+            icon = painted_icon(str(icon_name), size, icon_color, light_safe=True)
+            pixmap = icon.pixmap(QSize(size, size))
+            y = body.center().y() - size / 2.0
+            painter.drawPixmap(int(round(icon_x)), int(round(y)), pixmap)
+
+        if not self.collapsed:
             painter.setOpacity(self._text_opacity)
             painter.setPen(
                 QColor(ON_ACCENT) if selected

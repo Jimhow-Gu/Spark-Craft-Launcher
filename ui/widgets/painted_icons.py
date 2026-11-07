@@ -274,6 +274,41 @@ def _draw_info(painter, color, stroke):
     painter.drawRoundedRect(QRectF(10.9, 10.4, 2.2, 7.6), 1.1, 1.1)
     painter.drawRoundedRect(QRectF(10.9, 5.8, 2.2, 2.4), 1.1, 1.1)
 
+def _draw_firework(painter, color, stroke, disabled=False):
+    painter.save()
+    painter.translate(12, 14)
+    painter.setPen(_pen(color, max(1.0, stroke * 0.8)))
+    for index in range(8):
+        angle = math.radians(index * 45.0)
+        inner = 2.8
+        outer = 8.0
+        dx1, dy1 = math.cos(angle) * inner, math.sin(angle) * inner
+        dx2, dy2 = math.cos(angle) * outer, math.sin(angle) * outer
+        painter.drawLine(QPointF(dx1, dy1), QPointF(dx2, dy2))
+        painter.setBrush(QColor(color))
+        painter.drawEllipse(QPointF(dx2, dy2), 1.25, 1.25)
+        painter.setBrush(Qt.NoBrush)
+    if disabled:
+        painter.setPen(_pen('#e08a8a', max(1.5, stroke)))
+        painter.drawLine(QPointF(-7.0, -8.0), QPointF(7.0, 8.0))
+    painter.restore()
+
+
+def _draw_snow(painter, color, stroke, disabled=False):
+    painter.save()
+    painter.translate(12, 12)
+    painter.setPen(_pen(color, max(1.1, stroke * 0.85)))
+    for index in range(3):
+        angle = math.radians(index * 60.0)
+        dx = math.cos(angle) * 8.0
+        dy = math.sin(angle) * 8.0
+        painter.drawLine(QPointF(-dx, -dy), QPointF(dx, dy))
+    if disabled:
+        painter.setPen(_pen('#e08a8a', max(1.5, stroke)))
+        painter.drawLine(QPointF(-7.0, -7.0), QPointF(7.0, 7.0))
+    painter.restore()
+
+
 def _draw_gear(painter, color, stroke):
     painter.save()
     painter.translate(12, 12)
@@ -392,6 +427,14 @@ def painted_icon(name, size=20, color='#e6edf3', stroke=1.8, light_safe=False):
             _draw_heart(painter, color, stroke, filled=True)
         elif name == 'trash':
             _draw_trash(painter, color, stroke)
+        elif name == 'snow':
+            _draw_snow(painter, color, stroke, disabled=False)
+        elif name == 'snow_off':
+            _draw_snow(painter, color, stroke, disabled=True)
+        elif name == 'firework':
+            _draw_firework(painter, color, stroke, disabled=False)
+        elif name == 'firework_off':
+            _draw_firework(painter, color, stroke, disabled=True)
         elif name == 'gear':
             _draw_gear(painter, color, stroke)
         elif name == 'info':

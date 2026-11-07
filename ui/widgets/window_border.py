@@ -10,7 +10,6 @@ class WindowBorderOverlay(QWidget):
         super().__init__(parent)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
-        self.setAttribute(Qt.WA_TranslucentBackground, True)
         self._light = False
 
     def set_light(self, light: bool):

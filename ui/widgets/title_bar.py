@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsOpacityEffect, QHB
 
 from core.app_font import ui_font
 from ui.design import TITLEBAR_DARK, TITLEBAR_LIGHT
+from ui.widgets.painted_icons import set_button_icon
 
 class WindowTitleBar(QFrame):
     HEIGHT = 56
@@ -28,6 +29,7 @@ class WindowTitleBar(QFrame):
         self.setObjectName('WindowTitleBar')
         self.setFrameShape(QFrame.NoFrame)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setStyleSheet('\n            QFrame#WindowTitleBar { background: transparent; border: none; }\n            QLabel { background:transparent; }\n        ')
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 0, 6, 0)
@@ -110,6 +112,12 @@ class WindowTitleBar(QFrame):
         self._light = bool(light)
         self._update_logo()
         self.update()
+
+    def attach_fireworks(self, overlay):
+        self._firework_overlay = overlay
+        overlay.setParent(self)
+        overlay.setGeometry(self.rect())
+        overlay.lower()
 
     def _update_logo(self):
         '''浅色标题栏下把偏白的 logo 压暗，避免与浅色背景融在一起。'''

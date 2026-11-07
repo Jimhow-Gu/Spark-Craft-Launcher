@@ -14,6 +14,9 @@ hiddenimports = [
     "core.single_instance",
     "core.memory",
     "core.update",
+    "core.seasonal",
+    "lunarcalendar",
+    "lunarcalendar.solarterm",
     "ui.widgets.java_download_dialog",
     "ui.widgets.update_dialog",
 ]
