@@ -15,8 +15,6 @@ hiddenimports = [
     "core.memory",
     "core.update",
     "core.seasonal",
-    "lunarcalendar",
-    "lunarcalendar.solarterm",
     "ui.widgets.java_download_dialog",
     "ui.widgets.update_dialog",
 ]
@@ -38,6 +36,15 @@ excludes = [
     "PySide6.QtQuickControls2",
     "PySide6.QtMultimediaWidgets",
     "PySide6.QtVirtualKeyboard",
+    # 未直接使用的可选压缩/日期库；移除避免把 pytz 时区库、ephem 等打进包内。
+    "lunarcalendar",
+    "pytz",
+    "ephem",
+    "dateutil",
+    "zstandard",
+    "brotli",
+    "brotlicffi",
+    "_brotli",
 ]
 
 a = Analysis(
