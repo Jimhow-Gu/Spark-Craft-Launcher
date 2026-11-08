@@ -18,6 +18,7 @@ from core.secret import unprotect_secret
 from core.paths import scl_dir
 from ui.widgets.frameless_dialog import (FramelessDialog, FramelessInputDialog, FramelessListDialog)
 from ui.widgets.toast import notify_network_failure, show_toast
+from ui.design import IMAGE_PLACEHOLDER_DARK, IMAGE_PLACEHOLDER_LIGHT
 from ui.widgets.painted_icons import painted_icon, set_button_icon
 from core.auth import (AuthManager, MicrosoftSilentLoginWorker, MicrosoftProfileWorker, SavedMicrosoftLoginWorker, MicrosoftDeviceLoginWorker, ThirdPartyLoginWorker, CapeListWorker, CapeApplyWorker, DEFAULT_LITTLESKIN_API, DEFAULT_LITTLESKIN_REGISTER, friendly_auth_error)
 MICROSOFT_PURCHASE_URL = 'https://www.minecraft.net/en-us/store/minecraft-java-bedrock-edition-pc'
@@ -83,9 +84,12 @@ class AvatarLabel(QLabel):
         super().__init__(parent)
         self._size = int(size)
         self._radius = int(radius)
+        self._light = self.palette().color(QPalette.Window).lightness() > 128
+        self._showing_default = False
+        self._setting_default = False
         self.setFixedSize(self._size, self._size)
         self.setAlignment(Qt.AlignCenter)
-        self.setStyleSheet(f'border-radius: {self._radius}px; background: #3a3a3a;')
+        self._update_placeholder_style()
         self._name = '?'
         self._manager = QNetworkAccessManager(self)
         self._manager.finished.connect(self._on_image_loaded)
@@ -94,6 +98,27 @@ class AvatarLabel(QLabel):
         self._fallback_head = ''
         self._cache_path = None
         self._set_default()
+
+    def _placeholder_color(self):
+        return IMAGE_PLACEHOLDER_LIGHT if self._light else IMAGE_PLACEHOLDER_DARK
+
+    def _update_placeholder_style(self):
+        self.setStyleSheet(
+            f'border-radius: {self._radius}px; background: {self._placeholder_color()};'
+        )
+
+    def set_light(self, light):
+        light = bool(light)
+        changed = light != self._light
+        self._light = light
+        self._update_placeholder_style()
+        if self._showing_default and changed:
+            self._set_default()
+
+    def setPixmap(self, pixmap):
+        if not self._setting_default:
+            self._showing_default = False
+        super().setPixmap(pixmap)
 
     @staticmethod
     def config():
@@ -106,14 +131,17 @@ class AvatarLabel(QLabel):
         dpr = device_pixel_ratio()
         phys = max(1, int(round(self._size * dpr)))
         pixmap = QPixmap(phys, phys)
-        pixmap.fill(QColor(64, 64, 64))
+        pixmap.fill(QColor(self._placeholder_color()))
         painter = QPainter(pixmap)
-        painter.setPen(Qt.white)
+        painter.setPen(QColor('#222222') if self._light else QColor('#e3fcfc'))
         painter.setFont(ui_font(max(12, int(self._size * 0.36)), QFont.Bold))
         painter.drawText(pixmap.rect(), Qt.AlignCenter, self._name[0].upper() if self._name else '?')
         painter.end()
         pixmap.setDevicePixelRatio(dpr)
+        self._setting_default = True
         self.setPixmap(self._rounded(pixmap, self._radius))
+        self._setting_default = False
+        self._showing_default = True
 
     @staticmethod
     def _rounded(pixmap, radius=12):

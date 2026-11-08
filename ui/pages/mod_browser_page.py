@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import List, Optional
 from urllib.parse import quote
 from PySide6.QtCore import (Qt, Signal, QThread, QTimer, QUrl, QSize, QObject, QEvent)
-from PySide6.QtGui import (QColor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPixmap)
+from PySide6.QtGui import (QColor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPalette, QPixmap)
 from PySide6.QtNetwork import (QNetworkAccessManager, QNetworkDiskCache, QNetworkReply, QNetworkRequest)
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QHeaderView, QAbstractItemView, QProgressBar, QSizePolicy, QRadioButton, QButtonGroup, QScrollArea, QToolButton, QDialogButtonBox, QStackedWidget)
 from core.app_font import ui_font
@@ -26,6 +26,7 @@ from ui.widgets.back_button import BackButton
 from ui.widgets.dark_dialog import DarkQuestionDialog
 from ui.widgets.loading_overlay import LoadingOverlay
 from ui.widgets.smooth_progress import SmoothProgressBar
+from ui.design import IMAGE_PLACEHOLDER_DARK, IMAGE_PLACEHOLDER_LIGHT, MUTED_DARK, MUTED_LIGHT
 from ui.widgets.painted_icons import painted_icon, set_button_icon
 from core.config import ConfigManager
 from core.launch import LaunchManager
@@ -602,6 +603,7 @@ class ProjectCard(QFrame):
         super().__init__(parent)
         self.project = project
         self.icon_url = project.icon_url
+        self._light = self.palette().color(QPalette.Window).lightness() > 128
         self.setObjectName('ProjectCard')
         self.setStyleSheet('\n            QFrame#ProjectCard {\n                background: rgba(30,41,41,0.84);\n                border: 1px solid rgba(255,255,255,0.16);\n                border-radius: 9px;\n            }\n            QFrame#ProjectCard:hover {\n                background: rgba(28,30,38,0.72);\n                border: 1px solid rgba(136,221,221,0.45);\n            }\n        ')
         self.setCursor(Qt.PointingHandCursor)
@@ -612,9 +614,9 @@ class ProjectCard(QFrame):
         layout.setSpacing(12)
         self.icon_label = QLabel()
         self.icon_label.setFixedSize(56, 56)
-        self.icon_label.setStyleSheet('background: rgba(255,255,255,0.055); border-radius: 9px; color: #888;')
         self.icon_label.setAlignment(Qt.AlignCenter)
         self.icon_label.setText('?')
+        self._apply_icon_placeholder()
         layout.addWidget(self.icon_label)
         text_box = QVBoxLayout()
         text_box.setSpacing(2)
@@ -668,7 +670,18 @@ class ProjectCard(QFrame):
             self.project.translated_title, self.project.english_title, 13, 11
         ))
 
+    def _apply_icon_placeholder(self):
+        if not hasattr(self, 'icon_label'):
+            return
+        background = IMAGE_PLACEHOLDER_LIGHT if self._light else IMAGE_PLACEHOLDER_DARK
+        foreground = MUTED_LIGHT if self._light else MUTED_DARK
+        self.icon_label.setStyleSheet(
+            f'background:{background}; border-radius:9px; color:{foreground};'
+        )
+
     def set_light(self, light):
+        self._light = bool(light)
+        self._apply_icon_placeholder()
         self._refresh_title()
 
     def set_icon(self, pix):
@@ -993,6 +1006,7 @@ class DependencyCard(QFrame):
     def __init__(self, project, parent=None):
         super().__init__(parent)
         self.project = project
+        self._light = self.palette().color(QPalette.Window).lightness() > 128
         self.setCursor(Qt.PointingHandCursor)
         self.setObjectName('DependencyCard')
         self.setAttribute(Qt.WA_StyledBackground, True)
@@ -1005,7 +1019,7 @@ class DependencyCard(QFrame):
         self.icon = QLabel('?')
         self.icon.setFixedSize(40, 40)
         self.icon.setAlignment(Qt.AlignCenter)
-        self.icon.setStyleSheet('background:transparent; border:none; color:#888;')
+        self._apply_icon_placeholder()
         layout.addWidget(self.icon)
         text = QVBoxLayout()
         text.setSpacing(1)
@@ -1025,7 +1039,18 @@ class DependencyCard(QFrame):
             self.project.translated_title, self.project.english_title, 13, 11
         ))
 
+    def _apply_icon_placeholder(self):
+        if not hasattr(self, 'icon'):
+            return
+        background = IMAGE_PLACEHOLDER_LIGHT if self._light else IMAGE_PLACEHOLDER_DARK
+        foreground = MUTED_LIGHT if self._light else MUTED_DARK
+        self.icon.setStyleSheet(
+            f'background:{background}; border:none; border-radius:9px; color:{foreground};'
+        )
+
     def set_light(self, light):
+        self._light = bool(light)
+        self._apply_icon_placeholder()
         self._refresh_title()
 
     def set_icon(self, pix):

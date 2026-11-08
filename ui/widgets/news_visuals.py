@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
+from ui.design import IMAGE_PLACEHOLDER_DARK, IMAGE_PLACEHOLDER_LIGHT
 from ui.widgets.fireworks_loader import FireworksLoader
 
 MAX_IMAGE_PIXELS = 40_000_000
@@ -47,11 +48,12 @@ def pixmap_from_data(data, max_pixels=MAX_IMAGE_PIXELS):
 
 
 class NewsImageLabel(QWidget):
-    '''按完整宽度铺满新闻图；加载时显示动画 + 文字，不使用背景或大遮罩。'''
+    '''按完整宽度铺满新闻图；加载时显示主题占位背景、动画和文字。'''
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._source = None
+        self._light = self.palette().color(QPalette.Window).lightness() > 128
         self.setFixedHeight(180)
         self.setMinimumWidth(240)
         self.setProperty('_scl_scalable', True)
@@ -69,6 +71,19 @@ class NewsImageLabel(QWidget):
         layout.addWidget(self._loading_icon, 0, Qt.AlignVCenter)
         layout.addWidget(self._loading_text, 0, Qt.AlignVCenter)
         layout.addStretch(1)
+        self.set_light(self._light)
+
+    def _placeholder_color(self):
+        return IMAGE_PLACEHOLDER_LIGHT if self._light else IMAGE_PLACEHOLDER_DARK
+
+    def set_light(self, light):
+        light = bool(light)
+        self._light = light
+        self._loading_text.setStyleSheet(
+            f'color:{"#1b1b1b" if light else "#e3fcfc"}; '
+            'font-size:14px; font-weight:600;'
+        )
+        self.update()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -103,6 +118,9 @@ class NewsImageLabel(QWidget):
 
     def paintEvent(self, event):
         if self._source is None or self._source.isNull():
+            painter = QPainter(self)
+            painter.fillRect(self.rect(), QColor(self._placeholder_color()))
+            painter.end()
             return
         painter = QPainter(self)
         target = self.rect()
