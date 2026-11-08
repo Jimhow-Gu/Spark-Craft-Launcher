@@ -5,7 +5,9 @@ from PySide6.QtCore import (QPointF, QRectF, Qt)
 from PySide6.QtGui import (QColor, QPainter, QPainterPath, QPalette, QPen)
 from PySide6.QtWidgets import QProxyStyle, QStyle, QStyleOptionSlider
 
-from ui.design import ACCENT, ACCENT_HOVER, ON_ACCENT
+from ui.design import (
+    ACCENT, ACCENT_HOVER, ON_ACCENT, PRIMARY, PRIMARY_HOVER,
+)
 
 class CheckBoxProxyStyle(QProxyStyle):
     '''在保留系统控件外观的前提下，重绘勾选框指示器。'''
@@ -45,14 +47,14 @@ class CheckBoxProxyStyle(QProxyStyle):
         if groove.width() <= 0:
             return
         track = (
-            QColor(64, 153, 153, 36) if light
-            else QColor(136, 221, 221, 36)
+            QColor(144, 217, 217, 80) if light
+            else QColor(144, 217, 217, 42)
         )
         if not enabled:
             track = QColor(128, 128, 128, 32)
-        handle_fill = QColor(ACCENT) if enabled else QColor('#9aa0aa' if light else '#4c525c')
+        handle_fill = QColor(PRIMARY) if enabled else QColor('#9aa0aa' if light else '#4c525c')
         if enabled and hover:
-            handle_fill = QColor(ACCENT_HOVER)
+            handle_fill = QColor(PRIMARY_HOVER)
         handle_border = QColor('#F8FBFB') if light else QColor('#121717')
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
@@ -64,7 +66,7 @@ class CheckBoxProxyStyle(QProxyStyle):
             handle_x = left + groove.width() * ratio
             if ratio > 0.001:
                 fill = QRectF(groove.left(), groove.top(), max(radius * 2.0, handle_x - groove.left()), groove.height())
-                painter.setBrush(QColor(ACCENT) if enabled else QColor('#7d898d'))
+                painter.setBrush(QColor(PRIMARY) if enabled else QColor('#7d898d'))
                 painter.drawRoundedRect(fill, radius, radius)
             painter.setBrush(handle_fill)
             painter.setPen(QPen(handle_border, 2.0))
@@ -94,23 +96,23 @@ class CheckBoxProxyStyle(QProxyStyle):
         painter.setRenderHint(QPainter.Antialiasing, True)
         try:
             if checked or partial:
-                fill = QColor(ACCENT) if enabled else QColor('#9aa0aa' if light else '#3b414a')
+                fill = QColor(PRIMARY) if enabled else QColor('#9aa0aa' if light else '#3b414a')
                 if hover and enabled:
-                    border = QColor(ACCENT_HOVER)
+                    border = QColor(PRIMARY_HOVER)
                 else:
-                    border = QColor(ACCENT) if enabled else QColor('#8a909a' if light else '#4c525c')
+                    border = QColor(PRIMARY) if enabled else QColor('#8a909a' if light else '#4c525c')
             elif light:
                 fill = QColor(255, 255, 255, 235 if enabled else 180)
                 border = QColor('#6b7280') if enabled else QColor('#c0c4cc')
                 if hover and enabled:
-                    border = QColor(ACCENT)
-                    fill = QColor(136, 221, 221, 28)
+                    border = QColor(PRIMARY)
+                    fill = QColor(144, 217, 217, 28)
             else:
                 fill = QColor(255, 255, 255, 22 if enabled else 10)
                 border = QColor('#b6bfd0') if enabled else QColor('#5b616b')
                 if hover and enabled:
-                    border = QColor(ACCENT_HOVER)
-                    fill = QColor(136, 221, 221, 38)
+                    border = QColor(PRIMARY_HOVER)
+                    fill = QColor(144, 217, 217, 38)
             painter.setBrush(fill)
             painter.setPen(QPen(border, 1.3))
             painter.drawRoundedRect(box.adjusted(0.65, 0.65, -0.65, -0.65), 3.0, 3.0)

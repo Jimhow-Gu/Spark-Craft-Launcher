@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QPainter, QPixmap
+from PySide6.QtGui import QDesktopServices, QPainter, QPalette, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 from core.app_font import ui_font
 from core.paths import scl_dir
 from core.update import VERSION_DISPLAY
+from ui.design import ACCENT, DEEP_ACCENT_LIGHT, MUTED_DARK, MUTED_LIGHT, TEXT_DARK, TEXT_LIGHT
 from ui.widgets.settings_widgets import hidpi_pixmap, rounded_pixmap, trim_transparent
 from ui.widgets.collapsible_section import CollapsibleSection
 
@@ -129,6 +130,49 @@ def _head_from_skin(pixmap, size=44):
     return hidpi_pixmap(pixmap, size, size, smooth=False)
 
 
+class _ThanksLineLabel(QLabel):
+    '''特别鸣谢行：富文本颜色随主题切换，避免浅色主题下白字不可见。'''
+
+    def __init__(self, name, desc, url='', parent=None):
+        super().__init__(parent)
+        self._name = str(name or '')
+        self._desc = str(desc or '')
+        self._url = str(url or '')
+        self._light = None
+        self.setTextFormat(Qt.RichText)
+        self.setWordWrap(True)
+        self.setOpenExternalLinks(True)
+        self.setStyleSheet('font-size:12px; background:transparent;')
+        light = self.palette().color(QPalette.Window).lightness() > 128
+        self.set_light(light)
+
+    def set_light(self, light):
+        light = bool(light)
+        if light == self._light:
+            return
+        self._light = light
+        if light:
+            name_color = TEXT_LIGHT
+            desc_color = MUTED_LIGHT
+            link_color = DEEP_ACCENT_LIGHT
+        else:
+            name_color = TEXT_DARK
+            desc_color = MUTED_DARK
+            link_color = ACCENT
+        text = (
+            f'<span style="color:{name_color}; font-weight:700;">'
+            + html.escape(self._name)
+            + f'</span><span style="color:{desc_color};">——'
+            + html.escape(self._desc)
+        )
+        if self._url:
+            text += (
+                '<a href="' + html.escape(self._url, quote=True)
+                + f'" style="color:{link_color};">' + html.escape(self._url) + '</a>'
+            )
+        self.setText(text + '</span>')
+
+
 class AboutPage(QWidget):
     open_settings = Signal()
     check_update = Signal()
@@ -151,6 +195,7 @@ class AboutPage(QWidget):
         content.setStyleSheet('background: transparent;')
         root = QVBoxLayout(content)
         root.setContentsMargins(0, 24, 0, 24)
+        root.setSpacing(16)
         self.scroll.setWidget(content)
         outer.addWidget(self.scroll)
         group = QWidget()
@@ -158,8 +203,8 @@ class AboutPage(QWidget):
         group.setAttribute(Qt.WA_StyledBackground, True)
         group.setStyleSheet(_card_style('AboutCard'))
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(24, 18, 24, 18)
-        layout.setSpacing(14)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(16)
         card_title = QLabel('关于')
         card_title.setStyleSheet('color:rgba(255,255,255,0.6); font-size:13px; font-weight:900;')
         layout.addWidget(card_title)
@@ -185,10 +230,10 @@ class AboutPage(QWidget):
         self.sponsor_btn.clicked.connect(
             (lambda: QDesktopServices.openUrl(QUrl('https://ifdian.net/a/200811GJH')))
         )
-        gubwon_row.addWidget(self.sponsor_btn)
-        layout.addLayout(gubwon_row)
-        layout.addLayout(self._row(deepseek, 'DeepSeek', 'Spark Craft Launcher 的协助开发者'))
-        layout.addLayout(self._row(zhipu, '智谱AI', 'Spark Craft Launcher 的协助开发者'))
+        gubwon_row.layout().addWidget(self.sponsor_btn)
+        layout.addWidget(gubwon_row)
+        layout.addWidget(self._row(deepseek, 'DeepSeek', 'Spark Craft Launcher 的协助开发者'))
+        layout.addWidget(self._row(zhipu, '智谱AI', 'Spark Craft Launcher 的协助开发者'))
         scl_row = self._row(scl, 'Spark Craft Launcher', f'当前版本: {_VERSION_TEXT}')
         self.check_update_btn = QPushButton('检查更新')
         self.check_update_btn.setCursor(Qt.PointingHandCursor)
@@ -199,8 +244,8 @@ class AboutPage(QWidget):
             'QPushButton:hover { background:rgba(136,221,221,0.72); }'
         )
         self.check_update_btn.clicked.connect(self.check_update.emit)
-        scl_row.addWidget(self.check_update_btn)
-        layout.addLayout(scl_row)
+        scl_row.layout().addWidget(self.check_update_btn)
+        layout.addWidget(scl_row)
 
         root.addWidget(group)
 
@@ -209,8 +254,8 @@ class AboutPage(QWidget):
         thanks_group.setAttribute(Qt.WA_StyledBackground, True)
         thanks_group.setStyleSheet(_card_style('ThanksCard'))
         thanks_layout = QVBoxLayout(thanks_group)
-        thanks_layout.setContentsMargins(24, 18, 24, 18)
-        thanks_layout.setSpacing(10)
+        thanks_layout.setContentsMargins(24, 20, 24, 20)
+        thanks_layout.setSpacing(12)
         thanks_title = QLabel('特别鸣谢')
         thanks_title.setStyleSheet('color:rgba(255,255,255,0.6); font-size:13px; font-weight:900;')
         thanks_layout.addWidget(thanks_title)
@@ -253,13 +298,16 @@ class AboutPage(QWidget):
         self._load_gubwon(gubwon)
 
     def _row(self, icon_label, name, desc):
+        row_widget = QWidget()
+        row_widget.setStyleSheet('background:transparent;')
         icon_label.setFixedSize(44, 44)
         icon_label.setAlignment(Qt.AlignCenter)
-        row = QHBoxLayout()
+        row = QHBoxLayout(row_widget)
+        row.setContentsMargins(0, 5, 0, 5)
         row.addWidget(icon_label)
-        row.addSpacing(12)
+        row.addSpacing(14)
         text = QVBoxLayout()
-        text.setSpacing(2)
+        text.setSpacing(4)
         name_label = QLabel(str(name or ''))
         name_label.setStyleSheet('color:rgba(255,255,255,0.9); font-size:14px; font-weight:900;')
         desc_label = QLabel(str(desc or ''))
@@ -267,27 +315,10 @@ class AboutPage(QWidget):
         text.addWidget(name_label)
         text.addWidget(desc_label)
         row.addLayout(text, 1)
-        return row
+        return row_widget
 
     def _thanks_line(self, name, desc, url=''):
-        label = QLabel()
-        label.setTextFormat(Qt.RichText)
-        label.setWordWrap(True)
-        text = (
-            '<span style="color:rgba(255,255,255,0.9); font-weight:700;">'
-            + html.escape(str(name))
-            + '</span><span style="color:rgba(255,255,255,0.55);">——'
-            + html.escape(str(desc))
-        )
-        if url:
-            text += (
-                '<a href="' + html.escape(str(url), quote=True)
-                + '" style="color:#88DDDD;">' + html.escape(str(url)) + '</a>'
-            )
-        label.setText(text + '</span>')
-        label.setOpenExternalLinks(True)
-        label.setStyleSheet('font-size:12px; background:transparent;')
-        return label
+        return _ThanksLineLabel(name, desc, url)
 
     def _license_row(self, name, copyright_text, license_text, site_url, license_url):
         row = QHBoxLayout()

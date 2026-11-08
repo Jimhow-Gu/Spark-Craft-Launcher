@@ -6,9 +6,10 @@ from PySide6.QtWidgets import QApplication, QScrollBar
 _SCROLLBAR_STYLE = """
 QScrollBar:vertical {
     background: transparent;
-    width: 9px;
-    margin: 3px 2px 3px 0;
+    width: 10px;
+    margin: 2px 2px 2px 0;
     border: none;
+    border-radius: 4px;
 }
 QScrollBar::handle:vertical {
     background: rgba(136,221,221,0.30);
@@ -26,9 +27,10 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
 }
 QScrollBar:horizontal {
     background: transparent;
-    height: 9px;
-    margin: 0px 3px 2px 3px;
+    height: 10px;
+    margin: 0px 2px 2px 2px;
     border: none;
+    border-radius: 4px;
 }
 QScrollBar::handle:horizontal {
     background: rgba(136,221,221,0.30);
@@ -48,12 +50,13 @@ QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
 _LIGHT_SCROLLBAR_STYLE = """
 QScrollBar:vertical {
     background: transparent;
-    width: 9px;
-    margin: 3px 2px 3px 0;
+    width: 10px;
+    margin: 2px 2px 2px 0;
     border: none;
+    border-radius: 4px;
 }
 QScrollBar::handle:vertical {
-    background: rgba(64,153,153,0.28);
+    background: rgba(64,153,153,0.30);
     min-height: 34px;
     border-radius: 4px;
 }
@@ -68,12 +71,13 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
 }
 QScrollBar:horizontal {
     background: transparent;
-    height: 9px;
-    margin: 0px 3px 2px 3px;
+    height: 10px;
+    margin: 0px 2px 2px 2px;
     border: none;
+    border-radius: 4px;
 }
 QScrollBar::handle:horizontal {
-    background: rgba(64,153,153,0.28);
+    background: rgba(64,153,153,0.30);
     min-width: 34px;
     border-radius: 4px;
 }

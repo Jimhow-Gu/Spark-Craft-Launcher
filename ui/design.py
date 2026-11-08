@@ -17,6 +17,12 @@ ON_ACCENT = '#122828'
 ACCENT_SOFT = 'rgba(136,221,221,0.16)'
 ACCENT_SELECTION = 'rgba(136,221,221,0.30)'
 
+# 交互控件主色：滑块、主按钮、勾选框和深色侧栏选中态。
+PRIMARY = '#90D9D9'
+PRIMARY_HOVER = '#78CACA'
+PRIMARY_PRESSED = '#5FAFAF'
+PRIMARY_SOFT = 'rgba(144,217,217,0.18)'
+
 # 两套主题的核心表面/文字色。
 WINDOW_DARK = '#121717'
 CARD_DARK = '#1E2929'
@@ -137,7 +143,7 @@ _WHITE_TEXT_RE = re.compile(
 
 _STRONG_ACCENT_RE = re.compile(
     r'(?i)(?:background(?:-color)?\s*:\s*[^;}]*)'
-    r'(?:#88dddd|#66bbbb|#50aaaa|#409999|rgba?\(\s*136\s*,\s*221\s*,\s*221\s*,\s*(?:0?\.(?:[5-9]\d?)|1(?:\.0+)?)\s*\))'
+    r'(?:#88dddd|#66bbbb|#50aaaa|#409999|#90d9d9|#78caca|#5fafaf|rgba?\(\s*136\s*,\s*221\s*,\s*221\s*,\s*(?:0?\.(?:[5-9]\d?)|1(?:\.0+)?)\s*\))'
 )
 
 
@@ -270,7 +276,9 @@ QHeaderView::section {{
 
 __all__ = [
     'ACCENT', 'ACCENT_HOVER', 'ACCENT_PRESSED', 'ACCENT_TEXT', 'ON_ACCENT',
-    'ACCENT_SOFT', 'ACCENT_SELECTION', 'RADIUS_SM', 'RADIUS_MD', 'RADIUS_LG',
+    'ACCENT_SOFT', 'ACCENT_SELECTION',
+    'PRIMARY', 'PRIMARY_HOVER', 'PRIMARY_PRESSED', 'PRIMARY_SOFT',
+    'RADIUS_SM', 'RADIUS_MD', 'RADIUS_LG',
     'SPACE_XS', 'SPACE_SM', 'SPACE_MD', 'SPACE_LG',
     'WINDOW_DARK', 'CARD_DARK', 'SIDEBAR_DARK', 'TITLEBAR_DARK',
     'TEXT_DARK', 'MUTED_DARK', 'DEEP_ACCENT_DARK',

@@ -1193,15 +1193,15 @@ class LoaderModifyPage(QWidget):
         start_row = QHBoxLayout()
         start_row.addStretch(1)
         self.start_btn = QPushButton('开始修改')
-        set_button_icon(self.start_btn, 'pencil', 16, '#e6edf3')
+        set_button_icon(self.start_btn, 'pencil', 16, '#122828')
         self.start_btn.setMinimumHeight(40)
         self.start_btn.setMinimumWidth(148)
         self.start_btn.setCursor(Qt.PointingHandCursor)
         self.start_btn.setStyleSheet(
-            'QPushButton { background:#88DDDD; color:white; border:none;'
+            'QPushButton { background:#90D9D9; color:#122828; border:none;'
             ' border-radius:8px; padding:8px 30px; font-size:13px; }'
-            'QPushButton:hover { background:#66BBBB; }'
-            'QPushButton:pressed { background:#409999; }'
+            'QPushButton:hover { background:#78CACA; }'
+            'QPushButton:pressed { background:#5FAFAF; }'
             'QPushButton:disabled { background:rgba(128,128,128,0.25); color:#8a8f98; }'
         )
         self.start_btn.clicked.connect(self._on_start_modify)

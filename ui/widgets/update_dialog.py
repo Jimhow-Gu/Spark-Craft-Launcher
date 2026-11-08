@@ -83,7 +83,7 @@ class UpdateDialog(QDialog):
         self.later_btn = QPushButton('稍后更新')
         self.later_btn.clicked.connect(self.reject)
         self.download_btn = QPushButton('下载更新')
-        self.download_btn.setStyleSheet('QPushButton { background:#88DDDD; color:white; }')
+        self.download_btn.setStyleSheet('QPushButton { background:#90D9D9; color:#122828; }')
         self.download_btn.clicked.connect(self._on_primary_clicked)
         row.addWidget(self.later_btn)
         row.addWidget(self.download_btn)
@@ -167,7 +167,7 @@ class UpdateDialog(QDialog):
         self.progress.hide()
         self.download_btn.setEnabled(True)
         self.download_btn.setText('重试下载')
-        self.download_btn.setStyleSheet('QPushButton { background:#88DDDD; color:white; }')
+        self.download_btn.setStyleSheet('QPushButton { background:#90D9D9; color:#122828; }')
         self.later_btn.setText('关闭')
 
     def _on_finished(self):

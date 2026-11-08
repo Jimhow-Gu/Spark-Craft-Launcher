@@ -6,7 +6,7 @@ from PySide6.QtCore import Property, QRectF, QSize, Qt, QPropertyAnimation, QEas
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QListWidget, QSizePolicy, QStyle, QStyledItemDelegate
 
-from ui.design import ACCENT, MUTED_DARK, MUTED_LIGHT, ON_ACCENT
+from ui.design import ACCENT, MUTED_DARK, MUTED_LIGHT, ON_ACCENT, PRIMARY
 from ui.widgets.painted_icons import painted_icon
 
 NAV_ICON_ROLE = int(Qt.UserRole) + 10
@@ -77,7 +77,12 @@ class SideNavDelegate(QStyledItemDelegate):
         body = rect.adjusted(inset, 2.0, -inset, -2.0)
         if selected:
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(ACCENT))
+            if self.light:
+                painter.setBrush(QColor(ACCENT))
+            else:
+                selected_bg = QColor(PRIMARY)
+                selected_bg.setAlpha(46)
+                painter.setBrush(selected_bg)
             painter.drawRoundedRect(body, 9.0, 9.0)
         elif hover:
             color = (
@@ -91,7 +96,7 @@ class SideNavDelegate(QStyledItemDelegate):
         icon_name = index.data(NAV_ICON_ROLE) or ''
         size = max(18, int(round(24 * self._scale)))
         if selected:
-            icon_color = ON_ACCENT
+            icon_color = ON_ACCENT if self.light else PRIMARY
         else:
             icon_color = '#4f5866' if self.light else '#c5cbd6'
 
@@ -124,16 +129,16 @@ class SideNavDelegate(QStyledItemDelegate):
 
         if not self.collapsed:
             painter.setOpacity(self._text_opacity)
-            painter.setPen(
-                QColor(ON_ACCENT) if selected
-                else QColor('#222222' if self.light else '#EEFFFF')
-            )
+            if selected:
+                painter.setPen(QColor(ON_ACCENT) if self.light else QColor(PRIMARY))
+            else:
+                painter.setPen(QColor('#222222' if self.light else '#EEFFFF'))
             painter.drawText(
                 text_rect, Qt.AlignLeft | Qt.AlignVCenter, text
             )
         elif selected:
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(ACCENT))
+            painter.setBrush(QColor(ACCENT) if self.light else QColor(PRIMARY))
             painter.drawRoundedRect(
                 QRectF(rect.left() + 1.0, rect.top() + 9.0, 3.0, rect.height() - 18.0),
                 1.5,

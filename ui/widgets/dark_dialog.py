@@ -237,7 +237,7 @@ class DarkQuestionDialog(QDialog):
         button = QPushButton(text)
         button.setMinimumWidth(88)
         button.setMinimumHeight(32)
-        button.setStyleSheet('QPushButton { background:#88DDDD; color:white; border:none; border-radius:6px; }QPushButton:hover { background:#66BBBB; }' if primary else 'QPushButton { background:#3a3a3a; color:#f0f0f0; border:none; border-radius:6px; }QPushButton:hover { background:#4a4a4a; }')
+        button.setStyleSheet('QPushButton { background:#90D9D9; color:#122828; border:none; border-radius:6px; }QPushButton:hover { background:#78CACA; }' if primary else 'QPushButton { background:#3a3a3a; color:#f0f0f0; border:none; border-radius:6px; }QPushButton:hover { background:#4a4a4a; }')
         button.clicked.connect((lambda: self._choose(value)))
         return button
 

@@ -6,7 +6,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPalette
 from PySide6.QtWidgets import QCheckBox, QStyle, QStyleOptionButton
 
-from ui.design import ACCENT, ACCENT_HOVER, ON_ACCENT
+from ui.design import ON_ACCENT, PRIMARY, PRIMARY_HOVER
 
 
 class ThemedCheckBox(QCheckBox):
@@ -35,23 +35,23 @@ class ThemedCheckBox(QCheckBox):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         if checked or partial:
-            fill = QColor(ACCENT) if enabled else QColor('#9aa0aa' if light else '#3b414a')
+            fill = QColor(PRIMARY) if enabled else QColor('#9aa0aa' if light else '#3b414a')
             if hover and enabled:
-                border = QColor(ACCENT_HOVER)
+                border = QColor(PRIMARY_HOVER)
             else:
-                border = QColor(ACCENT) if enabled else QColor('#8a909a' if light else '#4c525c')
+                border = QColor(PRIMARY) if enabled else QColor('#8a909a' if light else '#4c525c')
         elif light:
             fill = QColor(255, 255, 255, 235 if enabled else 180)
             border = QColor('#6b7280') if enabled else QColor('#c0c4cc')
             if hover and enabled:
-                border = QColor(ACCENT)
-                fill = QColor(136, 221, 221, 28)
+                border = QColor(PRIMARY)
+                fill = QColor(144, 217, 217, 28)
         else:
             fill = QColor(255, 255, 255, 22 if enabled else 10)
             border = QColor('#b6bfd0') if enabled else QColor('#5b616b')
             if hover and enabled:
-                border = QColor(ACCENT_HOVER)
-                fill = QColor(136, 221, 221, 38)
+                border = QColor(PRIMARY_HOVER)
+                fill = QColor(144, 217, 217, 38)
         painter.setBrush(fill)
         painter.setPen(QPen(border, 1.3))
         painter.drawRoundedRect(box.adjusted(0.65, 0.65, -0.65, -0.65), 3.0, 3.0)

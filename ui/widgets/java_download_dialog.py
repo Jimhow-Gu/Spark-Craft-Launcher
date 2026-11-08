@@ -51,7 +51,7 @@ class JavaDownloadDialog(QDialog):
         self.cancel_btn = QPushButton('取消')
         self.cancel_btn.clicked.connect(self.reject)
         self.close_btn = QPushButton('关闭')
-        self.close_btn.setStyleSheet('QPushButton { background:#88DDDD; color:white; }')
+        self.close_btn.setStyleSheet('QPushButton { background:#90D9D9; color:#122828; }')
         self.close_btn.clicked.connect(self.accept)
         self.close_btn.hide()
         row.addWidget(self.cancel_btn)

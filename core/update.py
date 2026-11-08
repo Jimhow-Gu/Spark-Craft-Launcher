@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import zipfile
 from pathlib import Path
@@ -23,27 +25,68 @@ VERSION_DISPLAY = 'V1.11.4（正式版）'
 EXECUTABLE_BUILD = '10'
 REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
+API_KGGITHUB = f'https://api.kkgithub.com/repos/{REPO}/releases/latest'
 API_ACCELERATED = f'https://gh-proxy.com/{API_LATEST}'
-# 中国大陆可用的 GitHub 下载加速线路，按实测速度排序；最后始终回退官方源。
+# Release 元数据并发查询官方接口和可用镜像，避免单个接口超时拖慢检查。
+API_SOURCES = (
+    API_KGGITHUB,
+    API_LATEST,
+    API_ACCELERATED,
+)
+# GitHub 下载加速线路。不同机房对镜像的连通性差异很大，尽量多留回退。
 DOWNLOAD_ACCELERATORS = (
-    'https://ghfast.top/',
     'https://gh-proxy.com/',
+    'https://ghfast.top/',
     'https://ghproxy.cc/',
     'https://ghproxy.net/',
 )
 
 
-def _download_urls(url):
-    '''生成 GitHub 加速下载候选地址，保留官方源作为最后回退。'''
+def _download_candidates(info):
+    '''生成更新附件的候选下载地址和所需请求头。'''
 
-    url = str(url or '').strip()
-    if not url:
-        return []
-    if not url.startswith(('https://github.com/', 'http://github.com/', 'https://objects.githubusercontent.com/')):
-        return [url]
-    candidates = [prefix + url for prefix in DOWNLOAD_ACCELERATORS]
-    candidates.append(url)
-    return list(dict.fromkeys(candidates))
+    info = dict(info or {})
+    browser_url = str(info.get('asset_url') or '').strip()
+    api_url = str(info.get('asset_api_url') or '').strip()
+    candidates = []
+    seen = set()
+
+    def add(url, headers=None):
+        url = str(url or '').strip()
+        if not url or url in seen:
+            return
+        seen.add(url)
+        candidates.append((url, dict(headers or {})))
+
+    # releases/download 页面通常由镜像直接缓存，先走这条路线；随后再用
+    # GitHub API 的 asset 接口兜底（它返回二进制流而不是 HTML 错误页）。
+    if browser_url.startswith(('https://github.com/', 'http://github.com/', 'https://objects.githubusercontent.com/')):
+        for prefix in DOWNLOAD_ACCELERATORS:
+            add(prefix + browser_url)
+
+    if api_url:
+        add(
+            'https://gh-proxy.com/' + api_url,
+            {'Accept': 'application/octet-stream'},
+        )
+        if api_url.startswith('https://api.github.com/'):
+            add(
+                api_url.replace('https://api.github.com/', 'https://api.kkgithub.com/', 1),
+                {'Accept': 'application/octet-stream'},
+            )
+        add(api_url, {'Accept': 'application/octet-stream'})
+
+    if browser_url:
+        add(browser_url)
+    return candidates
+
+
+def _download_urls(url):
+    '''兼容旧调用：仅返回 URL，保留官方源作为最后回退。'''
+
+    info = {'asset_url': str(url or '')}
+    return [item[0] for item in _download_candidates(info)]
+
 
 
 def _version_tuple(text):
@@ -89,27 +132,64 @@ def update_kind(info, current=CURRENT_VERSION, current_dll=EXECUTABLE_BUILD):
     return 'dll' if remote_dll > local_dll else 'none'
 
 
-def fetch_latest_release(timeout=12):
-    '''读取最新 Release；直连失败时使用国内可访问的代理接口。'''
+def _fetch_release_api(api_url, timeout, results):
+    http = None
+    try:
+        http = HttpClient(timeout=timeout, retries=1, verify=False)
+        data = http.get_json(
+            api_url,
+            headers={
+                'Accept': 'application/vnd.github+json',
+                'User-Agent': 'Spark-Craft-Launcher-Updater',
+            },
+        )
+        if isinstance(data, dict) and data.get('tag_name'):
+            results.put((api_url, data, None))
+            return
+        results.put((api_url, None, DownloadError('更新接口没有返回有效的 Release 信息')))
+    except Exception as exc:
+        results.put((api_url, None, exc))
+    finally:
+        if http is not None:
+            http.close()
 
-    http = HttpClient(timeout=timeout, retries=1, verify=False)
+
+def fetch_latest_release(timeout=12):
+    '''并发读取最新 Release；哪个官方接口或镜像先返回就用哪个。'''
+
+    sources = list(dict.fromkeys(API_SOURCES))
+    results = queue.Queue()
+    for api_url in sources:
+        threading.Thread(
+            target=_fetch_release_api,
+            args=(api_url, timeout, results),
+            daemon=True,
+            name='SCL-UpdateMeta',
+        ).start()
+
     data = None
     last_error = None
-    for api_url in (API_LATEST, API_ACCELERATED):
+    deadline = time.monotonic() + max(6.0, float(timeout) + 2.0)
+    pending = len(sources)
+    while pending > 0:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         try:
-            data = http.get_json(
-                api_url,
-                headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'Spark-Craft-Launcher-Updater'},
-            )
-            if isinstance(data, dict):
-                break
-        except Exception as exc:
-            data = None
-            last_error = exc
+            _api_url, payload, error = results.get(timeout=remaining)
+        except queue.Empty:
+            break
+        pending -= 1
+        if isinstance(payload, dict) and payload.get('tag_name'):
+            data = payload
+            break
+        if error is not None:
+            last_error = error
     if not isinstance(data, dict):
-        if last_error:
+        if last_error is not None:
             raise last_error
         return None
+
     assets = data.get('assets') or []
     chosen = None
     for asset in assets:
@@ -136,6 +216,8 @@ def fetch_latest_release(timeout=12):
         'published_at': str(data.get('published_at') or ''),
         'asset_name': str((chosen or {}).get('name') or ''),
         'asset_url': str((chosen or {}).get('browser_download_url') or ''),
+        'asset_api_url': str((chosen or {}).get('url') or ''),
+        'asset_id': int((chosen or {}).get('id') or 0),
         'asset_size': int((chosen or {}).get('size') or 0),
         'asset_digest': str((chosen or {}).get('digest') or ''),
     }
@@ -152,9 +234,26 @@ class CheckUpdateWorker(QThread):
         try:
             info = fetch_latest_release()
         except Exception as exc:
-            self.done.emit(None, str(exc), self.manual)
+            self.done.emit(None, _friendly_update_error(exc), self.manual)
             return
         self.done.emit(info, '', self.manual)
+
+
+def _friendly_update_error(exc):
+    text = str(exc or '').strip()
+    lower = text.lower()
+    if any(marker in lower for marker in ('remote end closed', 'remotedisconnected', 'connection aborted', 'connection reset', '10054')):
+        return '连接被远端中断'
+    if any(marker in lower for marker in ('timed out', 'timeout', 'read timed out', 'connecttimeout')):
+        return '连接超时'
+    if any(marker in lower for marker in ('certificate', 'ssl', 'tls')):
+        return 'SSL 证书校验失败'
+    if any(marker in lower for marker in ('hash', 'size', '校验', '不是有效的 exe')):
+        return '更新文件校验失败'
+    text = re.sub(r'\s+', ' ', text)
+    if len(text) > 140:
+        text = text[:137] + '...'
+    return text or '未知错误'
 
 
 class UpdateDownloadWorker(QThread):
@@ -172,9 +271,9 @@ class UpdateDownloadWorker(QThread):
         self._cancelled = True
 
     def run(self):
-        url = str(self.info.get('asset_url') or '')
         name = str(self.info.get('asset_name') or 'Spark Craft Launcher-update.exe')
-        if not url:
+        candidates = _download_candidates(self.info)
+        if not candidates:
             self.failed.emit('该 Release 没有可下载的 exe/zip 附件')
             return
         update_dir = scl_dir() / 'update' / 'downloads'
@@ -182,20 +281,19 @@ class UpdateDownloadWorker(QThread):
         dest = update_dir / re.sub(r'[^A-Za-z0-9._-]', '_', name)
         digest = str(self.info.get('asset_digest') or '')
         sha256 = digest[7:].strip() if digest.lower().startswith('sha256:') else None
-        urls = _download_urls(url)
         last_error = None
-        http = HttpClient(timeout=25, retries=1, verify=False)
+        http = HttpClient(timeout=18, retries=1, verify=False)
         try:
-            for index, candidate in enumerate(urls):
+            for index, (candidate, headers) in enumerate(candidates):
                 if self._cancelled:
                     self.failed.emit('更新下载已取消')
                     return
                 if index == 0:
-                    self.status.emit('正在通过中国大陆加速线路下载更新...')
-                elif index < len(urls) - 1:
-                    self.status.emit(f'加速线路 {index} 不可用，正在切换线路...')
+                    self.status.emit('正在通过镜像更新源下载...')
+                elif index < len(candidates) - 1:
+                    self.status.emit(f'当前更新源不可用，正在切换（{index + 1}/{len(candidates)}）...')
                 else:
-                    self.status.emit('加速线路暂不可用，正在从 GitHub 官方源下载...')
+                    self.status.emit('正在尝试 GitHub 官方源...')
                 try:
                     http.download(
                         candidate, dest,
@@ -203,6 +301,8 @@ class UpdateDownloadWorker(QThread):
                         size=int(self.info.get('asset_size') or 0) or None,
                         progress=(lambda done, total: self.progress.emit(int(done), int(total))),
                         cancel=(lambda: self._cancelled),
+                        headers=headers or None,
+                        allow_slow_fallback=True,
                     )
                     try:
                         write_downloaded_update(self.info, dest)
@@ -212,7 +312,6 @@ class UpdateDownloadWorker(QThread):
                     try:
                         version = str(self.info.get('version') or self.info.get('tag') or '')
                         prepare_update(dest, version)
-                        import threading
                         threading.Timer(2.0, lambda: os._exit(0)).start()
                         write_update_log('download: external updater armed; exiting in 2s')
                     except Exception as exc:
@@ -224,10 +323,18 @@ class UpdateDownloadWorker(QThread):
                     return
                 except Exception as exc:
                     last_error = exc
+                    write_update_log(
+                        f'download source failed: {candidate} '
+                        f'{type(exc).__name__}: {exc}'
+                    )
                     continue
         finally:
             http.close()
-        self.failed.emit(f'更新下载失败：{last_error or "所有线路均不可用"}')
+        detail = _friendly_update_error(last_error)
+        self.failed.emit(
+            f'更新下载失败：{detail}\n'
+            f'已尝试 {len(candidates)} 个更新源，请检查网络或稍后重试。'
+        )
 
 
 def _extract_exe(asset_path):

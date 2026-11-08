@@ -502,9 +502,9 @@ class HomePage(QWidget):
         self.selector_dir_add_btn = QPushButton('添加')
         self.selector_dir_add_btn.setFixedSize(56, 32)
         self.selector_dir_add_btn.setStyleSheet(
-            'QPushButton { background: #88DDDD; color: white; border: none;'
+            'QPushButton { background: #90D9D9; color: #122828; border: none;'
             ' border-radius: 6px; padding: 6px 10px; }'
-            'QPushButton:hover { background: #66BBBB; }'
+            'QPushButton:hover { background: #78CACA; }'
         )
         self.selector_dir_add_btn.clicked.connect(self._on_selector_dir_add)
         top_bar.addWidget(self.selector_dir_add_btn)
@@ -568,10 +568,10 @@ class HomePage(QWidget):
         self.selector_download_btn.setMinimumWidth(180)
         self.selector_download_btn.setCursor(Qt.PointingHandCursor)
         self.selector_download_btn.setStyleSheet(
-            'QPushButton { background:#88DDDD; color:white; border:none;'
+            'QPushButton { background:#90D9D9; color:#122828; border:none;'
             ' border-radius:9px; padding:9px 34px; font-size:14px; font-weight:900; }'
-            'QPushButton:hover { background:#66BBBB; }'
-            'QPushButton:pressed { background:#409999; }'
+            'QPushButton:hover { background:#78CACA; }'
+            'QPushButton:pressed { background:#5FAFAF; }'
         )
         self.selector_download_btn.clicked.connect(
             (lambda: self.request_switch_page.emit(1))
@@ -1059,7 +1059,7 @@ class HomePage(QWidget):
         return nicknames.get(version_id, version_id)
 
     def _launch_button_style(self):
-        return '\n            QPushButton {\n                background: #88DDDD;\n                color: white;\n                border: none;\n                border-radius: 8px;\n            }\n            QPushButton:hover { background: #66BBBB; }\n            QPushButton:pressed { background: #409999; }\n            QPushButton:disabled { background: rgba(128,128,128,0.25); color: #8a8f98; }\n        '
+        return '\n            QPushButton {\n                background: #90D9D9;\n                color: #122828;\n                border: none;\n                border-radius: 8px;\n            }\n            QPushButton:hover { background: #78CACA; }\n            QPushButton:pressed { background: #5FAFAF; }\n            QPushButton:disabled { background: rgba(128,128,128,0.25); color: #8a8f98; }\n        '
 
     def _fatal_button_style(self):
         return (

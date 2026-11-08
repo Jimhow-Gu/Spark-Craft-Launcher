@@ -27,6 +27,7 @@ from core.music import (BackgroundMusicPlayer, list_music_files, music_dir)
 from ui.widgets.advanced_options import AdvancedOptionsPanel
 from ui.widgets.dark_dialog import DarkQuestionDialog
 from ui.widgets.form_styles import RADIO_BUTTON_STYLE, SLIDER_STYLE
+from ui.widgets.form_slider import PrimarySlider
 from ui.design import MUTED_DARK, MUTED_LIGHT, ON_ACCENT
 from ui.widgets.painted_icons import painted_icon
 from ui.widgets.collapsible_section import CollapsibleSection
@@ -233,7 +234,7 @@ class SettingsPage(QWidget):
         self.memory_optimize_check.toggled.connect(self._on_memory_optimize_toggled)
         mem_group_layout.addWidget(self.memory_optimize_check)
         slider_row = QHBoxLayout()
-        self.mem_slider = QSlider(Qt.Horizontal)
+        self.mem_slider = PrimarySlider(Qt.Horizontal)
         self.mem_slider.setRange(512, 32768)
         self.mem_slider.setTickInterval(512)
         self.mem_slider.setTickPosition(QSlider.TicksBelow)
@@ -267,7 +268,7 @@ class SettingsPage(QWidget):
         thread_tip.setStyleSheet('color: rgba(255,255,255,0.6); font-size: 12px;')
         thread_layout.addWidget(thread_tip)
         thread_row = QHBoxLayout()
-        self.thread_slider = QSlider(Qt.Horizontal)
+        self.thread_slider = PrimarySlider(Qt.Horizontal)
         self.thread_slider.setRange(1, 256)
         self.thread_slider.setValue(64)
         self.thread_slider.setTickInterval(16)
@@ -284,7 +285,7 @@ class SettingsPage(QWidget):
         speed_label = QLabel('速度限制')
         speed_label.setFixedWidth(70)
         speed_label.setStyleSheet('color: rgba(255,255,255,0.7);')
-        self.speed_limit_slider = QSlider(Qt.Horizontal)
+        self.speed_limit_slider = PrimarySlider(Qt.Horizontal)
         self.speed_limit_slider.setRange(0, 1000)
         self.speed_limit_slider.setValue(1000)
         self.speed_limit_slider.setTickInterval(100)
@@ -482,7 +483,7 @@ class SettingsPage(QWidget):
         bg_layout.addLayout(loop_row)
         opacity_row = QHBoxLayout()
         opacity_row.addWidget(QLabel('不透明度'))
-        self.bg_opacity_slider = QSlider(Qt.Horizontal)
+        self.bg_opacity_slider = PrimarySlider(Qt.Horizontal)
         self.bg_opacity_slider.setRange(0, 100)
         self.bg_opacity_slider.setValue(80)
         self.bg_opacity_slider.setStyleSheet(self._slider_style())
@@ -494,7 +495,7 @@ class SettingsPage(QWidget):
         bg_layout.addLayout(opacity_row)
         blur_row = QHBoxLayout()
         blur_row.addWidget(QLabel('背景模糊'))
-        self.bg_blur_slider = QSlider(Qt.Horizontal)
+        self.bg_blur_slider = PrimarySlider(Qt.Horizontal)
         self.bg_blur_slider.setRange(0, 30)
         self.bg_blur_slider.setValue(0)
         self.bg_blur_slider.setStyleSheet(self._slider_style())
@@ -506,7 +507,7 @@ class SettingsPage(QWidget):
         bg_layout.addLayout(blur_row)
         depth_row = QHBoxLayout()
         depth_row.addWidget(QLabel('GUI 背景深度'))
-        self.bg_depth_slider = QSlider(Qt.Horizontal)
+        self.bg_depth_slider = PrimarySlider(Qt.Horizontal)
         self.bg_depth_slider.setRange(0, 100)
         self.bg_depth_slider.setValue(0)
         self.bg_depth_slider.setToolTip('只加深界面控件，不改变背景图片；背景明暗由不透明度控制')
@@ -519,7 +520,7 @@ class SettingsPage(QWidget):
         bg_layout.addLayout(depth_row)
         volume_row = QHBoxLayout()
         volume_label = QLabel('背景音量')
-        self.bg_volume_slider = QSlider(Qt.Horizontal)
+        self.bg_volume_slider = PrimarySlider(Qt.Horizontal)
         self.bg_volume_slider.setRange(0, 100)
         self.bg_volume_slider.setValue(70)
         self.bg_volume_slider.setStyleSheet(self._slider_style())
@@ -579,7 +580,7 @@ class SettingsPage(QWidget):
         music_layout.addLayout(music_btn_row)
         volume_row = QHBoxLayout()
         volume_row.addWidget(QLabel('音乐音量'))
-        self.music_volume_slider = QSlider(Qt.Horizontal)
+        self.music_volume_slider = PrimarySlider(Qt.Horizontal)
         self.music_volume_slider.setRange(0, 100)
         self.music_volume_slider.setValue(60)
         self.music_volume_slider.setStyleSheet(self._slider_style())
@@ -719,10 +720,10 @@ class SettingsPage(QWidget):
         self.version_settings_btn.setMinimumHeight(40)
         self.version_settings_btn.setCursor(Qt.PointingHandCursor)
         self.version_settings_btn.setStyleSheet(
-            'QPushButton { background:#88DDDD; color:white; border:none;'
+            'QPushButton { background:#90D9D9; color:#122828; border:none;'
             ' border-radius:8px; padding:8px 32px; font-size:13px; font-weight:900; }'
-            'QPushButton:hover { background:#66BBBB; }'
-            'QPushButton:pressed { background:#409999; }'
+            'QPushButton:hover { background:#78CACA; }'
+            'QPushButton:pressed { background:#5FAFAF; }'
         )
         self.version_settings_btn.clicked.connect(self._open_selected_version_settings)
 
@@ -1493,7 +1494,7 @@ class SettingsPage(QWidget):
             self.java_combo.blockSignals(False)
 
     def _ok_button_style(self):
-        return 'QPushButton { background:#88DDDD; color:white; border:none; border-radius:6px; padding:6px 14px; } QPushButton:hover { background:#66BBBB; }'
+        return 'QPushButton { background:#90D9D9; color:#122828; border:none; border-radius:6px; padding:6px 14px; } QPushButton:hover { background:#78CACA; }'
 
     def _on_reset_settings(self):
         reply = QMessageBox.question(self, '恢复默认设置', '确定将所有设置恢复为默认值吗？\n账号、登录凭据、游戏目录和本地背景文件会保留。', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)

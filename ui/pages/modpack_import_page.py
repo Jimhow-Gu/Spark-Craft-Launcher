@@ -84,7 +84,7 @@ class ModpackImportPage(QWidget):
         self.cancel_btn.clicked.connect(self._on_cancel)
         self.cancel_btn.hide()
         self.start_btn = QPushButton('开始导入')
-        self.start_btn.setStyleSheet('QPushButton { background:#88DDDD; color:white; border:none; border-radius:6px; padding:7px 22px; }QPushButton:hover { background:#66BBBB; }QPushButton:disabled { background:#333; color:#777; }')
+        self.start_btn.setStyleSheet('QPushButton { background:#90D9D9; color:#122828; border:none; border-radius:6px; padding:7px 22px; }QPushButton:hover { background:#78CACA; }QPushButton:disabled { background:#333; color:#777; }')
         self.start_btn.clicked.connect(self._on_start)
         buttons.addWidget(self.cancel_btn)
         buttons.addWidget(self.start_btn)

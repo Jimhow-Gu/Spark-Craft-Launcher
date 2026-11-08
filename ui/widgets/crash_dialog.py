@@ -37,7 +37,7 @@ class CrashDialog(FramelessDialog):
         export_btn.setStyleSheet('\n            QPushButton { background:#f0a030; color:white; border:none;\n                          border-radius:6px; padding:8px 18px; }\n            QPushButton:hover { background:#d08020; }\n        ')
         export_btn.clicked.connect(self._export)
         ok_btn = QPushButton('确定')
-        ok_btn.setStyleSheet('\n            QPushButton { background:#88DDDD; color:white; border:none;\n                          border-radius:6px; padding:8px 18px; }\n            QPushButton:hover { background:#66BBBB; }\n        ')
+        ok_btn.setStyleSheet('\n            QPushButton { background:#90D9D9; color:#122828; border:none;\n                          border-radius:6px; padding:8px 18px; }\n            QPushButton:hover { background:#78CACA; }\n        ')
         ok_btn.clicked.connect(self.accept)
         row.addWidget(export_btn)
         row.addWidget(ok_btn)

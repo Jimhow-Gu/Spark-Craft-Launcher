@@ -396,7 +396,7 @@ class VersionDetailPage(QWidget):
         self.download_btn = QPushButton('开始下载')
         self.download_btn.setMinimumHeight(50)
         self.download_btn.setFont(ui_font(12, QFont.DemiBold))
-        self.download_btn.setStyleSheet('\n            QPushButton { background: #88DDDD; color: white; border: none; border-radius: 8px; }\n            QPushButton:hover { background: #66BBBB; }\n            QPushButton:pressed { background: #409999; }\n            QPushButton:disabled { background:#333; color:#777; }\n        ')
+        self.download_btn.setStyleSheet('\n            QPushButton { background: #90D9D9; color: #122828; border: none; border-radius: 8px; }\n            QPushButton:hover { background: #78CACA; }\n            QPushButton:pressed { background: #5FAFAF; }\n            QPushButton:disabled { background:#333; color:#777; }\n        ')
         self.download_btn.clicked.connect(self._on_download_clicked)
         btn_layout = QHBoxLayout()
         btn_layout.addStretch(1)
@@ -760,7 +760,7 @@ class VersionDetailPage(QWidget):
             label.setStyleSheet('color: rgba(255,255,255,0.6); font-size: 13px;')
             btn.setText('添加')
             btn.setEnabled(True)
-            btn.setStyleSheet('background:#88DDDD;color:white;border-radius:4px;padding:4px 8px;')
+            btn.setStyleSheet('background:#90D9D9;color:#122828;border-radius:4px;padding:4px 8px;')
 
     def _refresh_all_compatible_tips(self):
         fabric_selected = self._selections['fabric'] is not None
@@ -784,7 +784,7 @@ class VersionDetailPage(QWidget):
             forge_label.setStyleSheet('color:rgba(255,255,255,0.6);font-size:13px;')
             forge_btn.setText('添加')
             forge_btn.setEnabled(True)
-            forge_btn.setStyleSheet('background:#88DDDD;color:white;')
+            forge_btn.setStyleSheet('background:#90D9D9;color:#122828;')
         else:
             forge_label.setText('无可用版本')
             forge_label.setStyleSheet('color:rgba(255,255,255,0.4);font-size:13px;')
@@ -810,7 +810,7 @@ class VersionDetailPage(QWidget):
             neo_label.setStyleSheet('color:rgba(255,255,255,0.6);font-size:13px;')
             neo_btn.setText('添加')
             neo_btn.setEnabled(True)
-            neo_btn.setStyleSheet('background:#88DDDD;color:white;')
+            neo_btn.setStyleSheet('background:#90D9D9;color:#122828;')
         else:
             neo_label.setText('无可用版本')
             neo_label.setStyleSheet('color:rgba(255,255,255,0.4);font-size:13px;')
@@ -830,7 +830,7 @@ class VersionDetailPage(QWidget):
             opti_label.setStyleSheet('color:rgba(255,255,255,0.6);font-size:13px;')
             opti_btn.setText('添加')
             opti_btn.setEnabled(True)
-            opti_btn.setStyleSheet('background:#88DDDD;color:white;')
+            opti_btn.setStyleSheet('background:#90D9D9;color:#122828;')
         else:
             opti_label.setText('无可用版本')
             opti_label.setStyleSheet('color:rgba(255,255,255,0.4);font-size:13px;')
@@ -850,7 +850,7 @@ class VersionDetailPage(QWidget):
             fab_label.setStyleSheet('color:rgba(255,255,255,0.6);font-size:13px;')
             fab_btn.setText('添加')
             fab_btn.setEnabled(True)
-            fab_btn.setStyleSheet('background:#88DDDD;color:white;')
+            fab_btn.setStyleSheet('background:#90D9D9;color:#122828;')
         else:
             fab_label.setText('无可用版本')
             fab_label.setStyleSheet('color:rgba(255,255,255,0.4);font-size:13px;')
@@ -870,7 +870,7 @@ class VersionDetailPage(QWidget):
             api_label.setStyleSheet('color:rgba(255,255,255,0.6);font-size:13px;')
             api_btn.setText('添加')
             api_btn.setEnabled(True)
-            api_btn.setStyleSheet('background:#88DDDD;color:white;')
+            api_btn.setStyleSheet('background:#90D9D9;color:#122828;')
         else:
             api_label.setText('无可用版本')
             api_label.setStyleSheet('color:rgba(255,255,255,0.4);font-size:13px;')
@@ -1056,7 +1056,7 @@ class VersionDetailPage(QWidget):
         api_btn.setText('添加' if self._loader_versions['fabric_api'] else '无')
         api_btn.setEnabled(bool(self._loader_versions['fabric_api']))
         if self._loader_versions['fabric_api']:
-            api_btn.setStyleSheet('background:#88DDDD;color:white;')
+            api_btn.setStyleSheet('background:#90D9D9;color:#122828;')
             return
         api_btn.setStyleSheet('background:#3a3a3a;color:#888;')
 

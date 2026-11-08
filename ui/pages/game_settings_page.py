@@ -29,7 +29,9 @@ from core.launch import (
 )
 from core.repair import GameRepairWorker
 from ui.widgets.advanced_options import AdvancedOptionsPanel
+from ui.widgets.themed_checkbox import ThemedCheckBox
 from ui.widgets.form_styles import RADIO_BUTTON_STYLE, SLIDER_STYLE
+from ui.widgets.form_slider import PrimarySlider
 from ui.widgets.smooth_progress import SmoothProgressBar
 _DETACHED_REPAIR_WORKERS = set()
 _CLEANUP_REGISTERED = False
@@ -377,7 +379,7 @@ class GameSettingsPage(QWidget):
         mode_layout.addStretch(1)
         mem_layout.addLayout(mode_layout)
         slider_layout = QHBoxLayout()
-        self.mem_slider = QSlider(Qt.Horizontal)
+        self.mem_slider = PrimarySlider(Qt.Horizontal)
         self.mem_slider.setRange(512, 32768)
         self.mem_slider.setTickInterval(512)
         self.mem_slider.setTickPosition(QSlider.TicksBelow)
@@ -463,10 +465,10 @@ class GameSettingsPage(QWidget):
         self.global_settings_btn.setMinimumHeight(40)
         self.global_settings_btn.setCursor(Qt.PointingHandCursor)
         self.global_settings_btn.setStyleSheet(
-            'QPushButton { background:#88DDDD; color:white; border:none;'
+            'QPushButton { background:#90D9D9; color:#122828; border:none;'
             ' border-radius:8px; padding:8px 32px; font-size:13px; font-weight:900; }'
-            'QPushButton:hover { background:#66BBBB; }'
-            'QPushButton:pressed { background:#409999; }'
+            'QPushButton:hover { background:#78CACA; }'
+            'QPushButton:pressed { background:#5FAFAF; }'
         )
         self.global_settings_btn.clicked.connect(self.global_settings_requested.emit)
         settings_btn_row.addWidget(self.global_settings_btn)
@@ -618,11 +620,11 @@ class GameSettingsPage(QWidget):
                 install_btn.setMinimumWidth(154)
                 install_btn.setCursor(Qt.PointingHandCursor)
                 install_btn.setStyleSheet(
-                    'QPushButton { background:#88DDDD; color:white; border:none;'
+                    'QPushButton { background:#90D9D9; color:#122828; border:none;'
                     ' border-radius:8px; padding:10px 36px; font-size:14px;'
                     ' font-weight:900; }'
-                    'QPushButton:hover { background:#66BBBB; }'
-                    'QPushButton:pressed { background:#409999; }'
+                    'QPushButton:hover { background:#78CACA; }'
+                    'QPushButton:pressed { background:#5FAFAF; }'
                 )
                 install_btn.clicked.connect(
                     (lambda: self.tabs.setCurrentWidget(self.modify_tab))
@@ -761,10 +763,10 @@ class GameSettingsPage(QWidget):
         adv_hint.setWordWrap(True)
         adv_hint.setStyleSheet('color:rgba(255,255,255,0.55); font-size:12px;')
         advanced.content_layout.addWidget(adv_hint)
-        self._export_pack_res_check = QCheckBox('打包资源文件，以避免在导入时下载（库文件与资源索引）')
+        self._export_pack_res_check = ThemedCheckBox('打包资源文件，以避免在导入时下载（库文件与资源索引）')
         self._export_pack_res_check.setStyleSheet('color:rgba(255,255,255,0.85); font-size:13px;')
         advanced.content_layout.addWidget(self._export_pack_res_check)
-        self._export_modrinth_only_check = QCheckBox('仅从 Modrinth 下载 Mod（未匹配到 Modrinth 的本地 Mod 将不打包）')
+        self._export_modrinth_only_check = ThemedCheckBox('仅从 Modrinth 下载 Mod（未匹配到 Modrinth 的本地 Mod 将不打包）')
         self._export_modrinth_only_check.setStyleSheet('color:rgba(255,255,255,0.85); font-size:13px;')
         advanced.content_layout.addWidget(self._export_modrinth_only_check)
         cfg_row = QHBoxLayout()
@@ -802,10 +804,10 @@ class GameSettingsPage(QWidget):
         self._export_start_btn.setMinimumWidth(190)
         self._export_start_btn.setCursor(Qt.PointingHandCursor)
         self._export_start_btn.setStyleSheet(
-            'QPushButton { background:#88DDDD; color:white; border:none;'
+            'QPushButton { background:#90D9D9; color:#122828; border:none;'
             ' border-radius:9px; padding:10px 44px; font-size:15px; font-weight:900; }'
-            'QPushButton:hover { background:#66BBBB; }'
-            'QPushButton:pressed { background:#409999; }'
+            'QPushButton:hover { background:#78CACA; }'
+            'QPushButton:pressed { background:#5FAFAF; }'
             'QPushButton:disabled { background:rgba(128,128,128,0.25); color:#8a8f98; }'
         )
         self._export_start_btn.clicked.connect(self._on_export_clicked)
@@ -830,7 +832,7 @@ class GameSettingsPage(QWidget):
         layout = QHBoxLayout(box)
         layout.setContentsMargins(28 + indent * 30, 3, 12, 3)
         layout.setSpacing(10)
-        check = QCheckBox(text)
+        check = ThemedCheckBox(text)
         check.setChecked(checked)
         check.setEnabled(enabled)
         check.setStyleSheet('QCheckBox { color:rgba(255,255,255,0.9); font-size:13px; }')

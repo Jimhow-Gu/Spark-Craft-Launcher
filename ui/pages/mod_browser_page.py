@@ -1193,7 +1193,7 @@ class ProjectFilesDialog(QDialog):
         btn_row.addStretch(1)
         self.download_btn = QPushButton('下一步')
         self.download_btn.setEnabled(False)
-        self.download_btn.setStyleSheet('\n            QPushButton { background: #88DDDD; color: white; border: none;\n                          border-radius: 6px; padding: 8px 22px; }\n            QPushButton:hover { background: #66BBBB; }\n            QPushButton:disabled { background: #333; color: #777; }\n        ')
+        self.download_btn.setStyleSheet('\n            QPushButton { background: #90D9D9; color: #122828; border: none;\n                          border-radius: 6px; padding: 8px 22px; }\n            QPushButton:hover { background: #78CACA; }\n            QPushButton:disabled { background: #333; color: #777; }\n        ')
         self.download_btn.clicked.connect(self.accept)
         cancel_btn = QPushButton('返回' if embedded else '取消')
         cancel_btn.setStyleSheet('\n            QPushButton { background: #3a3a3a; color: white; border: none;\n                          border-radius: 6px; padding: 8px 22px; }\n            QPushButton:hover { background: #4a4a4a; }\n        ')
@@ -1709,7 +1709,7 @@ class ModBrowserPage(QWidget):
         return '\n            QComboBox {\n                background: rgba(255,255,255,0.06);\n                border: 1px solid rgba(255,255,255,0.12);\n                border-radius: 6px; color: #f0f0f0; padding: 3px 8px;\n            }\n            QComboBox::drop-down { border: none; }\n            QComboBox QAbstractItemView { background: #2a2a2a; color: #f0f0f0; }\n        '
 
     def _primary_style(self):
-        return 'QPushButton { background:#88DDDD; color:white; border:none; border-radius:6px; padding:6px 16px; } QPushButton:hover { background:#66BBBB; }'
+        return 'QPushButton { background:#90D9D9; color:#122828; border:none; border-radius:6px; padding:6px 16px; } QPushButton:hover { background:#78CACA; }'
 
     def _secondary_style(self):
         return 'QPushButton { background:#3a3a3a; color:white; border:none; border-radius:6px; padding:6px 12px; } QPushButton:hover { background:#4a4a4a; }'

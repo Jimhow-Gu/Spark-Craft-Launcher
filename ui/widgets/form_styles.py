@@ -1,6 +1,7 @@
 '''通用表单控件样式。'''
 
-SLIDER_STYLE = 'QSlider { background: transparent; }'
+# 不要给 QSlider 设置 QSS：QStyleSheetStyle 会绕过自定义 QProxyStyle 的圆角滑轨和滑钮。
+SLIDER_STYLE = ''
 
 RADIO_BUTTON_STYLE = '''
 QRadioButton {

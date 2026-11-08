@@ -7,7 +7,7 @@ from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath
 from PySide6.QtWidgets import QPushButton
 
 from core.app_font import ui_font
-from ui.design import ACCENT, ON_ACCENT
+from ui.design import ON_ACCENT, PRIMARY
 
 
 class LaunchProgressButton(QPushButton):
@@ -94,13 +94,13 @@ class LaunchProgressButton(QPushButton):
         elif self._working:
             base = QColor(24, 33, 35)
         else:
-            base = QColor(ACCENT)
+            base = QColor(PRIMARY)
         painter.fillPath(path, base)
         if self._working:
             fill = QRectF(rect.left(), rect.top(), max(2.0, rect.width() * self._progress), rect.height())
             fill_path = QPainterPath()
             fill_path.addRoundedRect(fill, radius, radius)
-            painter.fillPath(fill_path, QColor(ACCENT))
+            painter.fillPath(fill_path, QColor(PRIMARY))
             # 流动高光：证明按钮在持续推进，而不是卡住
             gradient = QLinearGradient(rect.left(), 0, rect.right(), 0)
             center = self._phase % 1.2
