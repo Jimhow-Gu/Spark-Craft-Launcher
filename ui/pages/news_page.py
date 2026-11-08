@@ -11,6 +11,7 @@ import html
 import logging
 import re
 from pathlib import Path
+from urllib.parse import quote
 
 from PySide6.QtCore import (Qt, QEvent, QEasingCurve, QPropertyAnimation, QSize, QTimer, QUrl)
 from PySide6.QtGui import QDesktopServices, QIcon, QPalette, QPixmap
@@ -23,8 +24,11 @@ from PySide6.QtWidgets import (
 from core.app_font import ui_font
 from core.config import ConfigManager
 from core.paths import safe_rmtree, scl_dir
-from ui.pages.news_detail import VersionDetailPage
-from ui.widgets.news_visuals import NewsImageLabel, TranslationPending, pixmap_from_data
+from ui.pages.news_detail import VersionDetailPage, detail_xaml_to_html
+from ui.widgets.news_visuals import (
+    BackToTopButton, NewsContentBrowser, NewsImageLabel, TranslationPending,
+    pixmap_from_data,
+)
 from ui.widgets.toast import show_toast
 
 NEWS_URL = 'https://mcnews.meloong.com'
@@ -89,6 +93,21 @@ def parse_news_page(text):
                 if detail_url:
                     detail_url = detail_url.replace('VersionDetail.json', 'VersionDetail.xaml')
                     break
+            content_html = ''
+            if '<FlowDocument>' in body and '翻译施工中' not in body:
+                try:
+                    content_html = detail_xaml_to_html(body, False)
+                except Exception:
+                    logger.warning('转换新闻正文失败', exc_info=True)
+                    content_html = ''
+            if not detail_url and content_html:
+                plain = re.sub(r'<[^>]+>', '', body)
+                plain = re.sub(r'\s+', '', html.unescape(plain))
+                if len(plain) >= 1600:
+                    detail_url = (
+                        'https://mcnews.meloong.com/VersionDetail.xaml?ver='
+                        + quote(version, safe='')
+                    )
             items.append({
                 'kind': 'version',
                 'title': title or version,
@@ -97,6 +116,8 @@ def parse_news_page(text):
                 'images': image_urls,
                 'links': links,
                 'translation_pending': '翻译施工中' in body,
+                'content_html': content_html,
+                'content_xaml': body if content_html else '',
                 'detail_url': detail_url,
             })
             continue
@@ -153,9 +174,15 @@ class NewsCard(QFrame):
         self._expanded = bool(expanded)
         self._body_anim = None
         self._page = page
+        self._light = self.palette().color(QPalette.Window).lightness() > 128
         self._image_urls = list(data.get('images') or [])
         self._image_requested = False
         self.image_label = None
+        self._content_html = str(data.get('content_html') or '')
+        self._content_xaml = str(data.get('content_xaml') or '')
+        self._content_host = None
+        self._content_layout = None
+        self._content_browser = None
         self.body.setMaximumHeight(16777215 if expanded else 0)
         body_layout = QVBoxLayout(self.body)
         body_layout.setContentsMargins(0, 0, 0, 0)
@@ -171,6 +198,16 @@ class NewsCard(QFrame):
             body_layout.addWidget(self.image_label)
             if expanded:
                 self._load_image()
+
+        if self._content_html:
+            self._content_host = QWidget()
+            self._content_host.setStyleSheet('background: transparent;')
+            self._content_layout = QVBoxLayout(self._content_host)
+            self._content_layout.setContentsMargins(0, 0, 0, 0)
+            self._content_layout.setSpacing(0)
+            body_layout.addWidget(self._content_host)
+            if expanded:
+                self._load_content()
 
         if data.get('translation_pending'):
             body_layout.addWidget(TranslationPending())
@@ -231,6 +268,45 @@ class NewsCard(QFrame):
     def _toggle(self):
         self._animate_body(not self._expanded)
 
+    def _content_html_for_theme(self):
+        if self._content_xaml:
+            try:
+                converted = detail_xaml_to_html(self._content_xaml, self._light)
+            except Exception:
+                logger.warning('转换新闻正文主题失败', exc_info=True)
+                converted = ''
+            if converted:
+                return converted
+        return self._content_html
+
+    def set_light(self, light):
+        light = bool(light)
+        if light == self._light:
+            return
+        self._light = light
+        if self._content_browser is None:
+            return
+        html_text = self._content_html_for_theme()
+        if not html_text:
+            return
+        try:
+            self._content_browser.set_html(html_text, max(240, self.width() - 36))
+        except RuntimeError:
+            pass
+
+    def _load_content(self):
+        if self._content_browser is not None:
+            return
+        if self._content_layout is None:
+            return
+        html_text = self._content_html_for_theme()
+        if not html_text:
+            return
+        browser = NewsContentBrowser()
+        browser.set_html(html_text, max(240, self.width() - 36))
+        self._content_layout.addWidget(browser)
+        self._content_browser = browser
+
     def _load_image(self):
         '''折叠卡片的图片延迟到展开时再下载，减少启动资源占用。'''
 
@@ -244,6 +320,7 @@ class NewsCard(QFrame):
         self.toggle_btn.setText('▲' if expand else '▼')
         if expand:
             self._load_image()
+            self._load_content()
         if self._body_anim is not None:
             try:
                 self._body_anim.stop()
@@ -385,11 +462,15 @@ class NewsPage(QWidget):
         self.scroll.setStyleSheet('QScrollArea { background: transparent; border: none; }')
         self.content = QWidget()
         self.content.setStyleSheet('background: transparent;')
-        self.cards_layout = QVBoxLayout(self.content)
+        content_layout = QVBoxLayout(self.content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+        self.cards_container = QWidget()
+        self.cards_container.setStyleSheet('background: transparent;')
+        self.cards_layout = QVBoxLayout(self.cards_container)
         self.cards_layout.setContentsMargins(40, 4, 40, 24)
         self.cards_layout.setSpacing(12)
-        self.scroll.setWidget(self.content)
-        news_layout.addWidget(self.scroll, 1)
+        content_layout.addWidget(self.cards_container, 1)
 
         self.footer = QLabel(
             f'<a href="{NEWS_SOURCE_URL}" style="color:#88DDDD;">'
@@ -398,8 +479,27 @@ class NewsPage(QWidget):
         self.footer.setTextFormat(Qt.RichText)
         self.footer.setOpenExternalLinks(True)
         self.footer.setAlignment(Qt.AlignCenter)
+        self.footer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.footer.setStyleSheet(f'color: {self._muted_color()}; font-size:11px; padding:6px;')
-        news_layout.addWidget(self.footer)
+        content_layout.addWidget(self.footer)
+        self.scroll.setWidget(self.content)
+        news_layout.addWidget(self.scroll, 1)
+
+        self._back_to_top_visible = False
+        self._back_to_top_scroll_anim = None
+        self.back_to_top_btn = BackToTopButton(self.news_view)
+        self.back_to_top_btn.clicked.connect(self._scroll_to_top)
+        self.back_to_top_btn.installEventFilter(self)
+        scroll_bar = self.scroll.verticalScrollBar()
+        scroll_bar.valueChanged.connect(self._update_back_to_top)
+        scroll_bar.rangeChanged.connect(self._on_news_scroll_range_changed)
+        scroll_bar.sliderPressed.connect(self._stop_back_to_top_scroll)
+        scroll_bar.actionTriggered.connect(
+            lambda _action: self._stop_back_to_top_scroll()
+        )
+        self.scroll.viewport().installEventFilter(self)
+        scroll_bar.installEventFilter(self)
+        self.stack.currentChanged.connect(self._on_news_stack_changed)
 
         self._image_manager.finished.connect(self._on_image_finished)
         self._homepage_mode = 'preset'
@@ -419,6 +519,103 @@ class NewsPage(QWidget):
             light = False
         return '#3f6666' if light else 'rgba(205,238,238,0.78)'
 
+    def _on_news_scroll_range_changed(self, _minimum, _maximum):
+        self._update_back_to_top()
+
+    def _on_news_stack_changed(self, _index):
+        if self.stack.currentWidget() is self.news_view:
+            QTimer.singleShot(0, self._update_back_to_top)
+            return
+        self._stop_back_to_top_scroll()
+        self._back_to_top_visible = False
+        try:
+            self.back_to_top_btn.set_reveal(0.0)
+            self.back_to_top_btn.hide()
+        except RuntimeError:
+            pass
+
+    def _update_back_to_top(self, _value=None):
+        button = getattr(self, 'back_to_top_btn', None)
+        if button is None:
+            return
+        if self.stack.currentWidget() is not self.news_view:
+            return
+        bar = self.scroll.verticalScrollBar()
+        maximum = bar.maximum()
+        value = bar.value()
+        if maximum <= 0 or value <= 0:
+            if self._back_to_top_visible:
+                self._back_to_top_visible = False
+                button.hide_animated()
+            elif button.isVisible() and button.get_reveal() >= 0.999:
+                button.hide_animated()
+            return
+        threshold = max(1, int(round(maximum * 3.0 / 8.0)))
+        if value >= threshold and not self._back_to_top_visible:
+            self._back_to_top_visible = True
+            self._position_back_to_top()
+            button.show_animated()
+
+    def _scroll_to_top(self):
+        bar = self.scroll.verticalScrollBar()
+        self._stop_back_to_top_scroll()
+        if bar.value() <= 0:
+            self._update_back_to_top()
+            return
+        animation = QPropertyAnimation(bar, b'value', self)
+        animation.setDuration(max(300, min(560, int(bar.value() / 10))))
+        animation.setStartValue(bar.value())
+        animation.setEndValue(0)
+        animation.setEasingCurve(QEasingCurve.OutCubic)
+        animation.finished.connect(
+            lambda anim=animation: self._finish_back_to_top_scroll(anim)
+        )
+        self._back_to_top_scroll_anim = animation
+        animation.start()
+
+    def _finish_back_to_top_scroll(self, animation):
+        if self._back_to_top_scroll_anim is animation:
+            self._back_to_top_scroll_anim = None
+        animation.deleteLater()
+        self._update_back_to_top()
+
+    def _stop_back_to_top_scroll(self):
+        animation = self._back_to_top_scroll_anim
+        self._back_to_top_scroll_anim = None
+        if animation is None:
+            return
+        try:
+            animation.stop()
+            animation.deleteLater()
+        except RuntimeError:
+            pass
+
+    def _position_back_to_top(self):
+        button = getattr(self, 'back_to_top_btn', None)
+        if button is None:
+            return
+        scroll_bottom = self.scroll.y() + self.scroll.height()
+        scroll_right = self.scroll.x() + self.scroll.width()
+        x = scroll_right - button.width() - 24
+        y = scroll_bottom - button.height() - 20
+        button.move(max(0, x), max(0, y))
+        button.raise_()
+
+    def eventFilter(self, obj, event):
+        if obj is getattr(self, 'back_to_top_btn', None) and event.type() == QEvent.Resize:
+            QTimer.singleShot(0, self._position_back_to_top)
+        elif event.type() == QEvent.Wheel and obj in (
+            self.scroll.viewport(),
+            self.scroll.verticalScrollBar(),
+        ):
+            self._stop_back_to_top_scroll()
+        return super().eventFilter(obj, event)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, 'back_to_top_btn'):
+            QTimer.singleShot(0, self._position_back_to_top)
+
     def apply_homepage_mode(self, mode=None):
         if mode is None:
             mode = str(ConfigManager().get('homepage_mode', 'preset') or 'preset')
@@ -429,6 +626,9 @@ class NewsPage(QWidget):
             self.load()
         elif not visible:
             self._release_detail_pages()
+        if visible and hasattr(self, 'back_to_top_btn'):
+            QTimer.singleShot(0, self._position_back_to_top)
+            QTimer.singleShot(0, self._update_back_to_top)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -436,6 +636,8 @@ class NewsPage(QWidget):
             return
         if not self._loaded:
             self.load()
+        QTimer.singleShot(0, self._position_back_to_top)
+        self._update_back_to_top()
 
     def hideEvent(self, event):
         super().hideEvent(event)
@@ -445,6 +647,7 @@ class NewsPage(QWidget):
 
     def shutdown(self):
         self._error_notice_timer.stop()
+        self._stop_back_to_top_scroll()
         for detail in list(self._detail_pages.values()):
             try:
                 detail.shutdown()
@@ -696,6 +899,8 @@ class NewsPage(QWidget):
 
     def show_news_home(self):
         self.stack.setCurrentWidget(self.news_view)
+        QTimer.singleShot(0, self._position_back_to_top)
+        QTimer.singleShot(0, self._update_back_to_top)
 
     def _release_detail_pages(self):
         if not self._detail_pages:

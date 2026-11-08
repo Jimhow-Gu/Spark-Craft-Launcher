@@ -119,6 +119,19 @@ class WindowTitleBar(QFrame):
         overlay.setGeometry(self.rect())
         overlay.lower()
 
+    def apply_control_scale(self, scale):
+        height = max(44, int(round(self.HEIGHT * float(scale))))
+        self.setFixedHeight(height)
+        if hasattr(self, '_firework_overlay'):
+            self._firework_overlay.setGeometry(self.rect())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        try:
+            self._firework_overlay.setGeometry(self.rect())
+        except (AttributeError, RuntimeError):
+            pass
+
     def _update_logo(self):
         '''浅色标题栏下把偏白的 logo 压暗，避免与浅色背景融在一起。'''
 

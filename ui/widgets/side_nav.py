@@ -19,6 +19,14 @@ class SideNavDelegate(QStyledItemDelegate):
         self.collapsed = True
         self.light = False
         self._text_opacity = 0.0
+        self._scale = 1.0
+
+    def set_scale(self, scale):
+        self._scale = max(0.72, min(1.0, float(scale)))
+        parent = self.parent()
+        if parent is not None:
+            parent.doItemsLayout()
+            parent.viewport().update()
 
     def get_text_opacity(self):
         return self._text_opacity
@@ -51,7 +59,7 @@ class SideNavDelegate(QStyledItemDelegate):
                 painter.setOpacity(self._text_opacity)
                 painter.setPen(QColor(MUTED_LIGHT if self.light else MUTED_DARK))
                 font = QFont(option.font)
-                font.setPointSizeF(9.0)
+                font.setPointSizeF(max(8.0, 9.0 * self._scale))
                 font.setWeight(QFont.Medium)
                 painter.setFont(font)
                 painter.drawText(
@@ -81,7 +89,7 @@ class SideNavDelegate(QStyledItemDelegate):
             painter.drawRoundedRect(body, 9.0, 9.0)
 
         icon_name = index.data(NAV_ICON_ROLE) or ''
-        size = 24
+        size = max(18, int(round(24 * self._scale)))
         if selected:
             icon_color = ON_ACCENT
         else:
@@ -93,7 +101,7 @@ class SideNavDelegate(QStyledItemDelegate):
         if not self.collapsed:
             text = str(index.data(Qt.DisplayRole) or '')
             font = QFont(option.font)
-            font.setPointSizeF(10.5)
+            font.setPointSizeF(max(9.5, 10.5 * self._scale))
             font.setWeight(QFont.Medium)
             painter.setFont(font)
             metrics = QFontMetrics(font)
@@ -135,9 +143,8 @@ class SideNavDelegate(QStyledItemDelegate):
 
     def sizeHint(self, option, index):
         if index.data(NAV_HEADER_ROLE):
-            return QSize(0, 18)
-        # 36px 让 540 高度窗口仍能完整容纳导航、媒体控件和版本标签。
-        return QSize(0, 36)
+            return QSize(0, max(15, int(round(18 * self._scale))))
+        return QSize(0, max(26, int(round(36 * self._scale))))
 
 
 class SideNavList(QListWidget):
@@ -168,6 +175,9 @@ class SideNavList(QListWidget):
         if row != self._hover_row:
             self._hover_row = row
             self.viewport().update()
+
+    def apply_control_scale(self, scale):
+        self._delegate.set_scale(scale)
 
     def leaveEvent(self, event):
         self._hover_row = -1

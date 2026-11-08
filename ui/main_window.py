@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QListWidgetItem, QLabel, QMessageBox, QApplication, QSizeGrip, QGraphicsColorizeEffect, QPushButton, QGraphicsOpacityEffect, QFrame, QDialog)
+from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QListWidgetItem, QLabel, QMessageBox, QApplication, QGraphicsColorizeEffect, QPushButton, QGraphicsOpacityEffect, QFrame, QDialog)
 from PySide6.QtCore import (Qt, QPoint, QPropertyAnimation, QVariantAnimation, QEasingCurve, QTimer, QSize, QEvent, QRect, QRectF)
 from PySide6.QtGui import QColor, QCursor, QFont, QPainterPath, QPixmap, QRegion
 import os
@@ -21,6 +21,7 @@ from ui.widgets.background_widget import BackgroundWidget
 from ui.widgets.snow_effect import SnowOverlay
 from ui.widgets.fireworks_effect import TitleFireworksOverlay
 from ui.widgets.window_border import WindowBorderOverlay
+from ui.widgets.window_resize import WindowResizeOverlay
 from ui.widgets.side_panel import SidePanel
 from ui.widgets.side_nav import SideNavList, NAV_HEADER_ROLE, NAV_ICON_ROLE
 from ui.widgets.brand_logo import BrandLogo
@@ -29,6 +30,7 @@ from core.download_manager import DownloadManager
 from core.build_info import BUILD_LABEL, RELEASE_BUILD, RESOURCE_PACK_SEQUENCE, EXECUTABLE_BUILD
 from core.update import CURRENT_VERSION
 from core.seasonal import is_fireworks_period, is_snow_period
+from ui.scaling import apply_control_scale, apply_widget_scale, control_scale
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -44,10 +46,25 @@ class MainWindow(QMainWindow):
         width = 1500
         if available is not None:
             width = min(width, int(available.width() * 0.86), int(available.height() * 0.86 * 16 / 9))
-        width = max(960, int(width * 6 / 7))
+        width = max(816, int(width * 6 / 7))
         width = width // 16 * 16
-        height = width * 9 // 16
-        self.setFixedSize(width, height)
+        try:
+            from core.config import ConfigManager
+            saved_width = int(ConfigManager().get('launcher_window_width', 0) or 0)
+        except Exception:
+            saved_width = 0
+        if saved_width >= 816:
+            width = saved_width
+        if available is not None:
+            max_width = int(available.height() * 16 / 9)
+            width = min(width, available.width(), max_width)
+        width = max(816, width)
+        height = max(459, int(round(width * 9 / 16)))
+        self._aspect_guard = False
+        self._ui_scale = 0.0
+        self._ui_scale_initialized = False
+        self.resize(width, height)
+        self.setMinimumSize(816, 459)
         self.setWindowTitle('Spark Craft Launcher')
         app = QApplication.instance()
         if app is not None and not app.windowIcon().isNull():
@@ -95,10 +112,7 @@ class MainWindow(QMainWindow):
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
         self.root_layout.addWidget(self.body, 1)
-        self.size_grip = QSizeGrip(self.central)
-        self.size_grip.setFixedSize(16, 16)
-        self.size_grip.setStyleSheet('background:transparent;')
-        self.size_grip.hide()
+        self.resize_overlay = WindowResizeOverlay(self)
         self._sidebar_collapsed_width = 90
         self._sidebar_expanded_width = 180
         self.title_bar.set_left_margin(self._sidebar_collapsed_width + 12)
@@ -517,7 +531,7 @@ class MainWindow(QMainWindow):
         ]
         if not buttons:
             return []
-        button_w = 28
+        button_w = max(1, int(self.video_toggle_btn.width()))
         gap = 2 if len(buttons) >= 3 else 6
         group_width = button_w * len(buttons) + gap * (len(buttons) - 1)
         start = max(0, (total - group_width) // 2)
@@ -1013,6 +1027,17 @@ class MainWindow(QMainWindow):
             self._pause_background_media()
         elif event.type() == QEvent.ApplicationActivate:
             self._resume_background_media()
+        elif event.type() == QEvent.Show and 0.0 < getattr(self, '_ui_scale', 0.0) < 0.999:
+            try:
+                if (
+                    isinstance(obj, QWidget)
+                    and hasattr(self, 'central')
+                    and obj is not self.central
+                    and self.central.isAncestorOf(obj)
+                ):
+                    apply_widget_scale(obj, self._ui_scale)
+            except RuntimeError:
+                pass
         return super().eventFilter(obj, event)
 
     def changeEvent(self, event):
@@ -1391,15 +1416,73 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._apply_window_mask()
-        QTimer.singleShot(0, self._apply_window_mask)
+    def _apply_ui_scale(self, force=False):
+        '''窗口缩小时压缩控件尺寸，布局间距保持不变。'''
+
+        if not hasattr(self, 'title_bar') or not hasattr(self, 'nav_list'):
+            return
+        if not hasattr(self, 'media_row'):
+            return
+        scale = control_scale(self.width())
+        if not force and abs(scale - getattr(self, '_ui_scale', 0.0)) < 0.001:
+            return
+        self._ui_scale = scale
         try:
-            self.size_grip.move(max(0, self.central.width() - 18), max(0, self.central.height() - 18))
-            self.size_grip.raise_()
+            self.title_bar.apply_control_scale(scale)
         except Exception:
             pass
+        try:
+            self._sidebar_header.setFixedHeight(self.title_bar.height())
+        except Exception:
+            pass
+        try:
+            self.nav_list.apply_control_scale(scale)
+        except Exception:
+            pass
+        try:
+            button_h = max(20, int(round(28 * scale)))
+            self.media_row.setFixedHeight(button_h)
+        except Exception:
+            pass
+        apply_control_scale(self.central, scale)
+        try:
+            self._update_sidebar_geometry()
+        except Exception:
+            pass
+        try:
+            self._position_media_buttons()
+        except Exception:
+            pass
+        try:
+            if self.snow_overlay.isVisible():
+                self.snow_overlay.raise_()
+            if hasattr(self, 'resize_overlay'):
+                self.resize_overlay.raise_()
+        except Exception:
+            pass
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not getattr(self, '_aspect_guard', False):
+            width = self.width()
+            height = self.height()
+            if width > 0 and height > 0:
+                target_width = width
+                target_height = height
+                if width * 9 > height * 16:
+                    target_height = max(459, int(round(width * 9 / 16)))
+                else:
+                    target_width = max(816, int(round(height * 16 / 9)))
+                if (
+                    abs(target_width - width) > 1
+                    or abs(target_height - height) > 1
+                ):
+                    self._aspect_guard = True
+                    self.resize(target_width, target_height)
+                    self._aspect_guard = False
+                    return
+        self._apply_window_mask()
+        QTimer.singleShot(0, self._apply_window_mask)
         try:
             self.title_bar.setFixedWidth(self.central.width())
         except Exception:
@@ -1416,12 +1499,30 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self._update_sidebar_geometry()
+        try:
+            self.resize_overlay.update_geometry()
+        except Exception:
+            pass
+        try:
+            self._apply_ui_scale()
+        except Exception:
+            pass
 
     def showEvent(self, event):
         super().showEvent(event)
         self._apply_window_mask()
         QTimer.singleShot(0, self._apply_window_mask)
         QTimer.singleShot(120, self._apply_window_mask)
+        try:
+            self.resize_overlay.update_geometry()
+        except Exception:
+            pass
+        if not getattr(self, '_ui_scale_initialized', False):
+            try:
+                self._apply_ui_scale(force=True)
+                self._ui_scale_initialized = True
+            except Exception:
+                pass
         if getattr(self, '_fade_in_done', False):
             return
         self._fade_in_done = True
@@ -1702,6 +1803,14 @@ class MainWindow(QMainWindow):
                     event.ignore()
                     return
             self._closing = True
+            try:
+                from core.config import ConfigManager
+                config = ConfigManager()
+                config.set('launcher_window_width', int(self.width()), auto_save=False)
+                config.set('launcher_window_height', int(self.height()), auto_save=False)
+                config.save()
+            except Exception:
+                pass
             from core.single_instance import release_single_instance
             release_single_instance()
             import threading

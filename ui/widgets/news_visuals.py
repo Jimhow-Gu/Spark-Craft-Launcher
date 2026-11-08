@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QBuffer, QByteArray, Qt
-from PySide6.QtGui import QImageReader, QPainter, QPixmap
+from PySide6.QtCore import (
+    Property, QBuffer, QByteArray, QPointF, QRectF, QTimer, Qt,
+    QEasingCurve, QPropertyAnimation,
+)
+from PySide6.QtGui import (
+    QColor, QImageReader, QLinearGradient, QPainter, QPalette, QPen, QPixmap,
+)
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget,
+    QAbstractButton, QFrame, QHBoxLayout, QLabel, QSizePolicy, QTextBrowser,
+    QVBoxLayout, QWidget,
 )
 
 from ui.widgets.fireworks_loader import FireworksLoader
@@ -48,6 +54,7 @@ class NewsImageLabel(QWidget):
         self._source = None
         self.setFixedHeight(180)
         self.setMinimumWidth(240)
+        self.setProperty('_scl_scalable', True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._placeholder = QWidget(self)
         self._placeholder.setAttribute(Qt.WA_TransparentForMouseEvents, True)
@@ -136,3 +143,192 @@ class TranslationPending(QWidget):
         label.setAlignment(Qt.AlignCenter)
         label.setStyleSheet('color:#e3fcfc; font-size:15px; font-weight:700;')
         layout.addWidget(label)
+
+
+class BackToTopButton(QAbstractButton):
+    '''新闻页右下角的回到顶部按钮，显示和隐藏都使用缩放动画。'''
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(46, 46)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setToolTip('回到顶部')
+        self.setAccessibleName('回到顶部')
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self._reveal = 0.0
+        self._interactive = False
+        self._hover = False
+        self._light = self.palette().color(QPalette.Window).lightness() > 128
+        self._anim = QPropertyAnimation(self, b'reveal', self)
+        self._anim.finished.connect(self._on_anim_finished)
+        self.hide()
+
+    def get_reveal(self):
+        return self._reveal
+
+    def set_reveal(self, value):
+        self._reveal = max(0.0, min(1.0, float(value)))
+        self.update()
+
+    reveal = Property(float, get_reveal, set_reveal)
+
+    def set_light(self, light):
+        light = bool(light)
+        if light == self._light:
+            return
+        self._light = light
+        self.update()
+
+    def show_animated(self):
+        self._anim.stop()
+        self._interactive = True
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.show()
+        self.raise_()
+        self._anim.setDuration(180)
+        self._anim.setEasingCurve(QEasingCurve.OutBack)
+        self._anim.setStartValue(float(self._reveal))
+        self._anim.setEndValue(1.0)
+        self._anim.start()
+
+    def hide_animated(self):
+        if not self.isVisible() and self._reveal <= 0.001:
+            return
+        self._interactive = False
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._anim.stop()
+        self._anim.setDuration(140)
+        self._anim.setEasingCurve(QEasingCurve.InCubic)
+        self._anim.setStartValue(float(self._reveal))
+        self._anim.setEndValue(0.0)
+        self._anim.start()
+
+    def _on_anim_finished(self):
+        if not self._interactive and self._reveal <= 0.001:
+            self.hide()
+
+    def enterEvent(self, event):
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hover = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        if self._reveal <= 0.001:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        side = max(1.0, min(self.width(), self.height()) - 2.0)
+        painter.translate(self.width() / 2.0, self.height() / 2.0)
+        painter.scale(self._reveal, self._reveal)
+        if self._light:
+            if self.isDown():
+                top_color, bottom_color = '#3A8F8F', '#276F6F'
+            elif self._hover or self.underMouse():
+                top_color, bottom_color = '#5DBDBD', '#3F9595'
+            else:
+                top_color, bottom_color = '#4FAFAF', '#338282'
+            arrow_color = QColor(248, 251, 251, 255)
+            rim_color = QColor(255, 255, 255, 90)
+        else:
+            if self.isDown():
+                top_color, bottom_color = '#79D0D0', '#57ACAC'
+            elif self._hover or self.underMouse():
+                top_color, bottom_color = '#B4F3F3', '#8BDCDC'
+            else:
+                top_color, bottom_color = '#9DE7E7', '#72CACA'
+            arrow_color = QColor(18, 40, 40, 255)
+            rim_color = QColor(255, 255, 255, 55)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 45))
+        painter.drawEllipse(QRectF(-side / 2.0, -side / 2.0 + 1.5, side, side))
+        circle = QRectF(-side / 2.0, -side / 2.0, side, side)
+        gradient = QLinearGradient(circle.topLeft(), circle.bottomLeft())
+        gradient.setColorAt(0.0, QColor(top_color))
+        gradient.setColorAt(1.0, QColor(bottom_color))
+        painter.setBrush(gradient)
+        painter.drawEllipse(circle)
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(rim_color, 1.0))
+        painter.drawEllipse(circle.adjusted(0.5, 0.5, -0.5, -0.5))
+        pen = QPen(
+            arrow_color,
+            max(2.0, side * 0.075),
+            Qt.SolidLine,
+            Qt.RoundCap,
+            Qt.RoundJoin,
+        )
+        painter.setPen(pen)
+        painter.drawLine(
+            QPointF(-side * 0.20, -side * 0.20),
+            QPointF(side * 0.20, -side * 0.20),
+        )
+        painter.drawLine(
+            QPointF(0.0, -side * 0.09),
+            QPointF(0.0, side * 0.24),
+        )
+        painter.drawLine(
+            QPointF(0.0, -side * 0.09),
+            QPointF(-side * 0.17, side * 0.07),
+        )
+        painter.drawLine(
+            QPointF(0.0, -side * 0.09),
+            QPointF(side * 0.17, side * 0.07),
+        )
+        painter.end()
+
+
+class NewsContentBrowser(QTextBrowser):
+    '''自适应高度的新闻正文，不使用内部滚动条。'''
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setOpenExternalLinks(True)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.document().setDocumentMargin(0)
+        self.setStyleSheet(
+            'QTextBrowser { background:transparent; border:none; '
+            'padding:0; color:#f0f1f3; }'
+        )
+        self._last_width = -1
+
+    def set_html(self, html_text, width_hint=0):
+        self.setHtml(str(html_text or ''))
+        self._fit_height(width_hint)
+        QTimer.singleShot(0, self._fit_height)
+
+    def _fit_height(self, width_hint=0):
+        try:
+            width = int(self.viewport().width())
+            if width < 80:
+                width = int(width_hint) if width_hint else 0
+            if width < 80:
+                width = max(80, self.width())
+            document = self.document()
+            document.setTextWidth(width)
+            height = max(1, int(document.size().height()) + 2)
+            if abs(height - self.height()) > 1:
+                self.setFixedHeight(height)
+            self._last_width = width
+        except RuntimeError:
+            pass
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        width = int(self.viewport().width())
+        if width != self._last_width:
+            self._last_width = width
+            QTimer.singleShot(0, self._fit_height)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._fit_height)

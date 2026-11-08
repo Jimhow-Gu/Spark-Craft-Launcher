@@ -88,20 +88,54 @@ def detail_xaml_to_html(source, light=False):
         tag = {'H1': 'h1', 'H2': 'h2', 'H3': 'h3', 'H4': 'h4'}.get(style, 'p')
         return f'<{tag}>{inline(inner)}</{tag}>'
 
+    def devnote_section(match):
+        inner = match.group(1)
+        # PCL 的开发者注释在 Section 内重复写了一次标题，这里去掉由 CSS 统一渲染。
+        inner = re.sub(
+            r'<Paragraph\b[^>]*>.*?开发者注释.*?</Paragraph>',
+            '', inner, count=1, flags=re.S,
+        )
+        return (
+            '<div class="devnote"><div class="devnote-title">开发者注释</div>'
+            + inner + '</div>'
+        )
+
+    body = re.sub(
+        r'<Section\b[^>]*devnoteQuote[^>]*>(.*?)</Section>',
+        devnote_section, body, flags=re.S | re.I,
+    )
     body = re.sub(r'<Paragraph\b([^>]*)>(.*?)</Paragraph>', paragraph, body, flags=re.S)
     body = re.sub(r'<ListItem\b[^>]*>', '<li>', body, flags=re.I)
     body = re.sub(r'</ListItem>', '</li>', body, flags=re.I)
     body = re.sub(r'<List\b[^>]*>', '<ul>', body, flags=re.I)
     body = re.sub(r'</List>', '</ul>', body, flags=re.I)
-    body = re.sub(r'<(?!/?(?:a|b|i|u|br|p|ul|li|h[1-4])\b)[^>]*>', '', body)
+    body = re.sub(r'<(?!/?(?:a|b|i|u|br|p|ul|li|h[1-4]|div)\b)[^>]*>', '', body)
     text_color = '#1b1b1b' if light else '#f0f1f3'
     accent = '#2f6f6f' if light else '#bfe3e3'
+    if light:
+        devnote_bg = '#F4F9CD'
+        devnote_border = '#7FAE36'
+        devnote_title = '#5E8626'
+        devnote_text = '#26351B'
+        devnote_link = '#356B19'
+    else:
+        devnote_bg = '#293223'
+        devnote_border = '#9CCB5B'
+        devnote_title = '#C7E98F'
+        devnote_text = '#E7EEDB'
+        devnote_link = '#B9E986'
     return (
         '<html><head><style>'
-        f'body {{ color:{text_color}; font-family:"Microsoft YaHei UI"; font-size:14px; line-height:1.65; }}'
+        f'body {{ margin:0; color:{text_color}; font-family:"Microsoft YaHei UI"; font-size:14px; line-height:1.65; }}'
         f'h1,h2,h3,h4 {{ color:{accent}; margin:14px 0 6px 0; }}'
         'p { margin:6px 0; } ul { margin:4px 0 8px 18px; } li { margin:3px 0; }'
         f'a {{ color:{accent}; }}'
+        f'.devnote {{ background-color:{devnote_bg}; border-left:3px solid {devnote_border};'
+        ' padding:9px 12px; margin:11px 0; }'
+        f'.devnote-title {{ color:{devnote_title}; font-weight:700; font-size:15px;'
+        ' margin:0 0 5px 0; }'
+        f'.devnote p, .devnote li {{ color:{devnote_text}; margin:5px 0; }}'
+        f'.devnote a {{ color:{devnote_link}; }}'
         '</style></head><body>' + body + '</body></html>'
     )
 
@@ -117,6 +151,8 @@ class VersionDetailPage(QWidget):
         self._image_urls = []
         self._image_cache_key = ''
         self._rendered_signature = ''
+        self._last_source = ''
+        self._html_light = None
         self._manager = QNetworkAccessManager(self)
         version = str(self._data.get('version') or '')
         root = QVBoxLayout(self)
@@ -204,6 +240,7 @@ class VersionDetailPage(QWidget):
 
         version = str(self._data.get('version') or '')
         cached = self._cache_path(version)
+        has_content = False
         if cached.is_file():
             try:
                 content = cached.read_text(encoding='utf-8', errors='replace')
@@ -211,8 +248,16 @@ class VersionDetailPage(QWidget):
                 content = ''
             if content:
                 self._render(content)
-                self.loading_icon.show()
-                self.loading_text.setText('正在检查版本详情更新...')
+                has_content = True
+        if not has_content:
+            inline_content = str(self._data.get('content_xaml') or '')
+            if inline_content:
+                # 新闻主页已经拿到完整正文时先立即显示，网络只用于检查更新。
+                self._render(inline_content)
+                has_content = bool(self.browser.toPlainText().strip())
+        if has_content:
+            self.loading_icon.show()
+            self.loading_text.setText('正在检查版本详情更新...')
         url = str(self._data.get('detail_url') or '')
         if not url and version:
             url = f'https://mcnews.meloong.com/VersionDetail.xaml?ver={version}'
@@ -377,6 +422,25 @@ class VersionDetailPage(QWidget):
             QTimer.singleShot(0, self._fit_browser)
         return super().eventFilter(obj, event)
 
+    def set_light(self, light):
+        light = bool(light)
+        if not self._last_source or self._html_light == light:
+            return
+        try:
+            html_text = detail_xaml_to_html(self._last_source, light)
+            if not html_text:
+                return
+            old_scroll = self.scroll.verticalScrollBar().value()
+            self.browser.setHtml(html_text)
+            self._fit_browser()
+            QTimer.singleShot(0, self._fit_browser)
+            self.scroll.verticalScrollBar().setValue(old_scroll)
+            self._html_light = light
+        except RuntimeError:
+            pass
+        except Exception:
+            logger.warning('切换版本详情主题失败', exc_info=True)
+
     def _is_light(self):
         try:
             return self.palette().color(QPalette.Window).lightness() > 128
@@ -398,7 +462,8 @@ class VersionDetailPage(QWidget):
         self._rendered_signature = signature
         old_scroll = self.scroll.verticalScrollBar().value()
         try:
-            html_text = detail_xaml_to_html(content, self._is_light())
+            light = self._is_light()
+            html_text = detail_xaml_to_html(content, light)
             if not html_text:
                 self.loading_icon.hide()
                 self.loading_text.setText('无法解析版本详情内容')
@@ -408,6 +473,8 @@ class VersionDetailPage(QWidget):
             self._fit_browser()
             QTimer.singleShot(0, self._fit_browser)
             self.scroll.verticalScrollBar().setValue(old_scroll)
+            self._last_source = str(content)
+            self._html_light = light
         except Exception as exc:
             logger.warning('渲染版本详情失败', exc_info=True)
             reason = str(exc).strip() or type(exc).__name__
