@@ -142,6 +142,7 @@ class _ThanksLineLabel(QLabel):
         self.setTextFormat(Qt.RichText)
         self.setWordWrap(True)
         self.setOpenExternalLinks(True)
+        self.setContentsMargins(0, 4, 0, 4)
         self.setStyleSheet('font-size:12px; background:transparent;')
         light = self.palette().color(QPalette.Window).lightness() > 128
         self.set_light(light)
@@ -255,7 +256,7 @@ class AboutPage(QWidget):
         thanks_group.setStyleSheet(_card_style('ThanksCard'))
         thanks_layout = QVBoxLayout(thanks_group)
         thanks_layout.setContentsMargins(24, 20, 24, 20)
-        thanks_layout.setSpacing(12)
+        thanks_layout.setSpacing(14)
         thanks_title = QLabel('特别鸣谢')
         thanks_title.setStyleSheet('color:rgba(255,255,255,0.6); font-size:13px; font-weight:900;')
         thanks_layout.addWidget(thanks_title)

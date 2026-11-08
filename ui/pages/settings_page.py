@@ -735,7 +735,7 @@ class SettingsPage(QWidget):
             page_scroll.setStyleSheet('QScrollArea { background:transparent; border:none; }')
             page_content = QWidget()
             page_layout = QVBoxLayout(page_content)
-            page_layout.setContentsMargins(0, 16, 0, 30)
+            page_layout.setContentsMargins(0, 16, 40, 30)
             page_layout.setSpacing(16)
             page_scroll.setWidget(page_content)
             return page_scroll, page_layout
@@ -792,7 +792,7 @@ class SettingsPage(QWidget):
         main_layout.addWidget(header)
         tab_host = QWidget()
         tab_host_layout = QVBoxLayout(tab_host)
-        tab_host_layout.setContentsMargins(40, 0, 40, 0)
+        tab_host_layout.setContentsMargins(40, 0, 0, 0)
         tab_host_layout.setSpacing(0)
         tab_host_layout.addWidget(self.settings_tabs)
         main_layout.addWidget(tab_host, 1)
