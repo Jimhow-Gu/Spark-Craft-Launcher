@@ -60,6 +60,18 @@ def detail_xaml_to_html(source, light=False):
     if start < 0 or end <= start:
         return ''
     body = source[start + len('<FlowDocument>'):end]
+    if light:
+        devnote_bg = '#F4F9CD'
+        devnote_border = '#7FAE36'
+        devnote_title = '#5E8626'
+        devnote_text = '#26351B'
+        devnote_link = '#356B19'
+    else:
+        devnote_bg = '#293223'
+        devnote_border = '#9CCB5B'
+        devnote_title = '#C7E98F'
+        devnote_text = '#E7EEDB'
+        devnote_link = '#B9E986'
 
     def replace_button(match):
         attrs, inner = match.group(1), match.group(2)
@@ -96,8 +108,11 @@ def detail_xaml_to_html(source, light=False):
             '', inner, count=1, flags=re.S,
         )
         return (
+            f'<table width="100%" cellspacing="0" cellpadding="9" bgcolor="{devnote_bg}" '
+            f'style="background-color:{devnote_bg};">'
+            f'<tr><td bgcolor="{devnote_bg}" style="border-left:3px solid {devnote_border};">'
             '<div class="devnote"><div class="devnote-title">开发者注释</div>'
-            + inner + '</div>'
+            + inner + '</div></td></tr></table>'
         )
 
     body = re.sub(
@@ -109,29 +124,15 @@ def detail_xaml_to_html(source, light=False):
     body = re.sub(r'</ListItem>', '</li>', body, flags=re.I)
     body = re.sub(r'<List\b[^>]*>', '<ul>', body, flags=re.I)
     body = re.sub(r'</List>', '</ul>', body, flags=re.I)
-    body = re.sub(r'<(?!/?(?:a|b|i|u|br|p|ul|li|h[1-4]|div)\b)[^>]*>', '', body)
+    body = re.sub(r'<(?!/?(?:a|b|i|u|br|p|ul|li|h[1-4]|div|table|tr|td)\b)[^>]*>', '', body)
     text_color = '#1b1b1b' if light else '#f0f1f3'
     accent = '#2f6f6f' if light else '#bfe3e3'
-    if light:
-        devnote_bg = '#F4F9CD'
-        devnote_border = '#7FAE36'
-        devnote_title = '#5E8626'
-        devnote_text = '#26351B'
-        devnote_link = '#356B19'
-    else:
-        devnote_bg = '#293223'
-        devnote_border = '#9CCB5B'
-        devnote_title = '#C7E98F'
-        devnote_text = '#E7EEDB'
-        devnote_link = '#B9E986'
     return (
         '<html><head><style>'
         f'body {{ margin:0; color:{text_color}; font-family:"Microsoft YaHei UI"; font-size:14px; line-height:1.65; }}'
         f'h1,h2,h3,h4 {{ color:{accent}; margin:14px 0 6px 0; }}'
         'p { margin:6px 0; } ul { margin:4px 0 8px 18px; } li { margin:3px 0; }'
         f'a {{ color:{accent}; }}'
-        f'.devnote {{ background-color:{devnote_bg}; border-left:3px solid {devnote_border};'
-        ' padding:9px 12px; margin:11px 0; }'
         f'.devnote-title {{ color:{devnote_title}; font-weight:700; font-size:15px;'
         ' margin:0 0 5px 0; }'
         f'.devnote p, .devnote li {{ color:{devnote_text}; margin:5px 0; }}'

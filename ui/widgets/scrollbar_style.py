@@ -7,7 +7,7 @@ _SCROLLBAR_STYLE = """
 QScrollBar:vertical {
     background: transparent;
     width: 10px;
-    margin: 2px 2px 2px 0;
+    margin: 2px 0 2px 0;
     border: none;
     border-radius: 4px;
 }
@@ -28,7 +28,7 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
 QScrollBar:horizontal {
     background: transparent;
     height: 10px;
-    margin: 0px 2px 2px 2px;
+    margin: 0px 0 2px 0;
     border: none;
     border-radius: 4px;
 }
@@ -51,7 +51,7 @@ _LIGHT_SCROLLBAR_STYLE = """
 QScrollBar:vertical {
     background: transparent;
     width: 10px;
-    margin: 2px 2px 2px 0;
+    margin: 2px 0 2px 0;
     border: none;
     border-radius: 4px;
 }
@@ -72,7 +72,7 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
 QScrollBar:horizontal {
     background: transparent;
     height: 10px;
-    margin: 0px 2px 2px 2px;
+    margin: 0px 0 2px 0;
     border: none;
     border-radius: 4px;
 }
