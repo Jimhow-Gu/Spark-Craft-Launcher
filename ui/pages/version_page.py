@@ -10,7 +10,6 @@ import json
 import os
 import re
 import time
-import urllib.request
 import requests
 import certifi
 from pathlib import Path
@@ -24,7 +23,8 @@ from core.download_manager import DownloadManager
 from core.launch import LaunchManager
 from core.modpack import (ModpackImportWorker, inspect_modpack, sanitize_version_name)
 from core.version import (FullInstallWorker, VersionManager, VersionDeleteWorker, cleanup_deleted_version, detect_version_loader)
-from core.net import is_network_error_text, network_available
+from core.net import HttpClient, is_network_error_text, network_available
+from core.paths import scl_dir
 from ui.widgets.toast import notify_network_failure
 from ui.widgets.loading_overlay import LoadingOverlay
 from ui.widgets.smooth_progress import SmoothProgressBar
@@ -84,32 +84,70 @@ class LoadVersionsWorker(QThread):
     def cancel(self):
         self._cancelled = True
 
+    @staticmethod
+    def _cache_path():
+        return scl_dir() / 'cache' / 'version_manifest.json'
+
+    def _load_cached_manifest(self):
+        try:
+            data = json.loads(
+                self._cache_path().read_text(encoding='utf-8', errors='replace')
+            )
+            if isinstance(data, dict) and data.get('versions'):
+                return data
+        except (OSError, ValueError):
+            pass
+        return None
+
+    def _save_cached_manifest(self, data):
+        try:
+            path = self._cache_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix('.tmp')
+            tmp.write_text(
+                json.dumps(data, ensure_ascii=False),
+                encoding='utf-8',
+            )
+            tmp.replace(path)
+        except OSError:
+            pass
+
     def _fetch_manifest(self):
         '''并发请求各镜像，谁先返回有效清单就用谁（特殊网络环境下不会逐个超时等待）。'''
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         def fetch(base):
-            for path in ('/mc/game/version_manifest_v2.json',):
-                if self._cancelled:
-                    return None
-                url = base.rstrip('/') + path
-                try:
-                    req = urllib.request.Request(
-                        url, headers={'User-Agent': 'PMGL-Launcher/1.1'},
-                    )
-                    with urllib.request.urlopen(req, timeout=4) as resp:
-                        data = json.loads(resp.read().decode('utf-8'))
-                    if isinstance(data, dict) and data.get('versions'):
-                        return data
-                except Exception:
-                    continue
+            if self._cancelled:
+                return None
+            url = str(base or '').strip()
+            if not url:
+                return None
+            if not url.endswith('.json'):
+                url = url.rstrip('/') + '/mc/game/version_manifest_v2.json'
+            http = HttpClient(timeout=10, retries=1)
+            try:
+                data = http.get_json(url, timeout=10)
+                if isinstance(data, dict) and data.get('versions'):
+                    return data
+            except Exception:
+                return None
+            finally:
+                http.close()
             return None
 
-        mirrors = [u for u in self.mirror_urls if u] or [
-            'https://bmclapi2.bangbang93.com', 'https://launchermeta.mojang.com',
-        ]
-        pool = ThreadPoolExecutor(max_workers=max(1, len(mirrors)))
+        mirrors = [u for u in self.mirror_urls if u]
+        # 官方 launchermeta 在新网络下可能被重定向或限制，piston-meta 是
+        # Mojang 当前的直连清单地址；BMCLAPI/OpenBMCLAPI 作为国内回退。
+        for base in (
+            'https://piston-meta.mojang.com',
+            'https://launchermeta.mojang.com',
+            'https://bmclapi2.bangbang93.com',
+            'https://openbmclapi.bangbang93.com',
+        ):
+            if base not in mirrors:
+                mirrors.append(base)
+        pool = ThreadPoolExecutor(max_workers=max(1, min(6, len(mirrors))))
         try:
             futures = [pool.submit(fetch, base) for base in mirrors]
             for future in as_completed(futures):
@@ -122,10 +160,11 @@ class LoadVersionsWorker(QThread):
                 if result:
                     for other in futures:
                         other.cancel()
+                    self._save_cached_manifest(result)
                     return result
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
-        return None
+        return self._load_cached_manifest()
 
     def run(self):
         versions = []
