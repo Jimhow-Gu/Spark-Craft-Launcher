@@ -10,6 +10,7 @@ import hashlib
 import html
 import logging
 import re
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -18,13 +19,16 @@ from PySide6.QtGui import QDesktopServices, QIcon, QPalette, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea,
-    QSizePolicy, QStackedWidget, QToolButton, QVBoxLayout, QWidget,
+    QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from core.app_font import ui_font
 from core.config import ConfigManager
 from core.paths import safe_rmtree, scl_dir
 from ui.pages.news_detail import VersionDetailPage, detail_xaml_to_html
+from ui.widgets.height_animation import HeightAnimation
+from ui.widgets.rotating_chevron import RotatingChevronButton
+from ui.widgets.rounded_surface import RoundedFrame
 from ui.widgets.news_visuals import (
     BackToTopButton, NewsContentBrowser, NewsImageLabel, TranslationPending,
     pixmap_from_data,
@@ -32,6 +36,7 @@ from ui.widgets.news_visuals import (
 from ui.widgets.toast import show_toast
 
 NEWS_URL = 'https://mcnews.meloong.com'
+NEWS_AUTO_REFRESH_SECONDS = 15 * 60
 MAX_NEWS_XAML_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 logger = logging.getLogger('NewsPage')
@@ -134,11 +139,10 @@ def parse_news_page(text):
     return items
 
 
-class NewsCard(QFrame):
+class NewsCard(RoundedFrame):
     def __init__(self, data, page, *, expanded=True, parent=None):
-        super().__init__(parent)
+        super().__init__(parent, radius=12)
         self.setObjectName('NewsCard')
-        self.setAttribute(Qt.WA_StyledBackground, True)
         self.setProperty('_theme_ignore', True)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 12, 18, 14)
@@ -153,15 +157,16 @@ class NewsCard(QFrame):
         self.title_label = QLabel(str(data.get('title') or data.get('version') or 'Minecraft 新闻'))
         self.title_label.setWordWrap(True)
         self.title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.title_label.setProperty('_theme_ignore', True)
         header.addWidget(self.title_label, 1)
-        self.toggle_btn = QToolButton()
-        self.toggle_btn.setFixedSize(30, 30)
-        self.toggle_btn.setText('▲' if expanded else '▼')
-        self.toggle_btn.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self.toggle_btn.setStyleSheet(
-            'QToolButton { border:none; background:transparent; color:#A8E6E6;'
-            ' font-size:14px; }'
+        self.toggle_btn = RotatingChevronButton(
+            size=30, collapsed_angle=0, expanded_angle=180,
+            light_color='#2F6F6F', dark_color='#A8E6E6',
         )
+        self.toggle_btn.setToolTip('收起' if expanded else '展开')
+        self.toggle_btn.setCursor(Qt.ArrowCursor)
+        self.toggle_btn.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.toggle_btn.set_expanded(expanded, animate=False)
         header.addWidget(self.toggle_btn)
         layout.addWidget(self.header_widget)
 
@@ -186,6 +191,7 @@ class NewsCard(QFrame):
 
         meta_text = f"版本 {data.get('version', '')}"
         self.meta_label = QLabel(meta_text)
+        self.meta_label.setProperty('_theme_ignore', True)
         body_layout.addWidget(self.meta_label)
 
         if self._image_urls:
@@ -207,6 +213,7 @@ class NewsCard(QFrame):
         if data.get('translation_pending'):
             body_layout.addWidget(TranslationPending())
 
+        self._detail_btn = None
         if data.get('detail_url'):
             detail_btn = QPushButton('查看版本详情')
             detail_btn.setCursor(Qt.PointingHandCursor)
@@ -215,69 +222,86 @@ class NewsCard(QFrame):
             detail_btn.setToolTip('在主页内查看完整版本更新日志')
             detail_btn.setMinimumHeight(36)
             detail_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-            detail_btn.setStyleSheet(
-                'QPushButton { background:rgba(136,221,221,0.10); color:#d9f7f7;'
-                ' border:1px solid rgba(136,221,221,0.38); border-radius:6px;'
-                ' padding:6px 14px; text-align:left; font-weight:600; }'
-                'QPushButton:hover { background:rgba(136,221,221,0.22); }'
-                'QPushButton:pressed { background:rgba(136,221,221,0.30); }'
-            )
+            detail_btn.setProperty('_theme_ignore', True)
             detail_btn.clicked.connect(lambda: page.open_version_detail(data))
             body_layout.addWidget(detail_btn)
+            self._detail_btn = detail_btn
 
         bottom_row = QHBoxLayout()
         bottom_row.setSpacing(8)
         links = data.get('links') or []
+        self._link_buttons = []
         for label, url in links:
             button = QPushButton(label)
             button.setCursor(Qt.PointingHandCursor)
             button.setMinimumHeight(30)
-            button.setStyleSheet(
-                'QPushButton { background:transparent; color:#A8E6E6;'
-                ' border:1px solid rgba(136,221,221,0.62); border-radius:6px;'
-                ' padding:5px 12px; font-weight:600; }'
-                'QPushButton:hover { background:rgba(136,221,221,0.24); }'
-            )
+            button.setProperty('_theme_ignore', True)
             button.clicked.connect(
                 lambda checked=False, link=url: QDesktopServices.openUrl(QUrl(link))
             )
             bottom_row.addWidget(button)
+            self._link_buttons.append(button)
         bottom_row.addStretch(1)
         self.date_label = None
         if data.get('date'):
             self.date_label = QLabel(f"最后更新：{data['date']}")
+            self.date_label.setProperty('_theme_ignore', True)
             bottom_row.addWidget(self.date_label, 0, Qt.AlignRight)
         body_layout.addLayout(bottom_row)
         layout.addWidget(self.body)
         if not expanded:
             self.body.hide()
-        self.toggle_btn.clicked.connect(self._toggle)
+        self.toggle_btn.clicked.connect(lambda *_: self._toggle())
         self._apply_theme_styles()
 
     def _apply_card_style(self):
-        background = 'rgba(248,251,251,0.88)' if self._light else 'rgba(30,41,41,0.88)'
-        border = 'rgba(0,0,0,0.11)' if self._light else 'rgba(255,255,255,0.18)'
         self.setStyleSheet(
-            f'QFrame#NewsCard {{ background: {background};'
-            f' border: 1px solid {border}; border-radius: 12px; }}'
             'QFrame#NewsCard QLabel { background: transparent; border: none; }'
         )
+        self.update()
 
     def _apply_theme_styles(self):
         self._apply_card_style()
         title_color = '#1b1b1b' if self._light else '#f4fbfb'
         muted = '#3f6666' if self._light else '#bfe3e3'
-        toggle = '#2f6f6f' if self._light else '#A8E6E6'
         self.title_label.setStyleSheet(
             f'color:{title_color}; font-size:17px; font-weight:900;'
         )
         self.meta_label.setStyleSheet(f'color:{muted}; font-size:12px;')
-        self.toggle_btn.setStyleSheet(
-            'QToolButton { border:none; background:transparent; color:%s;'
-            ' font-size:14px; }' % toggle
-        )
+        self.toggle_btn.set_light(self._light)
         if self.date_label is not None:
             self.date_label.setStyleSheet(f'color:{muted}; font-size:12px;')
+        if self._light:
+            link_color = '#2F6F6F'
+            link_border = 'rgba(64,153,153,0.50)'
+            link_hover = 'rgba(64,153,153,0.12)'
+            detail_bg = 'rgba(64,153,153,0.08)'
+            detail_color = '#1F4F4F'
+            detail_border = 'rgba(64,153,153,0.32)'
+            detail_hover = 'rgba(64,153,153,0.16)'
+        else:
+            link_color = '#A8E6E6'
+            link_border = 'rgba(136,221,221,0.62)'
+            link_hover = 'rgba(136,221,221,0.24)'
+            detail_bg = 'rgba(136,221,221,0.10)'
+            detail_color = '#d9f7f7'
+            detail_border = 'rgba(136,221,221,0.38)'
+            detail_hover = 'rgba(136,221,221,0.22)'
+        for button in self._link_buttons:
+            button.setStyleSheet(
+                f'QPushButton {{ background:transparent; color:{link_color};'
+                f' border:1px solid {link_border}; border-radius:6px;'
+                ' padding:5px 12px; font-weight:600; }'
+                f'QPushButton:hover {{ background:{link_hover}; }}'
+            )
+        if self._detail_btn is not None:
+            self._detail_btn.setStyleSheet(
+                f'QPushButton {{ background:{detail_bg}; color:{detail_color};'
+                f' border:1px solid {detail_border}; border-radius:6px;'
+                ' padding:6px 14px; text-align:left; font-weight:600; }'
+                f'QPushButton:hover {{ background:{detail_hover}; }}'
+                f'QPushButton:pressed {{ background:{link_hover}; }}'
+            )
 
     def eventFilter(self, obj, event):
         if obj is self.header_widget and event.type() == QEvent.MouseButtonRelease:
@@ -339,7 +363,8 @@ class NewsCard(QFrame):
 
     def _animate_body(self, expand):
         self._expanded = bool(expand)
-        self.toggle_btn.setText('▲' if expand else '▼')
+        self.toggle_btn.set_expanded(self._expanded, animate=True)
+        self.toggle_btn.setToolTip('收起' if self._expanded else '展开')
         if expand:
             self._load_image()
             self._load_content()
@@ -357,7 +382,7 @@ class NewsCard(QFrame):
             target = 0
             start = max(1, self.body.height())
             self.body.setMaximumHeight(start)
-        animation = QPropertyAnimation(self.body, b'maximumHeight', self)
+        animation = HeightAnimation(self.body, self)
         animation.setDuration(190)
         animation.setStartValue(start)
         animation.setEndValue(target)
@@ -445,6 +470,11 @@ class NewsPage(QWidget):
         self._error_notice_timer.timeout.connect(self._show_refresh_error_toast)
         self._last_error_reason = ''
         self._cache_prune_scheduled = False
+        self._last_request_at = 0.0
+        self._auto_refresh_timer = QTimer(self)
+        self._auto_refresh_timer.setInterval(3 * 60 * 1000)
+        self._auto_refresh_timer.timeout.connect(self._auto_refresh_news)
+        self._auto_refresh_timer.start()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -461,12 +491,14 @@ class NewsPage(QWidget):
         header.setContentsMargins(40, 24, 40, 8)
         self.title_label = QLabel('欢迎使用新闻主页！')
         self.title_label.setFont(ui_font(24, 700))
+        self.title_label.setProperty('_theme_ignore', True)
         self.title_label.setStyleSheet(f"color: {self._title_color()}; font-size:24px; font-weight:900;")
         header.addWidget(self.title_label)
         header.addStretch(1)
         self.refresh_btn = QPushButton('刷新')
         self.refresh_btn.setCursor(Qt.PointingHandCursor)
         self.refresh_btn.setFixedSize(92, 34)
+        self.refresh_btn.setProperty('_theme_ignore', True)
         self.refresh_btn.setStyleSheet(
             'QPushButton { background:transparent; color:#A8E6E6;'
             ' border:1px solid rgba(136,221,221,0.62); border-radius:7px; }'
@@ -481,6 +513,9 @@ class NewsPage(QWidget):
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.NoFrame)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # 始终预留滚动条宽度，避免卡片展开/收起时滚动条出现或消失，
+        # 导致卡片宽度变化。
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self.scroll.setStyleSheet('QScrollArea { background: transparent; border: none; }')
         self.content = QWidget()
         self.content.setStyleSheet('background: transparent;')
@@ -502,6 +537,7 @@ class NewsPage(QWidget):
         self.footer.setOpenExternalLinks(True)
         self.footer.setAlignment(Qt.AlignCenter)
         self.footer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.footer.setProperty('_theme_ignore', True)
         self.footer.setStyleSheet(f'color: {self._muted_color()}; font-size:11px; padding:6px;')
         content_layout.addWidget(self.footer)
         self.scroll.setWidget(self.content)
@@ -538,12 +574,28 @@ class NewsPage(QWidget):
         light = bool(light)
         title_color = '#1b1b1b' if light else '#f0f1f3'
         muted = '#3f6666' if light else 'rgba(205,238,238,0.78)'
+        if light:
+            accent = '#2F6F6F'
+            border = 'rgba(64,153,153,0.50)'
+            hover = 'rgba(64,153,153,0.12)'
+            disabled = 'rgba(0,0,0,0.30)'
+        else:
+            accent = '#A8E6E6'
+            border = 'rgba(136,221,221,0.62)'
+            hover = 'rgba(136,221,221,0.24)'
+            disabled = 'rgba(255,255,255,0.30)'
         try:
             self.title_label.setStyleSheet(
                 f'color:{title_color}; font-size:24px; font-weight:900;'
             )
             self.footer.setStyleSheet(
                 f'color:{muted}; font-size:11px; padding:6px;'
+            )
+            self.refresh_btn.setStyleSheet(
+                f'QPushButton {{ background:transparent; color:{accent};'
+                f' border:1px solid {border}; border-radius:7px; }}'
+                f'QPushButton:hover {{ background:{hover}; }}'
+                f'QPushButton:disabled {{ color:{disabled}; }}'
             )
         except RuntimeError:
             pass
@@ -671,8 +723,7 @@ class NewsPage(QWidget):
         super().showEvent(event)
         if self._homepage_mode == 'blank':
             return
-        if not self._loaded:
-            self.load()
+        self.load()
         QTimer.singleShot(0, self._position_back_to_top)
         self._update_back_to_top()
 
@@ -684,6 +735,7 @@ class NewsPage(QWidget):
 
     def shutdown(self):
         self._error_notice_timer.stop()
+        self._auto_refresh_timer.stop()
         self._stop_back_to_top_scroll()
         for detail in list(self._detail_pages.values()):
             try:
@@ -702,10 +754,22 @@ class NewsPage(QWidget):
     def _cache_path(self):
         return scl_dir() / 'cache' / 'mcnews_home.xaml'
 
+    def _auto_refresh_news(self):
+        if self._homepage_mode == 'blank' or not self.isVisible():
+            return
+        if self.stack.currentWidget() is not self.news_view:
+            return
+        self.load()
+
     def load(self, force=False):
         if self._reply is not None:
             return
-        if not force and self._cards:
+        if (
+            not force
+            and self._cards
+            and time.monotonic() - self._last_request_at
+            < NEWS_AUTO_REFRESH_SECONDS
+        ):
             return
         if not self._cards:
             try:
@@ -723,6 +787,7 @@ class NewsPage(QWidget):
                     logger.warning('解析缓存的新闻内容失败', exc_info=True)
         self._loaded = True
         self.refresh_btn.setEnabled(False)
+        self._last_request_at = time.monotonic()
         self._request_news()
         if not self._cache_prune_scheduled:
             self._cache_prune_scheduled = True
@@ -936,6 +1001,7 @@ class NewsPage(QWidget):
 
     def show_news_home(self):
         self.stack.setCurrentWidget(self.news_view)
+        self.load()
         QTimer.singleShot(0, self._position_back_to_top)
         QTimer.singleShot(0, self._update_back_to_top)
 

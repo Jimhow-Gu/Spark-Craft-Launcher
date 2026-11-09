@@ -17,6 +17,15 @@ LOG_DIR = scl_dir() / 'log'
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / 'launcher.log'
 
+try:
+    # 启动器会主动关闭部分证书校验（镜像/第三方源），无需把每条
+    # InsecureRequestWarning 都打印到控制台。
+    import warnings
+    from urllib3.exceptions import InsecureRequestWarning
+    warnings.filterwarnings('ignore', category=InsecureRequestWarning)
+except Exception:
+    pass
+
 def migrate_installer_logs():
     '''把启动器根目录/临时目录残留的日志统一迁移到 SCL/log/。'''
 

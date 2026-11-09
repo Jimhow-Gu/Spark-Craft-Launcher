@@ -220,6 +220,11 @@ class LoadingOverlay(QWidget):
         return super().eventFilter(obj, event)
 
     # ---------- 主题 ----------
+    def set_light(self, light):
+        # ThemeManager 会在切换主题时显式调用；不依赖不同平台下是否
+        # 能收到 PaletteChange/StyleChange 事件。
+        self._apply_theme()
+
     def changeEvent(self, event):
         if event.type() in (QEvent.PaletteChange, QEvent.StyleChange):
             self._apply_theme()

@@ -17,6 +17,8 @@ class DownloadManager(QObject):
         self._cancel_callbacks = {}
         self._emit_lock = threading.Lock()
         self._last_emit = 0.0
+        self._completion_seq = 0
+        self._last_success_seq = 0
 
     def _emit_changed(self, force=False):
         '''限制进度刷新频率，避免高频信号拖慢主界面。'''
@@ -90,12 +92,17 @@ class DownloadManager(QObject):
                 self._cancel_callbacks.pop(task_id, None)
                 if task_id in self._order:
                     self._order.remove(task_id)
+                if success:
+                    self._completion_seq += 1
+                    self._last_success_seq = self._completion_seq
                 removed = True
             else:
+                self._completion_seq += 1
                 task['done'] = True
                 task['success'] = False
                 task['message'] = message
                 task['status'] = message or '失败'
+                task['finished_seq'] = self._completion_seq
                 for step in task['steps']:
                     if step['state'] == 'active':
                         step['state'] = 'error'
@@ -141,7 +148,14 @@ class DownloadManager(QObject):
     def snapshot(self):
         tasks = self.active_tasks()
         if not tasks:
-            failed = [t for t in self.tasks() if t.get('done') if not t.get('success')]
+            # 成功任务会被移除；旧失败任务仍然留在下载管理里供查看。
+            # 底部状态条只显示最后一次完成任务的结果，避免后续下载成功后
+            # 仍被历史失败任务染成红色。
+            failed = [
+                t for t in self.tasks()
+                if t.get('done') and not t.get('success')
+                and int(t.get('finished_seq') or 0) > self._last_success_seq
+            ]
             if failed:
                 first = failed[-1]
                 return {'active': False, 'failed': True, 'count': len(failed), 'percent': float(first.get('percent', 0)), 'title': f'{first.get("title", "任务")} 失败', 'status': first.get('message', ''), 'speed': '0 B/s', 'remaining': '0'}

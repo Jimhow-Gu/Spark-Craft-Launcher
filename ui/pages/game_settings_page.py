@@ -8,7 +8,7 @@ import json
 import os
 import re
 from pathlib import Path
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QSlider, QLineEdit, QCheckBox, QGroupBox, QScrollArea, QRadioButton, QButtonGroup, QProgressBar, QMessageBox, QFileDialog, QFrame, QGridLayout, QTabWidget, QGraphicsOpacityEffect, QApplication)
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QSlider, QLineEdit, QCheckBox, QScrollArea, QRadioButton, QButtonGroup, QProgressBar, QMessageBox, QFileDialog, QFrame, QGridLayout, QTabWidget, QGraphicsOpacityEffect, QApplication)
 from PySide6.QtCore import (Qt, Signal, QTimer, QUrl, QEasingCurve, QPropertyAnimation, QThread)
 from PySide6.QtGui import QFont, QDesktopServices, QPalette, QPixmap
 from ui.widgets.frameless_dialog import FramelessInputDialog
@@ -20,6 +20,7 @@ from core.app_font import ui_font
 from ui.widgets.back_button import BackButton
 from ui.design import MUTED_DARK, MUTED_LIGHT, ON_ACCENT
 from ui.widgets.painted_icons import painted_icon
+from ui.widgets.rounded_surface import RoundedGroupBox
 from ui.widgets.settings_widgets import hidpi_pixmap
 from core.config import ConfigManager
 from core.memory import safe_memory_limit_mb
@@ -268,8 +269,8 @@ class GameSettingsPage(QWidget):
         version_text_layout.addWidget(self.version_desc_label)
         version_card_layout.addLayout(version_text_layout, 1)
         overview_layout.addWidget(version_card)
-        personal_group = QGroupBox('个性化')
-        personal_group.setStyleSheet(self._group_style())
+        personal_group = RoundedGroupBox(radius=12)
+        personal_group.setTitle('个性化')
         personal_layout = QGridLayout(personal_group)
         personal_layout.setContentsMargins(18, 16, 18, 16)
         personal_layout.setHorizontalSpacing(14)
@@ -312,8 +313,8 @@ class GameSettingsPage(QWidget):
         personal_btn_row.addStretch(1)
         personal_layout.addLayout(personal_btn_row, 2, 0, 1, 2)
         overview_layout.addWidget(personal_group)
-        server_group = QGroupBox('服务器')
-        server_group.setStyleSheet(self._group_style())
+        server_group = RoundedGroupBox(radius=12)
+        server_group.setTitle('服务器')
         server_layout = QGridLayout(server_group)
         server_layout.setContentsMargins(18, 16, 18, 16)
         server_layout.setHorizontalSpacing(14)
@@ -333,8 +334,8 @@ class GameSettingsPage(QWidget):
         self.auto_server_edit.setStyleSheet(self._lineedit_style())
         self.auto_server_edit.editingFinished.connect(self._on_auto_server_changed)
         server_layout.addWidget(self.auto_server_edit, 1, 1)
-        startup_group = QGroupBox('启动选项')
-        startup_group.setStyleSheet(self._group_style())
+        startup_group = RoundedGroupBox(radius=12)
+        startup_group.setTitle('启动选项')
         startup_layout = QGridLayout(startup_group)
         startup_layout.setContentsMargins(18, 16, 18, 16)
         startup_layout.setHorizontalSpacing(14)
@@ -362,8 +363,8 @@ class GameSettingsPage(QWidget):
         self.java_hint_label.setStyleSheet('color:#A8E6E6; font-size:12px; background:rgba(136,221,221,0.10); border-left:3px solid #A8E6E6; border-radius:4px; padding:7px 10px;')
         startup_layout.addWidget(self.java_hint_label, 3, 0, 1, 2)
         settings_layout.addWidget(startup_group)
-        mem_group = QGroupBox('内存分配')
-        mem_group.setStyleSheet(self._group_style())
+        mem_group = RoundedGroupBox(radius=12)
+        mem_group.setTitle('内存分配')
         mem_layout = QVBoxLayout(mem_group)
         self.mem_mode_group = QButtonGroup()
         self.custom_radio = QRadioButton('自定义')
@@ -395,8 +396,8 @@ class GameSettingsPage(QWidget):
         mem_layout.addLayout(slider_layout)
         settings_layout.addWidget(mem_group)
         settings_layout.addWidget(server_group)
-        adv_group = QGroupBox('高级选项')
-        adv_group.setStyleSheet(self._group_style())
+        adv_group = RoundedGroupBox(radius=12)
+        adv_group.setTitle('高级选项')
         adv_layout = QVBoxLayout(adv_group)
         self.advanced_panel = AdvancedOptionsPanel(self._get_advanced_value, self._set_advanced_value, show_java=False)
         adv_layout.addWidget(self.advanced_panel)
@@ -405,8 +406,8 @@ class GameSettingsPage(QWidget):
         adv_note.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 12px;')
         adv_layout.addWidget(adv_note)
         settings_layout.addWidget(adv_group)
-        folder_group = QGroupBox('快捷方式')
-        folder_group.setStyleSheet(self._group_style())
+        folder_group = RoundedGroupBox(radius=12)
+        folder_group.setTitle('快捷方式')
         folder_layout = QVBoxLayout(folder_group)
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(10)
@@ -429,8 +430,8 @@ class GameSettingsPage(QWidget):
         btn_layout.addStretch(1)
         folder_layout.addLayout(btn_layout)
         overview_layout.addWidget(folder_group)
-        repair_group = QGroupBox('高级管理')
-        repair_group.setStyleSheet(self._group_style())
+        repair_group = RoundedGroupBox(radius=12)
+        repair_group.setTitle('高级管理')
         repair_layout = QVBoxLayout(repair_group)
         repair_btn_row = QHBoxLayout()
         self.repair_btn = QPushButton('游戏修复')
@@ -482,9 +483,6 @@ class GameSettingsPage(QWidget):
         tab_host_layout.setSpacing(0)
         tab_host_layout.addWidget(self.tabs)
         main_layout.addWidget(tab_host, 1)
-
-    def _group_style(self):
-        return '\n            QGroupBox {\n                background: rgba(30,41,41,0.84);\n                border: 1px solid rgba(255,255,255,0.22);\n                border-radius: 12px;\n                margin-top: 0px;\n                padding-top: 8px;\n                color: rgba(255,255,255,0.85);\n            }\n            QGroupBox::title {\n                subcontrol-origin: margin;\n                left: 18px;\n                padding: 0 4px;\n                color: #f0f0f0;\n            }\n        '
 
     def _combo_style(self):
         return '\n            QComboBox {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.1);\n                border-radius: 6px;\n                color: #f0f0f0;\n                padding: 4px 8px;\n            }\n            QComboBox::drop-down { border: none; }\n            QComboBox QAbstractItemView { background: #2a2a2a; color: #f0f0f0; border: 1px solid rgba(255,255,255,0.1); }\n        '

@@ -8,7 +8,7 @@ import subprocess
 import re
 import sys
 from pathlib import Path
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QGroupBox, QFileDialog, QScrollArea, QListWidget, QListWidgetItem, QMessageBox, QApplication, QRadioButton, QButtonGroup, QSlider, QCheckBox, QLineEdit, QSpinBox, QTabWidget, QGraphicsOpacityEffect, QProgressBar)
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QFileDialog, QScrollArea, QListWidget, QListWidgetItem, QMessageBox, QApplication, QRadioButton, QButtonGroup, QSlider, QCheckBox, QLineEdit, QSpinBox, QTabWidget, QGraphicsOpacityEffect, QProgressBar)
 from ui.widgets.themed_checkbox import ThemedCheckBox
 from ui.widgets.persistent_combo import PersistentComboBox
 from PySide6.QtCore import (Qt, Signal, QUrl, QTimer, QEasingCurve, QPropertyAnimation)
@@ -32,6 +32,7 @@ from ui.widgets.form_slider import PrimarySlider
 from ui.design import MUTED_DARK, MUTED_LIGHT, ON_ACCENT
 from ui.widgets.painted_icons import painted_icon
 from ui.widgets.collapsible_section import CollapsibleSection
+from ui.widgets.rounded_surface import RoundedGroupBox
 from ui.widgets.offline_skin_settings import OfflineSkinSettings
 from ui.widgets.settings_widgets import MemoryUsageBar
 
@@ -931,8 +932,7 @@ class SettingsPage(QWidget):
         super().closeEvent(event)
 
     def _create_group(self, title):
-        group = QGroupBox()
-        group.setStyleSheet('\n            QGroupBox {\n                background: rgba(30,41,41,0.84);\n                border: 1px solid rgba(255,255,255,0.22);\n                border-radius: 12px;\n                margin-top: 0px;\n                padding-top: 8px;\n            }\n        ')
+        group = RoundedGroupBox(radius=12)
         group_layout = QVBoxLayout(group)
         group_layout.setContentsMargins(24, 18, 24, 18)
         group_layout.setSpacing(12)

@@ -1,7 +1,9 @@
 '''所有页面底部可见的下载进度条。'''
 
 from PySide6.QtCore import (QEasingCurve, QPropertyAnimation, Qt, Signal)
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel)
+from PySide6.QtGui import QPalette
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel)
+from ui.widgets.height_animation import HeightAnimation
 from ui.widgets.smooth_progress import RoundedProgressBar
 
 class DownloadStatusBar(QFrame):
@@ -15,7 +17,14 @@ class DownloadStatusBar(QFrame):
         self._failed_view = None
         self._target_height = 34
         self._hiding = False
-        self.setStyleSheet('\n            QFrame { background:rgba(18,23,23,0.94); border-top:1px solid rgba(255,255,255,0.12);\n                     border-bottom-right-radius:14px; }\n            QLabel { color:rgba(255,255,255,0.82); font-size:12px; background:transparent; }\n            QProgressBar { background:rgba(255,255,255,0.12); border:none;\n                           border-radius:4px; height:8px; text-align:center; }\n            QProgressBar::chunk { background:#88DDDD; border-radius:4px; }\n        ')
+        try:
+            self._light = (
+                QApplication.palette().color(QPalette.Window).lightness() > 128
+            )
+        except Exception:
+            self._light = False
+        self.setProperty('_theme_ignore', True)
+        self._apply_theme()
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 6, 16, 6)
         layout.setSpacing(12)
@@ -40,6 +49,58 @@ class DownloadStatusBar(QFrame):
         layout.addWidget(self.speed_label)
         self.setMaximumHeight(0)
         self.hide()
+        self._apply_theme()
+
+    def _apply_theme(self):
+        light = bool(getattr(self, '_light', False))
+        failed = bool(self._failed_view)
+        background = 'rgba(248,251,251,0.96)' if light else 'rgba(18,23,23,0.94)'
+        border = 'rgba(64,153,153,0.22)' if light else 'rgba(255,255,255,0.12)'
+        text = 'rgba(31,52,52,0.86)' if light else 'rgba(255,255,255,0.82)'
+        track = 'rgba(64,153,153,0.16)' if light else 'rgba(255,255,255,0.12)'
+        fill = (
+            '#B42318' if failed and light else
+            '#d83b3b' if failed else
+            '#409999' if light else '#88DDDD'
+        )
+        self.setStyleSheet(
+            f'QFrame {{ background:{background};'
+            f' border-top:1px solid {border};'
+            ' border-bottom-right-radius:14px; }'
+            f'QLabel {{ color:{text}; font-size:12px; background:transparent; }}'
+            f'QProgressBar {{ background:{track}; border:none;'
+            f' border-radius:4px; height:8px; text-align:center; }}'
+            f'QProgressBar::chunk {{ background:{fill}; border-radius:4px; }}'
+        )
+        for label in (
+            getattr(self, 'title_label', None),
+            getattr(self, 'speed_label', None),
+        ):
+            if label is not None:
+                label.setProperty('_theme_ignore', True)
+                label.setStyleSheet(
+                    f'color:{text}; font-size:12px; background:transparent;'
+                )
+        percent = getattr(self, 'percent_label', None)
+        if percent is not None:
+            percent.setProperty('_theme_ignore', True)
+            percent.setStyleSheet(
+                f'color:{"#B42318" if light else "#ff8a8a"};'
+                'font-size:12px; background:transparent;'
+                if failed else
+                f'color:{text}; font-size:12px; background:transparent;'
+            )
+        progress = getattr(self, 'progress', None)
+        if progress is not None:
+            progress.setProperty('_theme_ignore', True)
+            progress.set_fill_color(fill)
+
+    def set_light(self, light):
+        light = bool(light)
+        if light == getattr(self, '_light', None):
+            return
+        self._light = light
+        self._apply_theme()
 
     def _animate_show(self):
         if self._hiding:
@@ -54,7 +115,7 @@ class DownloadStatusBar(QFrame):
         if self.maximumHeight() >= target:
             return
         start = self.maximumHeight() if self.isVisible() else 0
-        anim = QPropertyAnimation(self, b'maximumHeight', self)
+        anim = HeightAnimation(self, self)
         anim.setDuration(200)
         anim.setStartValue(start)
         anim.setEndValue(target)
@@ -68,7 +129,7 @@ class DownloadStatusBar(QFrame):
             return
         self._hiding = True
         start = self.height()
-        anim = QPropertyAnimation(self, b'maximumHeight', self)
+        anim = HeightAnimation(self, self)
         anim.setDuration(170)
         anim.setStartValue(start)
         anim.setEndValue(0)
@@ -112,9 +173,7 @@ class DownloadStatusBar(QFrame):
         self.percent_label.setText(f'{percent:.2f}%')
         if self._failed_view is not failed:
             self._failed_view = failed
-            self.progress.set_fill_color('#d83b3b' if failed else '#88DDDD')
-            self.percent_label.setStyleSheet('color:#ff8a8a; font-size:12px; background:transparent;' if failed else 'color:rgba(255,255,255,0.82); font-size:12px; background:transparent;')
-            self.progress.setStyleSheet('QProgressBar { background:rgba(255,255,255,0.12); border:none; border-radius:4px; height:8px; } QProgressBar::chunk { background:#d83b3b; border-radius:4px; }' if failed else 'QProgressBar { background:rgba(255,255,255,0.12); border:none; border-radius:4px; height:8px; } QProgressBar::chunk { background:#88DDDD; border-radius:4px; }')
+            self._apply_theme()
         speed = snapshot.get('speed') or '0 B/s'
         self.speed_label.setText('失败' if failed else speed)
         self._animate_show()

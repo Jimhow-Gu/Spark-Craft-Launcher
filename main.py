@@ -1,5 +1,6 @@
 import os
 os.environ["QT_OPENGL"] = "software"   # 降低 OpenGL 栈冲突风险
+os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.ffmpeg.info=false")
 
 import ctypes
 import logging
@@ -20,6 +21,43 @@ from core.single_instance import acquire_single_instance, release_single_instanc
 def resource_path(relative: str) -> Path:
     base = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT))
     return base / relative
+
+
+def quiet_ffmpeg_logs():
+    '''关掉 FFmpeg 的 info 级元数据输出，避免控制台出现乱码和刷屏。'''
+
+    if sys.platform != 'win32':
+        return
+    roots = [
+        Path(getattr(sys, '_MEIPASS', PROJECT_ROOT)),
+        Path(sys.executable).resolve().parent,
+        PROJECT_ROOT,
+    ]
+    try:
+        import PySide6
+        roots.append(Path(PySide6.__file__).resolve().parent)
+    except Exception:
+        pass
+    seen = set()
+    for root in roots:
+        try:
+            candidates = sorted(root.glob('avutil-*.dll'))
+        except OSError:
+            continue
+        for path in candidates:
+            key = str(path).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                lib = ctypes.WinDLL(str(path))
+                set_level = lib.av_log_set_level
+                set_level.argtypes = [ctypes.c_int]
+                set_level.restype = None
+                set_level(16)  # AV_LOG_ERROR，保留真正错误
+                return
+            except Exception:
+                continue
 
 from core.paths import migrate_legacy_dirs, ensure_runtime_dirs
 from core.logging_setup import setup_logging
@@ -184,6 +222,7 @@ def main():
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
     app = QApplication(sys.argv)
+    quiet_ffmpeg_logs()
     # 机房/校园网通常通过系统代理上网；QtNetwork 默认不读取 Windows 代理，
     # 会导致登录和下载正常、头像却一直空白。这里统一启用系统代理。
     try:

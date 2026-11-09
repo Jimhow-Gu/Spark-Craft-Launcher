@@ -67,6 +67,7 @@ class NewsImageLabel(QWidget):
         layout.addStretch(1)
         self._loading_icon = FireworksLoader(56)
         self._loading_text = QLabel('正在加载新闻图片')
+        self._loading_text.setProperty('_theme_ignore', True)
         self._loading_text.setStyleSheet('color:#e3fcfc; font-size:14px; font-weight:600;')
         layout.addWidget(self._loading_icon, 0, Qt.AlignVCenter)
         layout.addWidget(self._loading_text, 0, Qt.AlignVCenter)
@@ -157,10 +158,19 @@ class TranslationPending(QWidget):
         layout.setContentsMargins(0, 20, 0, 20)
         layout.setSpacing(7)
         layout.addWidget(FireworksLoader(72), 0, Qt.AlignHCenter)
-        label = QLabel('翻译施工中')
-        label.setAlignment(Qt.AlignCenter)
-        label.setStyleSheet('color:#e3fcfc; font-size:15px; font-weight:700;')
-        layout.addWidget(label)
+        self.label = QLabel('翻译施工中')
+        self.label.setAlignment(Qt.AlignCenter)
+        self.label.setProperty('_theme_ignore', True)
+        layout.addWidget(self.label)
+        self._light = self.palette().color(QPalette.Window).lightness() > 128
+        self.set_light(self._light)
+
+    def set_light(self, light):
+        self._light = bool(light)
+        self.label.setStyleSheet(
+            f'color:{"#1b1b1b" if self._light else "#e3fcfc"};'
+            ' font-size:15px; font-weight:700;'
+        )
 
 
 class BackToTopButton(QAbstractButton):

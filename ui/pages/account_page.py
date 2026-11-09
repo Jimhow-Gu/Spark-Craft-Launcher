@@ -7,9 +7,9 @@ import shutil
 import webbrowser
 from pathlib import Path
 from urllib.parse import urlparse
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QGroupBox, QScrollArea, QMessageBox, QComboBox, QFileDialog, QApplication, QMenu, QDialog, QListWidget, QListWidgetItem, QCheckBox, QToolButton, QListView, QSizePolicy, QStylePainter, QStyleOptionComboBox, QStyle)
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QScrollArea, QMessageBox, QComboBox, QFileDialog, QApplication, QMenu, QDialog, QListWidget, QListWidgetItem, QCheckBox, QToolButton, QListView, QSizePolicy, QStylePainter, QStyleOptionComboBox, QStyle)
 from ui.widgets.themed_checkbox import ThemedCheckBox
-from PySide6.QtCore import (Qt, Signal, QUrl, QThread, QTimer, QSize, QObject, QPropertyAnimation, QEasingCurve, QEvent)
+from PySide6.QtCore import (Qt, Signal, QUrl, QThread, QTimer, QSize, QObject, QEasingCurve, QEvent)
 from PySide6.QtGui import (QFont, QPixmap, QPainter, QColor, QPainterPath, QImage, QAction, QIcon, QPalette)
 from PySide6.QtNetwork import (QNetworkAccessManager, QNetworkReply, QNetworkRequest)
 from core.app_font import ui_font
@@ -17,6 +17,9 @@ from core.config import ConfigManager
 from core.secret import unprotect_secret
 from core.paths import scl_dir
 from ui.widgets.frameless_dialog import (FramelessDialog, FramelessInputDialog, FramelessListDialog)
+from ui.widgets.height_animation import HeightAnimation
+from ui.widgets.rotating_chevron import RotatingChevronButton
+from ui.widgets.rounded_surface import RoundedGroupBox
 from ui.widgets.toast import notify_network_failure, show_toast
 from ui.design import IMAGE_PLACEHOLDER_DARK, IMAGE_PLACEHOLDER_LIGHT
 from ui.widgets.painted_icons import painted_icon, set_button_icon
@@ -944,8 +947,7 @@ class AccountPage(QWidget):
         title.setFont(ui_font(24, QFont.DemiBold))
         title.setStyleSheet('color: #f0f0f0;')
         layout.addWidget(title)
-        group = QGroupBox()
-        group.setStyleSheet('\n            QGroupBox {\n                background: rgba(30,41,41,0.84);\n                border: 1px solid rgba(255,255,255,0.22);\n                border-radius: 12px;\n                margin-top: 0px;\n                padding-top: 10px;\n            }\n        ')
+        group = RoundedGroupBox(radius=12)
         group_layout = QVBoxLayout(group)
         group_layout.setContentsMargins(24, 22, 24, 20)
         group_layout.setSpacing(8)
@@ -1104,8 +1106,7 @@ class AccountPage(QWidget):
         self.login_methods_layout = QVBoxLayout()
         self.login_methods_layout.setSpacing(10)
         layout.addLayout(self.login_methods_layout)
-        offline_group = QGroupBox()
-        offline_group.setStyleSheet(group.styleSheet())
+        offline_group = RoundedGroupBox(radius=12)
         offline_layout = QVBoxLayout(offline_group)
         offline_layout.setContentsMargins(24, 20, 24, 20)
         offline_layout.setSpacing(14)
@@ -1137,8 +1138,7 @@ class AccountPage(QWidget):
         offline_layout.addLayout(btn_row2)
         self.offline_group = offline_group
         self.login_methods_layout.addWidget(offline_group)
-        ms_group = QGroupBox()
-        ms_group.setStyleSheet(group.styleSheet())
+        ms_group = RoundedGroupBox(radius=12)
         ms_layout = QVBoxLayout(ms_group)
         ms_layout.setContentsMargins(24, 20, 24, 20)
         ms_layout.setSpacing(10)
@@ -1184,8 +1184,7 @@ class AccountPage(QWidget):
         ms_layout.addWidget(self.ms_accounts_row)
         self.ms_group = ms_group
         self.login_methods_layout.addWidget(ms_group)
-        tp_group = QGroupBox()
-        tp_group.setStyleSheet(group.styleSheet())
+        tp_group = RoundedGroupBox(radius=12)
         tp_layout = QVBoxLayout(tp_group)
         tp_layout.setContentsMargins(24, 20, 24, 20)
         tp_layout.setSpacing(10)
@@ -1303,12 +1302,12 @@ class AccountPage(QWidget):
             # 标题标签可点击：整条卡片标题区域都能展开/收起
             header.setCursor(Qt.PointingHandCursor)
             header.installEventFilter(self)
-        btn = QToolButton()
-        btn.setText('收起 ▲')
-        btn.setToolTip(f'收起/展开「{title}」')
+        btn = RotatingChevronButton(
+            size=26, collapsed_angle=0, expanded_angle=180,
+            light_color='#2F6F6F', dark_color='#A8E6E6',
+        )
+        btn.setToolTip(f'展开/收起「{title}」')
         btn.setCursor(Qt.PointingHandCursor)
-        btn.setMinimumHeight(24)
-        btn.setStyleSheet('QToolButton { background:transparent; color:rgba(255,255,255,0.55); border:none; padding:4px 6px; font-size:12px; } QToolButton:hover { color:white; }')
         btn.clicked.connect((lambda _=False, g=group: self._toggle_section(g)))
         layout = group.layout()
         if header is not None:
@@ -1316,13 +1315,14 @@ class AccountPage(QWidget):
             header.setWordWrap(True)
             header.setMinimumWidth(0)
             header.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-            header.setMinimumHeight(24)
+            header.setMinimumHeight(26)
+            header.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             header.setStyleSheet('color: rgba(255,255,255,0.85); font-size: 14px; font-weight:900;')
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
         if header is not None:
-            row.addWidget(header, 1)
+            row.addWidget(header, 1, Qt.AlignVCenter)
         else:
             row.addStretch(1)
         row.addWidget(btn, 0, Qt.AlignVCenter)
@@ -1380,7 +1380,7 @@ class AccountPage(QWidget):
         self._section_collapsed[group] = collapsed
         btn = self._section_toggles.get(group)
         if btn is not None:
-            btn.setText('展开 ▼' if collapsed else '收起 ▲')
+            btn.set_expanded(not collapsed, animate=animate)
         children = self._section_hidden.get(group, {})
         layout = group.layout()
         metrics = self._section_metrics.get(group)
@@ -1418,7 +1418,7 @@ class AccountPage(QWidget):
         if collapsed:
             full_height = max(group.height(), layout.sizeHint().height())
             group.setMaximumHeight(max(full_height, collapsed_height))
-            anim = QPropertyAnimation(group, b'maximumHeight', group)
+            anim = HeightAnimation(group, group)
             anim.setDuration(220)
             anim.setStartValue(max(full_height, collapsed_height))
             anim.setEndValue(collapsed_height)
@@ -1434,7 +1434,7 @@ class AccountPage(QWidget):
             apply_children(True)
             group.setMaximumHeight(collapsed_height)
             target = max(collapsed_height, layout.sizeHint().height())
-            anim = QPropertyAnimation(group, b'maximumHeight', group)
+            anim = HeightAnimation(group, group)
             anim.setDuration(240)
             anim.setStartValue(collapsed_height)
             anim.setEndValue(target)

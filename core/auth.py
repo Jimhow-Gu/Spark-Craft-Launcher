@@ -536,7 +536,7 @@ class AuthManager:
                 profile = profiles[0]
         if not profile:
             raise AuthError('该账号还没有创建角色，请先到认证服务器网站创建角色。')
-        account = {'api': api, 'access_token': data.get('accessToken', ''), 'client_token': data.get('clientToken', client_token), 'name': profile.get('name', username), 'uuid': profile.get('id', ''), 'email': username, 'avatar_url': f'https://littleskin.cn/avatar/{profile.get("id", "")}' if 'littleskin.cn' in api.lower() else f'https://mc-heads.net/avatar/{profile.get("name", username)}/96', 'server_name': server_name, 'register_url': register_url, 'auto_server': auto_server}
+        account = {'api': api, 'access_token': data.get('accessToken', ''), 'client_token': data.get('clientToken', client_token), 'name': profile.get('name', username), 'uuid': profile.get('id', ''), 'email': username, 'avatar_url': f'https://littleskin.cn/avatar/{profile.get("id", "")}' if 'littleskin.cn' in api.lower() else f'https://mc-heads.net/avatar/{profile.get("name", username)}/96', 'server_name': server_name, 'register_url': register_url, 'auto_server': auto_server, 'issued_at': time.time(), 'last_checked_at': time.time()}
         validation = self.validate_thirdparty_account(account)
         if validation is False:
             raise AuthError('第三方登录校验失败：服务器返回的登录凭据无效，请重新输入密码。', 'expired')
@@ -545,6 +545,7 @@ class AuthManager:
         self.config.set('microsoft_account', None)
         self.config.save()
         self.save_thirdparty_account(account)
+        self.config.save()
         return account
 
     def validate_thirdparty_account(self, account=None):
@@ -571,6 +572,90 @@ class AuthManager:
         if resp.status_code in (400, 401, 403):
             return False
         return None
+
+    def refresh_thirdparty_login(self, account=None):
+        '''用已有 accessToken 换取新令牌，不需要重新输入密码。'''
+
+        account = dict(account or self.config.get('thirdparty_account') or {})
+        api = str(account.get('api') or '').strip().rstrip('/')
+        access_token = str(account.get('access_token') or '').strip()
+        client_token = str(account.get('client_token') or '').strip()
+        if not api.startswith(('http://', 'https://')) or not access_token:
+            raise AuthError('第三方账号信息不完整，请重新输入密码登录。', 'expired')
+        payload = {
+            'accessToken': access_token,
+            'clientToken': client_token,
+        }
+        try:
+            resp = requests.post(
+                f'{api}/authserver/refresh',
+                json=payload,
+                timeout=20,
+                headers={
+                    'User-Agent': 'PMGL-Launcher/1.1',
+                    'Content-Type': 'application/json',
+                },
+            )
+            data = resp.json()
+        except Exception as exc:
+            if is_network_error(exc) or not network_available():
+                raise AuthError('因为网络问题导致刷新登录状态失败！', 'network') from exc
+            raise AuthError(f'刷新第三方登录状态失败：{exc}') from exc
+        if (
+            not isinstance(data, dict)
+            or data.get('error')
+            or not data.get('accessToken')
+        ):
+            raise AuthError('第三方登录状态已失效，请重新输入密码登录。', 'expired')
+        refreshed = dict(account)
+        refreshed['access_token'] = str(data.get('accessToken') or '')
+        refreshed['client_token'] = str(
+            data.get('clientToken') or client_token
+        )
+        refreshed['issued_at'] = time.time()
+        refreshed['last_checked_at'] = time.time()
+        profile = data.get('selectedProfile')
+        if isinstance(profile, dict):
+            refreshed['name'] = profile.get('name') or refreshed.get('name', '')
+            refreshed['uuid'] = profile.get('id') or refreshed.get('uuid', '')
+        self.save_thirdparty_account(refreshed)
+        self.config.save()
+        return refreshed
+
+    def ensure_thirdparty_session(self, account=None, max_age=6 * 3600):
+        '''启动前检查第三方令牌；失效时用 clientToken 自动刷新。'''
+
+        account = dict(account or self.config.get('thirdparty_account') or {})
+        api = str(account.get('api') or '').strip().rstrip('/')
+        token = str(account.get('access_token') or '').strip()
+        if not api.startswith(('http://', 'https://')) or not token:
+            raise AuthError('第三方账号登录已失效，请重新登录。', 'expired')
+        checked_at = float(
+            account.get('last_checked_at') or account.get('issued_at') or 0
+        )
+        if checked_at and time.time() - checked_at < max_age:
+            return account
+        try:
+            valid = self.validate_thirdparty_account(account)
+        except AuthError as exc:
+            # 网络问题时不要误清登录状态，继续使用现有令牌。
+            if str(getattr(exc, 'kind', '') or '') == 'network':
+                return account
+            raise
+        if valid is False:
+            account = self.refresh_thirdparty_login(account)
+        else:
+            account['last_checked_at'] = time.time()
+            self.save_thirdparty_account(account)
+        current = self.config.get('thirdparty_account') or {}
+        if (
+            self.config.get('login_type') == 'thirdparty'
+            and str(current.get('api') or '').rstrip('/') == api
+            and str(current.get('uuid') or '') == str(account.get('uuid') or '')
+        ):
+            self.config.set('thirdparty_account', account)
+        self.config.save()
+        return account
 
     def logout(self):
         if self.config.get('login_type') == 'microsoft':
@@ -683,7 +768,7 @@ class AuthManager:
         self.config.save()
 
     def save_thirdparty_account(self, account: dict):
-        entry = {'id': f'thirdparty:{account.get("api")}:{account.get("uuid")}', 'type': 'thirdparty', 'name': account.get('name', ''), 'uuid': account.get('uuid', ''), 'email': account.get('email', ''), 'avatar_url': account.get('avatar_url', ''), 'access_token': account.get('access_token', ''), 'client_token': account.get('client_token', ''), 'api': account.get('api', ''), 'server_name': account.get('server_name', ''), 'register_url': account.get('register_url', ''), 'auto_server': account.get('auto_server', '')}
+        entry = {'id': f'thirdparty:{account.get("api")}:{account.get("uuid")}', 'type': 'thirdparty', 'name': account.get('name', ''), 'uuid': account.get('uuid', ''), 'email': account.get('email', ''), 'avatar_url': account.get('avatar_url', ''), 'access_token': account.get('access_token', ''), 'client_token': account.get('client_token', ''), 'api': account.get('api', ''), 'server_name': account.get('server_name', ''), 'register_url': account.get('register_url', ''), 'auto_server': account.get('auto_server', ''), 'issued_at': account.get('issued_at', 0), 'last_checked_at': account.get('last_checked_at', 0)}
         self._save_account_entry(entry)
 
     def save_offline_account(self, name: str):
@@ -734,7 +819,7 @@ class AuthManager:
             if is_network_error(exc) or not network_available():
                 raise AuthError('因为网络问题导致无法校验登录状态！', 'network') from exc
             raise AuthError(f'连接认证服务器失败：{exc}') from exc
-        if resp.status_code == 403:
+        if resp.status_code in (400, 401, 403):
             raise AuthError('第三方登录状态已失效，请重新输入密码登录。', 'expired')
         if resp.status_code >= 500:
             raise AuthError(f'认证服务器暂时不可用（HTTP {resp.status_code}），请稍后重试。', 'general')
@@ -755,15 +840,22 @@ class AuthManager:
             self.save_microsoft_account(info)
             return info
         if kind == 'thirdparty':
-            # 切换前校验令牌，失效时明确报错要求重新登录，
-            # 避免“显示登录成功但实际无法启动（api=None）”的情况
-            self.validate_thirdparty_token(entry)
-            account = {'api': entry.get('api', ''), 'access_token': entry.get('access_token', ''), 'client_token': entry.get('client_token', ''), 'name': entry.get('name', ''), 'uuid': entry.get('uuid', ''), 'email': entry.get('email', ''), 'avatar_url': entry.get('avatar_url', ''), 'server_name': entry.get('server_name', ''), 'register_url': entry.get('register_url', ''), 'auto_server': entry.get('auto_server', '')}
+            # 切换前校验令牌，失效时先尝试用 clientToken 刷新；这样没有
+            # 勾选“记住密码”的账号也不会因为旧令牌失效而登录失败。
+            try:
+                self.validate_thirdparty_token(entry)
+                selected = entry
+            except AuthError as exc:
+                if str(getattr(exc, 'kind', '') or '') != 'expired':
+                    raise
+                selected = self.refresh_thirdparty_login(entry)
+            account = {'api': selected.get('api', ''), 'access_token': selected.get('access_token', ''), 'client_token': selected.get('client_token', ''), 'name': selected.get('name', ''), 'uuid': selected.get('uuid', ''), 'email': selected.get('email', ''), 'avatar_url': selected.get('avatar_url', ''), 'server_name': selected.get('server_name', ''), 'register_url': selected.get('register_url', ''), 'auto_server': selected.get('auto_server', ''), 'issued_at': selected.get('issued_at', 0), 'last_checked_at': selected.get('last_checked_at', 0)}
             self.config.set('login_type', 'thirdparty')
             self.config.set('thirdparty_account', account)
             self.config.set('microsoft_account', None)
             self.config.save()
             self.save_thirdparty_account(account)
+            self.config.save()
             return account
         if kind == 'offline':
             self.config.set('login_type', 'offline')
@@ -798,6 +890,9 @@ class AuthManager:
             return {'username': account.get('name', 'Steve'), 'uuid': account.get('uuid', ''), 'token': account.get('access_token', ''), 'access_token': account.get('access_token', ''), 'user_type': 'msa', 'login_type': 'microsoft'}
         if login_type == 'thirdparty':
             account = self.get_thirdparty_account()
+            if not (account.get('access_token') and account.get('uuid')):
+                raise AuthError('第三方账号登录已失效，请重新登录。')
+            account = self.ensure_thirdparty_session(account)
             if not (account.get('access_token') and account.get('uuid')):
                 raise AuthError('第三方账号登录已失效，请重新登录。')
             return {'username': account.get('name', 'Player'), 'uuid': account.get('uuid', ''), 'token': account.get('access_token', ''), 'access_token': account.get('access_token', ''), 'user_type': 'mojang', 'login_type': 'thirdparty', 'authlib_api': account.get('api', ''), 'auto_server': account.get('auto_server', '')}

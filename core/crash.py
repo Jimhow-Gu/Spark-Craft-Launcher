@@ -16,13 +16,25 @@ class CrashReport:
     exit_code: 'int'
     reasons: 'List[str]' = field(default_factory=list)
     detail: 'str' = ''
+    window_seen: 'bool' = False
+    @property
+    def title(self):
+        return '游戏崩溃' if self.window_seen else '游戏启动失败'
+
     @property
     def generic_message(self):
+        if self.window_seen:
+            return f'{self.version_name} 运行中崩溃了，已经输出日志，如果你要寻求帮助请提供对应日志而不是截图！'
         return f'{self.version_name}启动时崩溃了，已经输出日志，如果你要寻求帮助请提供对应日志而不是截图！'
 
     def message(self):
         if self.reasons:
-            return f'{self.version_name} 启动失败（退出码 {self.exit_code}）。\n\n可能的原因：\n- ' + '\n- '.join(self.reasons) + '\n\n如果你要寻求帮助，请导出日志而不是只提供截图。'
+            prefix = (
+                f'{self.version_name} 运行中崩溃（退出码 {self.exit_code}）。'
+                if self.window_seen else
+                f'{self.version_name} 启动失败（退出码 {self.exit_code}）。'
+            )
+            return prefix + '\n\n可能的原因：\n- ' + '\n- '.join(self.reasons) + '\n\n如果你要寻求帮助，请导出日志而不是只提供截图。'
         return self.generic_message
 
 
@@ -31,11 +43,15 @@ def _add(reasons, text):
     if text and text not in reasons:
         reasons.append(text)
 
-def analyze_crash(log_lines, version_name, exit_code):
+def analyze_crash(log_lines, version_name, exit_code, window_seen=False):
     lines = [str(line) for line in log_lines or []]
     text = '\n'.join(lines)
     lower = text.lower()
-    report = CrashReport(version_name=version_name, exit_code=exit_code)
+    report = CrashReport(
+        version_name=version_name,
+        exit_code=exit_code,
+        window_seen=bool(window_seen),
+    )
     reasons = report.reasons
     if any((key in lower for key in ('incompatible mod set', 'modresolutionexception', 'missing or unsupported mandatory dependencies', 'duplicate mods', 'mod loading error', 'modloadingexception'))):
         _add(reasons, '检测到 Mod 不兼容或缺少前置依赖（Mod 冲突）')
@@ -44,12 +60,30 @@ def analyze_crash(log_lines, version_name, exit_code):
         _add(reasons, f'Mod「{mod_id}」缺少依赖或不兼容：{requirement.strip()[:120]}')
     for match in re.finditer("Mod\\s+'([^']+)'.*?requires\\s+(?:version\\s+[^\\s]+\\s+of\\s+)?mod\\s+'([^']+)'", text, re.IGNORECASE):
         _add(reasons, f'Mod「{match.group(1)}」需要 Mod「{match.group(2)}」')
-    if 'fabric-api' in lower or 'fabric api' in lower:
-        if any((key in lower for key in ('requires', 'missing', 'not installed', 'no mod'))):
-            _add(reasons, '缺少 Fabric API 或 Fabric API 版本不匹配')
-    for key, reason in (('mixin apply failed', 'Mixin 注入失败，通常是 Mod 与游戏/其他 Mod 版本不兼容'), ('invalidmixinexception', 'Mixin 配置无效，通常是 Mod 与游戏版本不兼容'), ('mixintransformererror', 'Mixin 转换失败，通常是 Mod 不兼容'), ('optifine', '检测到 OptiFine，OptiFine 与部分 Mod/光影不兼容')):
+    # 只有日志明确写出“需要/缺少 Fabric API”时才提示。旧逻辑只要日志里
+    # 同时出现 fabric-api 和任意一个 missing/requires 就认定缺失，已安装
+    # Fabric API 时也会误报。
+    fabric_api_missing = re.search(
+        r'(?i)(?:'
+        r"(?:install|add)\s+['\\\"]?fabric[-_ ]?api"
+        r"|fabric[-_ ]?api['\\\"]?\s+(?:is\s+)?(?:missing|not installed)"
+        r'|(?:missing|not installed)[^\n]{0,60}fabric[-_ ]?api'
+        r'|requires[^\n]{0,90}fabric[-_ ]?api[^\n]{0,50}(?:missing|not installed|but)'
+        r')',
+        text,
+    )
+    if fabric_api_missing:
+        _add(reasons, '缺少 Fabric API，或已安装的 Fabric API 版本不匹配')
+    optifine_conflict = re.search(
+        r'(?i)(?:optifine[^\n]{0,140}(?:incompatible|conflict|failed|crash|exception)'
+        r'|(?:incompatible|conflict|failed|crash|exception)[^\n]{0,140}optifine)',
+        text,
+    )
+    for key, reason in (('mixin apply failed', 'Mixin 注入失败，通常是 Mod 与游戏/其他 Mod 版本不兼容'), ('invalidmixinexception', 'Mixin 配置无效，通常是 Mod 与游戏版本不兼容'), ('mixintransformererror', 'Mixin 转换失败，通常是 Mod 不兼容')):
         if key in lower:
             _add(reasons, reason)
+    if optifine_conflict:
+        _add(reasons, 'OptiFine 与当前 Mod/光影存在兼容问题')
     if 'unsupportedclassversionerror' in lower or 'class file version' in lower:
         _add(reasons, 'Java 版本过低或过高，请切换与 Minecraft 版本匹配的 Java')
     java_match = re.search('requires (?:java|jdk)[^\\d]*(\\d+)', text, re.IGNORECASE)
@@ -64,7 +98,7 @@ def analyze_crash(log_lines, version_name, exit_code):
     missing = re.findall('(?:java\\.lang\\.)?(?:NoClassDefFoundError|ClassNotFoundException):\\s*([^\\s\\n]+)', text)
     if missing:
         names = ', '.join(dict.fromkeys(missing[:4]))
-        _add(reasons, f'缺少运行库或 Mod 依赖类：{names}')
+        _add(reasons, f'运行库或 Mod 依赖类缺失/版本不匹配：{names}')
     if any((key in lower for key in ('nosuchmethoderror', 'nosuchfielderror', 'abstractmethoderror'))):
         _add(reasons, 'Mod 与当前游戏或加载器版本不匹配（NoSuchMethod/NoSuchField）')
     desc = re.search('Description:\\s*([^\\n]+)', text)

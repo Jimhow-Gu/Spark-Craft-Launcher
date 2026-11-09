@@ -17,20 +17,23 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 from urllib.parse import quote
-from PySide6.QtCore import (Qt, Signal, QThread, QTimer, QUrl, QSize, QObject, QEvent)
+from PySide6.QtCore import (Qt, Signal, QThread, QTimer, QUrl, QSize, QObject, QEvent, QEasingCurve)
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPalette, QPixmap)
 from PySide6.QtNetwork import (QNetworkAccessManager, QNetworkDiskCache, QNetworkReply, QNetworkRequest)
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QHeaderView, QAbstractItemView, QProgressBar, QSizePolicy, QRadioButton, QButtonGroup, QScrollArea, QToolButton, QDialogButtonBox, QStackedWidget)
 from core.app_font import ui_font
 from ui.widgets.back_button import BackButton
 from ui.widgets.dark_dialog import DarkQuestionDialog
+from ui.widgets.height_animation import HeightAnimation
 from ui.widgets.loading_overlay import LoadingOverlay
+from ui.widgets.rotating_chevron import RotatingChevronButton
 from ui.widgets.smooth_progress import SmoothProgressBar
 from ui.design import IMAGE_PLACEHOLDER_DARK, IMAGE_PLACEHOLDER_LIGHT, MUTED_DARK, MUTED_LIGHT
 from ui.widgets.painted_icons import painted_icon, set_button_icon
 from core.config import ConfigManager
+from core.download_manager import DownloadManager
 from core.launch import LaunchManager
-from core.mods import (LOADER_RELEVANT_TYPES, LOADERS, PROJECT_TYPES, SORTS, ModFile, ModProject, SearchResult, SourceUnavailable, _natural_key, cached_mc_versions as fetch_cached_mc_versions, download_candidates, fetch_mc_versions, get_source)
+from core.mods import (LOADER_RELEVANT_TYPES, LOADERS, PROJECT_TYPES, SORTS, ModFile, ModProject, SearchResult, SourceUnavailable, _natural_key, cached_mc_versions as fetch_cached_mc_versions, download_candidates, fetch_mc_versions, get_source, installed_mod_tokens, normalize_mod_token)
 from core.mod_translations import bilingual_html, bilingual_plain, translation_db
 from ui.widgets.themed_text import themed_bilingual_html, themed_color
 from core.net import (DownloadError, HttpClient, sanitize_filename, unique_path, is_network_error_text, network_available)
@@ -322,6 +325,22 @@ class DownloadWorker(QThread):
             http.close()
         if not self._cancelled:
             self.error.emit(f'下载失败：{last_error or "所有下载源均不可用"}')
+
+
+class InstalledModsWorker(QThread):
+    '''后台读取已安装 Mod 元数据，避免打开文件页时扫描 JAR 卡住界面。'''
+
+    done = Signal(object)
+    def __init__(self, mods_dir):
+        super().__init__()
+        self.mods_dir = Path(mods_dir)
+
+    def run(self):
+        try:
+            tokens = installed_mod_tokens(self.mods_dir)
+        except Exception:
+            tokens = set()
+        self.done.emit(tokens)
 
 
 class VersionsWorker(QThread):
@@ -750,6 +769,8 @@ class PaginationBar(QWidget):
             item = self._buttons_layout.takeAt(0)
             w = item.widget()
             if w is not None:
+                w.hide()
+                w.setParent(None)
                 w.deleteLater()
         pages = self._visible_pages()
         for page in pages:
@@ -798,36 +819,110 @@ class PaginationBar(QWidget):
         self._goto(page)
 
 
+class _SectionToggle(QToolButton):
+    '''标题按钮右侧叠加可旋转 chevron，保持原有整行点击范围。'''
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.setArrowType(Qt.NoArrow)
+        self.arrow = RotatingChevronButton(
+            self, size=24, collapsed_angle=-90, expanded_angle=0,
+            light_color='#2F6F6F', dark_color='#A8E6E6',
+        )
+        self.arrow.setToolTip('展开')
+        self.arrow.clicked.connect(lambda *_: self.toggle())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.arrow.move(
+            max(4, self.width() - 32),
+            max(0, (self.height() - self.arrow.height()) // 2),
+        )
+        self.arrow.raise_()
+
+
 class CollapsibleSection(QWidget):
     def __init__(self, title, subtitle='', highlighted=False, expanded=False, parent=None):
         super().__init__(parent)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(4)
-        self._toggle = QToolButton()
+        self._toggle = _SectionToggle()
         self._toggle.setCheckable(True)
         self._toggle.setChecked(expanded)
-        self._toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self._toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
         text = title + (f'    {subtitle}' if subtitle else '')
         self._toggle.setText(text)
         self._toggle.setCursor(Qt.PointingHandCursor)
         if highlighted:
-            self._toggle.setStyleSheet('\n                QToolButton {\n                    text-align: left; padding: 8px 10px; border: none;\n                    border-left: 3px solid #88DDDD; border-radius: 6px;\n                    background: rgba(136,221,221,0.18); color: #A8E6E6;\n                    font-weight:900; font-size: 13px;\n                }\n                QToolButton:hover { background: rgba(136,221,221,0.28); }\n            ')
+            self._toggle.setStyleSheet('\n                QToolButton {\n                    text-align: left; padding: 8px 34px 8px 10px; border: none;\n                    border-left: 3px solid #88DDDD; border-radius: 6px;\n                    background: rgba(136,221,221,0.18); color: #A8E6E6;\n                    font-weight:900; font-size: 13px;\n                }\n                QToolButton:hover { background: rgba(136,221,221,0.28); }\n            ')
         else:
-            self._toggle.setStyleSheet('\n                QToolButton {\n                    text-align: left; padding: 8px 10px; border: none;\n                    border-radius: 6px; background: rgba(255,255,255,0.045);\n                    color: rgba(255,255,255,0.85); font-size: 13px;\n                }\n                QToolButton:hover { background: rgba(255,255,255,0.09); }\n            ')
+            self._toggle.setStyleSheet('\n                QToolButton {\n                    text-align: left; padding: 8px 34px 8px 10px; border: none;\n                    border-radius: 6px; background: rgba(255,255,255,0.045);\n                    color: rgba(255,255,255,0.85); font-size: 13px;\n                }\n                QToolButton:hover { background: rgba(255,255,255,0.09); }\n            ')
         outer.addWidget(self._toggle)
         self._content = QWidget()
         self._content_layout = QVBoxLayout(self._content)
         self._content_layout.setContentsMargins(18, 4, 4, 8)
         self._content_layout.setSpacing(4)
         outer.addWidget(self._content)
+        self._height_anim = HeightAnimation(self._content, self)
+        self._height_anim.setDuration(190)
+        self._height_anim.finished.connect(self._on_height_anim_finished)
+        self._expanded = bool(expanded)
         self._toggle.toggled.connect(self._on_toggled)
-        self._on_toggled(expanded)
+        self._apply_expanded(expanded, animate=False)
 
     def _on_toggled(self, checked):
-        self._toggle.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
-        self._content.setVisible(checked)
+        self._apply_expanded(checked, animate=True)
+
+    def _apply_expanded(self, checked, animate=True):
+        self._expanded = bool(checked)
+        self._toggle.arrow.set_expanded(self._expanded, animate=animate)
+        self._toggle.arrow.setToolTip('收起' if self._expanded else '展开')
+        self._height_anim.stop()
+        content = self._content
+        if not animate:
+            if self._expanded:
+                content.setMaximumHeight(16777215)
+                content.setVisible(True)
+            else:
+                content.setMaximumHeight(0)
+                content.setVisible(False)
+            return
+        if self._expanded:
+            content.setVisible(True)
+            start = content.maximumHeight()
+            if start >= 16777215 or start < 0:
+                start = max(0, content.height())
+            target = max(
+                content.sizeHint().height(),
+                self._content_layout.sizeHint().height(),
+            )
+            if target <= 0:
+                target = content.height()
+            content.setMaximumHeight(start)
+            self._height_anim.setDuration(190)
+            self._height_anim.setEasingCurve(QEasingCurve.OutCubic)
+            self._height_anim.setStartValue(start)
+            self._height_anim.setEndValue(max(start, target))
+        else:
+            start = content.height()
+            if start <= 0:
+                start = content.maximumHeight()
+            if start >= 16777215:
+                start = max(0, content.sizeHint().height())
+            content.setMaximumHeight(start)
+            self._height_anim.setDuration(160)
+            self._height_anim.setEasingCurve(QEasingCurve.InCubic)
+            self._height_anim.setStartValue(start)
+            self._height_anim.setEndValue(0)
+        self._height_anim.start()
+
+    def _on_height_anim_finished(self):
+        if self._expanded:
+            self._content.setMaximumHeight(16777215)
+        else:
+            self._content.setMaximumHeight(0)
+            self._content.setVisible(False)
 
     def add_widget(self, widget):
         self._content_layout.addWidget(widget)
@@ -1106,6 +1201,9 @@ class ProjectFilesDialog(QDialog):
         self._dep_cache = {}
         self._dep_required_order = []
         self._dep_cached_items = {}
+        self._dep_items = []
+        self._installed_mod_tokens = set()
+        self._installed_worker = None
         self._dep_icon_loader = IconLoader(self)
         self._dep_icon_loader.ready.connect(self._on_dep_icon_ready)
         self._dep_cards = []
@@ -1244,6 +1342,38 @@ class ProjectFilesDialog(QDialog):
         self._worker.done.connect(self._on_files)
         self._worker.error.connect(self._on_error)
         _track_worker(self._worker)
+        if project_type == 'mod':
+            installed = InstalledModsWorker(self.game_dir / 'mods')
+            installed.done.connect(self._on_installed_mods)
+            installed.finished.connect(
+                (lambda w=installed: self._on_installed_worker_done(w))
+            )
+            self._installed_worker = installed
+            _track_worker(installed)
+
+    def _on_installed_mods(self, tokens):
+        self._installed_mod_tokens = set(tokens or ())
+        if self._dep_items:
+            self._render_dependency_cards(self._dep_items)
+
+    def _on_installed_worker_done(self, worker):
+        if self._installed_worker is worker:
+            self._installed_worker = None
+
+    def _dependency_installed(self, project):
+        if not self._installed_mod_tokens:
+            return False
+        candidates = [
+            project.slug,
+            project.project_id,
+            project.english_title,
+            project.title,
+        ]
+        for value in candidates:
+            token = normalize_mod_token(value)
+            if len(token) >= 3 and token in self._installed_mod_tokens:
+                return True
+        return False
 
     def set_light(self, light):
         label = getattr(self, 'header_title_label', None)
@@ -1282,6 +1412,8 @@ class ProjectFilesDialog(QDialog):
             item = self.groups_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                widget.hide()
+                widget.setParent(None)
                 widget.deleteLater()
         self._file_rows.clear()
         self._selected_row = None
@@ -1406,13 +1538,19 @@ class ProjectFilesDialog(QDialog):
         self._worker.error.connect(self._on_error)
         _track_worker(self._worker)
 
-    def _show_dependencies(self, mod_file):
+    def _clear_dependency_cards(self):
         while self.dep_list_layout.count():
             item = self.dep_list_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                widget.hide()
+                widget.setParent(None)
                 widget.deleteLater()
         self._dep_cards.clear()
+
+    def _show_dependencies(self, mod_file):
+        self._dep_items = []
+        self._clear_dependency_cards()
         required = []
         seen = set()
         for dep in mod_file.dependencies or []:
@@ -1429,14 +1567,22 @@ class ProjectFilesDialog(QDialog):
             seen.add(key)
             required.append(dep)
         if not required:
-            self.dep_panel.hide()
+            self._render_dependency_cards([])
             return
         self.dep_panel.show()
         self._dep_required_order = [_dep_key(dep) for dep in required]
-        cached_items = {key: self._dep_cache[key] for key in self._dep_required_order if key in self._dep_cache}
+        cached_items = [
+            self._dep_cache[key]
+            for key in self._dep_required_order
+            if key in self._dep_cache
+        ]
         missing = [dep for dep in required if _dep_key(dep) not in self._dep_cache]
         if missing:
-            self._dep_cached_items = cached_items
+            self._dep_cached_items = {
+                key: self._dep_cache[key]
+                for key in self._dep_required_order
+                if key in self._dep_cache
+            }
             self.dep_title.setText(f'此模组的前置模组（{len(required)}）· 正在加载...')
             self._dep_generation += 1
             gen = self._dep_generation
@@ -1459,13 +1605,24 @@ class ProjectFilesDialog(QDialog):
             merged[key] = project, icon
         self._dep_cache.update(merged)
         ordered = [merged[key] for key in self._dep_required_order if key in merged]
-        self.dep_title.setText(f'此模组的前置模组（{len(self._dep_required_order)}）')
         self._render_dependency_cards(ordered)
 
     def _render_dependency_cards(self, items):
-        if not items:
+        '''只展示尚未安装的前置；已安装前置不再被误报为缺失。'''
+
+        self._dep_items = list(items or [])
+        self._clear_dependency_cards()
+        missing = [
+            (project, icon_bytes)
+            for project, icon_bytes in self._dep_items
+            if not self._dependency_installed(project)
+        ]
+        if not missing:
+            self.dep_panel.hide()
             return
-        for project, icon_bytes in items:
+        self.dep_title.setText(f'此模组的前置模组（{len(missing)}）')
+        self.dep_panel.show()
+        for project, icon_bytes in missing:
             card = DependencyCard(project)
             card.clicked.connect(self.dependency_selected.emit)
             self.dep_list_layout.addWidget(card)
@@ -1555,6 +1712,15 @@ class ProjectFilesDialog(QDialog):
             except RuntimeError:
                 continue
         self._dep_workers.clear()
+        installed = self._installed_worker
+        self._installed_worker = None
+        if installed is not None:
+            try:
+                if installed.isRunning() and not installed.wait(400):
+                    installed.terminate()
+                    installed.wait(100)
+            except RuntimeError:
+                pass
 
     def closeEvent(self, event):
         self.cleanup()
@@ -1578,7 +1744,10 @@ class ModBrowserPage(QWidget):
         self._categories = {}
         self._categories_loaded = set()
         self._categories_loading = set()
-        self._pending_download = None
+        self._download_contexts = {}
+        self._download_tasks = {}
+        self._download_current = None
+        self._download_status_level = 'normal'
         self._workers = []
         self._files_page = None
         self.config = ConfigManager()
@@ -1976,10 +2145,13 @@ class ModBrowserPage(QWidget):
         token = self._render_token
         self.results_list.clear()
         self._cards.clear()
+        # 数据已经返回，立即撤掉居中加载卡片。列表卡片会分帧插入，
+        # 不能等全部插完再隐藏遮罩，否则会出现“列表已经显示，加载卡片
+        # 还盖在中间”的情况。
+        self.loading_overlay.stop()
         if not projects:
             self.status_label.setText('未找到匹配的内容')
             self.status_label.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 12px;')
-            self._finish_project_loading(token)
             return
         self._render_project_batch(token, list(projects), 0)
 
@@ -2004,29 +2176,14 @@ class ModBrowserPage(QWidget):
                 card.set_icon(pix)
             elif project.icon_url:
                 self.icon_loader.request(project.icon_url)
-        # QListWidget 的 item widget 是 viewport 的子控件，批量插入后可能盖住
-        # 遮罩层；每次插入后重新置顶，保证加载图片始终在列表上方。
-        self.loading_overlay.raise_()
         if end < len(projects):
             QTimer.singleShot(
                 0,
                 lambda: self._render_project_batch(token, projects, end),
             )
             return
-        self.loading_overlay.raise_()
         self.status_label.setText(f'第 {self._page} 页 · 共 {self._total} 个结果 · 来源 {self.source_combo.currentText()}')
         self.status_label.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 12px;')
-        # 列表保持正常重绘，遮罩全程留在最上层，避免“先消失、再以 100% 闪回”。
-        QTimer.singleShot(
-            120,
-            lambda: self._finish_project_loading(token),
-        )
-
-    def _finish_project_loading(self, token):
-        if token != self._render_token:
-            return
-        self.loading_overlay.raise_()
-        self.loading_overlay.finish()
 
     def _on_icon_ready(self, url, pix):
         for card in self._cards:
@@ -2221,11 +2378,67 @@ class ModBrowserPage(QWidget):
             page.deleteLater()
         self.stack.setCurrentWidget(self._browser_widget)
 
+    def _download_status_style(self, level='normal'):
+        light = False
+        try:
+            light = QApplication.palette().color(QPalette.Window).lightness() > 128
+        except Exception:
+            pass
+        colors = {
+            'error': '#B42318' if light else '#FF8A8A',
+            'warning': '#8A5A00' if light else '#F0B45A',
+            'success': '#2F6F6F' if light else '#A8E6E6',
+            'normal': 'rgba(0,0,0,0.55)' if light else 'rgba(255,255,255,0.55)',
+        }
+        return f'color:{colors.get(level, colors["normal"])}; font-size:12px;'
+
+    def _set_download_status(self, text, level='normal'):
+        self._download_status_text = str(text or '')
+        self._download_status_level = str(level or 'normal')
+        self.status_label.setText(self._download_status_text)
+        self.status_label.setStyleSheet(
+            self._download_status_style(self._download_status_level)
+        )
+
+    def _apply_download_status_style(self):
+        if (
+            getattr(self, '_download_status_text', '')
+            and self.status_label.text() == self._download_status_text
+        ):
+            self.status_label.setStyleSheet(
+                self._download_status_style(self._download_status_level)
+            )
+
+    def set_light(self, light):
+        '''主题切换时刷新下载状态文字，避免沿用旧主题颜色。'''
+
+        self._apply_download_status_style()
+
+    def _refresh_download_bar_visibility(self):
+        active = [
+            worker for worker, ctx in self._download_contexts.items()
+            if not ctx.get('terminal')
+        ]
+        if not active:
+            self._download_current = None
+            self.download_bar.hide()
+            self.download_bar.setRange(0, 100)
+            return
+        if self._download_current not in active:
+            self._download_current = active[-1]
+        self.download_bar.setRange(0, 100)
+        self.download_bar.show()
+
     def _start_project_download(self, project, mod_file, world, game_dir, manual_dir=None):
         display_name = project.translated_title or project.english_title or project.title
-        if self.project_type == 'modpack':
-            dest = PROJECT_TEMP / 'modpacks' / sanitize_filename(mod_file.filename, 'modpack.mrpack')
-            self._pending_download = 'modpack', project.title
+        kind = 'modpack' if self.project_type == 'modpack' else 'file'
+        if kind == 'modpack':
+            pack_dir = PROJECT_TEMP / 'modpacks'
+            pack_dir.mkdir(parents=True, exist_ok=True)
+            dest = unique_path(
+                pack_dir,
+                sanitize_filename(mod_file.filename, 'modpack.mrpack'),
+            )
         else:
             if self.project_type == 'datapack':
                 if not world:
@@ -2252,17 +2465,58 @@ class ModBrowserPage(QWidget):
                 )
                 return
             dest = unique_path(dest_dir, self._formatted_filename(project, mod_file))
-            self._pending_download = 'file', str(dest), display_name
-        self._download_expected_size = int(mod_file.size or 0)
         worker = DownloadWorker(mod_file.download_url, dest, mod_file.sha1, mod_file.size)
-        worker.status.connect(self.status_label.setText)
-        worker.progress.connect(self._on_download_progress)
-        worker.done.connect(self._on_download_done)
-        worker.error.connect(self._on_download_error)
+        task_id = f'community-{self.project_type}-{id(self)}-{time.monotonic_ns()}'
+        context = {
+            'task_id': task_id,
+            'kind': kind,
+            'dest': str(dest),
+            'name': project.title,
+            'display': display_name,
+            'filename': mod_file.filename,
+            'size': int(mod_file.size or 0),
+            'percent': 0.0,
+            'terminal': False,
+            'last_time': time.monotonic(),
+            'last_done': 0,
+            'speed_text': '',
+        }
+        self._download_contexts[worker] = context
+        self._download_tasks[task_id] = worker
+        self._download_current = worker
+        manager = DownloadManager.instance()
+        manager.start_task(
+            task_id,
+            f'下载 {display_name}',
+            steps=[{
+                'text': f'下载 {mod_file.filename}',
+                'state': 'active',
+                'percent': 0,
+            }],
+            cancel_callback=worker.cancel,
+        )
+        manager.update_task(task_id, percent=0.0, status='准备下载...')
+        manager.update_step(task_id, 0, state='active', percent=0)
+        worker.status.connect(
+            (lambda text, w=worker: self._on_download_status(w, text))
+        )
+        worker.progress.connect(
+            (lambda done, total, w=worker: self._on_download_progress(w, done, total))
+        )
+        worker.done.connect(
+            (lambda path, w=worker: self._on_download_done(w, path))
+        )
+        worker.error.connect(
+            (lambda message, w=worker: self._on_download_error(w, message))
+        )
+        worker.finished.connect(
+            (lambda w=worker: self._on_download_finished(w))
+        )
         self._workers.append(worker)
         worker.finished.connect((lambda w=worker: self._release_worker(w)))
-        self.download_bar.show()
+        self._set_download_status(f'准备下载 {display_name}...', 'normal')
         self.download_bar.reset_value()
+        self._refresh_download_bar_visibility()
         _track_worker(worker)
 
     def _choose_manual_folder(self, project, mod_file, world, game_dir, folder_name='mods'):
@@ -2275,49 +2529,143 @@ class ModBrowserPage(QWidget):
         if chosen:
             self._start_project_download(project, mod_file, world, game_dir, Path(chosen))
 
-    def _on_download_progress(self, done, total):
-        if total <= 0:
-            total = int(getattr(self, '_download_expected_size', 0) or 0)
-        if total > 0:
-            self.download_bar.setRange(0, 100)
-            self.download_bar.set_animated_value(min(100, int(done * 100 / total)))
-            self.status_label.setText(f'下载中... {done / 1024 / 1024:.1f} / {total / 1024 / 1024:.1f} MB')
+    def _on_download_status(self, worker, text):
+        context = self._download_contexts.get(worker)
+        if (
+            context is None
+            or context.get('terminal')
+            or getattr(worker, '_cancelled', False)
+        ):
             return
-        self.download_bar.setRange(0, 0)
-        self.status_label.setText(f'下载中... {done / 1024 / 1024:.1f} MB')
+        text = str(text or '')
+        DownloadManager.instance().update_task(context['task_id'], status=text)
+        if worker is self._download_current:
+            self._set_download_status(text, 'normal')
 
-    def _on_download_done(self, path):
-        self.download_bar.hide()
-        self.download_bar.setRange(0, 100)
-        pending = self._pending_download or ()
-        kind = pending[0] if len(pending) > 0 else 'file'
-        name = pending[1] if len(pending) > 1 else ''
-        display = pending[2] if len(pending) > 2 else name
-        self._pending_download = None
-        if kind == 'modpack':
-            self.status_label.setText('整合包下载完成，准备导入...')
-            self.import_pack_requested.emit(path, name)
+    def _on_download_progress(self, worker, done, total):
+        context = self._download_contexts.get(worker)
+        if (
+            context is None
+            or context.get('terminal')
+            or getattr(worker, '_cancelled', False)
+        ):
             return
-        self.status_label.setText(f'下载完成: {path}')
-        display = display or Path(path).stem
+        done = max(0, int(done or 0))
+        total = max(0, int(total or 0))
+        if total <= 0:
+            total = int(context.get('size') or 0)
+        percent = min(100.0, done * 100.0 / total) if total > 0 else 0.0
+        now = time.monotonic()
+        elapsed = now - float(context.get('last_time') or now)
+        if elapsed >= 0.35:
+            moved = done - int(context.get('last_done') or 0)
+            if moved >= 0:
+                speed = moved / elapsed
+                context['speed_text'] = f'{speed / 1024 / 1024:.2f} MB/s'
+            context['last_time'] = now
+            context['last_done'] = done
+        context['percent'] = percent
+        manager = DownloadManager.instance()
+        manager.update_task(
+            context['task_id'],
+            percent=percent,
+            speed=context.get('speed_text') or '0 B/s',
+        )
+        manager.update_step(
+            context['task_id'], 0,
+            state='active', percent=percent,
+        )
+        if worker is not self._download_current:
+            return
+        self.download_bar.setRange(0, 100)
+        self.download_bar.set_animated_value(int(percent))
+        if total > 0:
+            text = (
+                f'下载中... {done / 1024 / 1024:.1f} / '
+                f'{total / 1024 / 1024:.1f} MB'
+            )
+        else:
+            text = f'下载中... {done / 1024 / 1024:.1f} MB'
+        speed_text = context.get('speed_text') or ''
+        if speed_text:
+            text += f' · {speed_text}'
+        self._set_download_status(text, 'normal')
+
+    def _on_download_done(self, worker, path):
+        context = self._download_contexts.get(worker)
+        if context is None:
+            return
+        if getattr(worker, '_cancelled', False):
+            context['terminal'] = True
+            DownloadManager.instance().finish_task(
+                context['task_id'], False, '已取消'
+            )
+            return
+        context['terminal'] = True
+        path = str(path)
+        manager = DownloadManager.instance()
+        manager.finish_task(context['task_id'], True, '下载完成')
+        if worker is self._download_current:
+            if context['kind'] == 'modpack':
+                self._set_download_status('整合包下载完成，准备导入...', 'success')
+            else:
+                self._set_download_status(f'下载完成: {path}', 'success')
+        self._refresh_download_bar_visibility()
+        if context['kind'] == 'modpack':
+            self.import_pack_requested.emit(path, context.get('name') or '')
+            return
+        display = context.get('display') or Path(path).stem
         QTimer.singleShot(
             150,
             (lambda n=display: show_toast(f'{n} 下载成功！', 'success', self, 3500)),
         )
 
-    def _on_download_error(self, message):
-        self.download_bar.hide()
-        self._pending_download = None
-        if not is_network_error_text(message):
-            if not network_available():
-                if '校验' not in str(message):
-                    self.status_label.setText('未连接到互联网')
-                    self.status_label.setStyleSheet('color:rgba(255,255,255,0.5); font-size:12px;')
-                    notify_network_failure(self, '下载文件')
-                    return
-        self.status_label.setText(message)
-        self.status_label.setStyleSheet('color: #ff7777; font-size: 12px;')
+    def _on_download_error(self, worker, message):
+        context = self._download_contexts.get(worker)
+        if context is None:
+            return
+        context['terminal'] = True
+        message = str(message or '下载失败')
+        network_problem = (
+            not is_network_error_text(message)
+            and not network_available()
+            and '校验' not in message
+        )
+        shown_message = '未连接到互联网' if network_problem else message
+        DownloadManager.instance().finish_task(
+            context['task_id'], False, shown_message
+        )
+        if worker is self._download_current:
+            self._set_download_status(
+                shown_message,
+                'warning' if network_problem else 'error',
+            )
+        self._refresh_download_bar_visibility()
+        if network_problem:
+            notify_network_failure(self, '下载文件')
+            return
         QMessageBox.warning(self, '下载失败', message)
+
+    def _on_download_finished(self, worker):
+        context = self._download_contexts.pop(worker, None)
+        if context is None:
+            self._release_worker(worker)
+            return
+        task_id = context['task_id']
+        self._download_tasks.pop(task_id, None)
+        cancelled = bool(getattr(worker, '_cancelled', False))
+        if not context.get('terminal'):
+            message = '已取消' if cancelled else '下载已停止'
+            DownloadManager.instance().finish_task(task_id, False, message)
+        elif cancelled:
+            # 取消任务时 cancel_task 已经移除了卡片。
+            DownloadManager.instance().finish_task(task_id, False, '已取消')
+        if cancelled and worker is self._download_current:
+            self._set_download_status('已取消下载', 'warning')
+        if worker is self._download_current:
+            self._download_current = None
+        self._refresh_download_bar_visibility()
+        self._release_worker(worker)
 
     def _choose_local_pack(self):
         path, _ = QFileDialog.getOpenFileName(self, '选择整合包', '', 'Minecraft 整合包 (*.mrpack *.zip);;所有文件 (*.*)')
@@ -2354,6 +2702,10 @@ class ModBrowserPage(QWidget):
         if self._files_page is not None:
             self._close_files_page()
         self.icon_loader.stop()
+        manager = DownloadManager.instance()
+        for context in list(self._download_contexts.values()):
+            if not context.get('terminal'):
+                manager.cancel_task(context.get('task_id'))
         for worker in list(self._workers):
             cancel = getattr(worker, 'cancel', None)
             if callable(cancel):

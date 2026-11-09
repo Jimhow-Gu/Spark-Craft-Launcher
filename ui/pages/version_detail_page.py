@@ -11,14 +11,16 @@ from concurrent.futures import (FIRST_COMPLETED, ThreadPoolExecutor, wait)
 import requests
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QScrollArea, QMessageBox, QSpacerItem, QSizePolicy, QListWidget, QListWidgetItem, QFrame)
 from pathlib import Path
-from PySide6.QtCore import (Qt, Signal, QThread, QSize, QEasingCurve, QPropertyAnimation)
+from PySide6.QtCore import (Qt, Signal, QThread, QSize, QEasingCurve)
 from PySide6.QtGui import QFont, QIcon
 from core.app_font import ui_font
 from core.net import network_available
 from ui.version_meta import loader_supported, version_tuple
 from ui.widgets.back_button import BackButton
+from ui.widgets.height_animation import HeightAnimation
 from ui.widgets.loading_overlay import LoadingOverlay
-from ui.widgets.painted_icons import painted_icon, set_button_icon
+from ui.widgets.rotating_chevron import RotatingChevronButton
+from ui.widgets.painted_icons import set_button_icon
 try:
     import minecraft_launcher_lib
     HAS_LIB = True
@@ -448,12 +450,12 @@ class VersionDetailPage(QWidget):
         cancel_btn.hide()
         row.addWidget(cancel_btn)
         self._loader_cancel_buttons[loader_id] = cancel_btn
-        arrow = QLabel()
-        arrow.setFixedSize(18, 18)
-        arrow.setAlignment(Qt.AlignCenter)
-        arrow.setPixmap(painted_icon('chevron_right', 16, '#aab4c0').pixmap(16, 16))
-        arrow.setStyleSheet('background:transparent;')
+        arrow = RotatingChevronButton(
+            size=18, collapsed_angle=-90, expanded_angle=0,
+            light_color='#5F6F6F', dark_color='#AAB4C0',
+        )
         arrow.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        arrow.setCursor(Qt.ArrowCursor)
         row.addWidget(arrow)
         self._loader_arrows[loader_id] = arrow
         if not has_versions:
@@ -579,7 +581,7 @@ class VersionDetailPage(QWidget):
             body.setMinimumHeight(0)
             body.setMaximumHeight(0)
             body.show()
-            animation = QPropertyAnimation(body, b'maximumHeight', self)
+            animation = HeightAnimation(body, self)
             animation.setDuration(160)
             animation.setStartValue(0)
             animation.setEndValue(target)
@@ -602,7 +604,7 @@ class VersionDetailPage(QWidget):
         body.setMinimumHeight(0)
         body.setMaximumHeight(start)
         body.show()
-        animation = QPropertyAnimation(body, b'maximumHeight', self)
+        animation = HeightAnimation(body, self)
         animation.setDuration(160)
         animation.setStartValue(start)
         animation.setEndValue(0)
@@ -624,7 +626,7 @@ class VersionDetailPage(QWidget):
         arrow = self._loader_arrows.get(loader_id)
         if arrow is None:
             return
-        arrow.setPixmap(painted_icon('chevron_up' if expanded else 'chevron_right', 16, '#aab4c0').pixmap(16, 16))
+        arrow.set_expanded(expanded, animate=self.isVisible())
 
     def _toggle_loader_versions(self, loader_id):
         body = self._loader_version_lists.get(loader_id)

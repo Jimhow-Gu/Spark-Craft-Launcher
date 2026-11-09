@@ -10,8 +10,10 @@ import json
 import os
 import re
 import time
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import (Any, Dict, List, Optional, Tuple)
 from urllib.parse import quote
 from core.config import ConfigManager
@@ -657,6 +659,105 @@ class CurseForgeSource(BaseSource):
         result.sort(key=(lambda x: x[1].lower()))
         self._category_cache[project_type] = result
         return result
+
+
+def normalize_mod_token(value):
+    '''把 Mod ID/名称归一化，供已安装前置检测使用。'''
+
+    return re.sub('[^a-z0-9]+', '', str(value or '').strip().lower())
+
+
+def installed_mod_tokens(mods_dir):
+    '''读取已安装 Mod 的 ID/名称标记。
+
+    只读取 JAR 内的轻量元数据，不解析图标和介绍；用于在下载页判断
+    前置 Mod 是否已经安装，避免安装后仍被标记为缺失。
+    '''
+
+    tokens = set()
+
+    def add(value):
+        token = normalize_mod_token(value)
+        if len(token) >= 3 and not token.isdigit():
+            tokens.add(token)
+
+    try:
+        files = sorted(Path(mods_dir).iterdir(), key=(lambda p: p.name.lower()))
+    except OSError:
+        return tokens
+    for path in files:
+        try:
+            if not path.is_file():
+                continue
+            lower = path.name.lower()
+            # 被禁用的 Mod 不会被加载，不能算作已安装前置。
+            if not lower.endswith('.jar'):
+                continue
+            base_name = path.name
+            stem = base_name[:-4]
+            add(stem)
+            # fabric-api-0.92.2+1.20.1 这类文件名只保留版本号前的部分。
+            add(re.split('[-_+](?=\\d)', stem, 1)[0])
+            try:
+                with zipfile.ZipFile(path) as zf:
+                    names = set(zf.namelist())
+                    if 'fabric.mod.json' in names or 'quilt.mod.json' in names:
+                        meta_name = (
+                            'fabric.mod.json'
+                            if 'fabric.mod.json' in names
+                            else 'quilt.mod.json'
+                        )
+                        meta = json.loads(
+                            zf.read(meta_name).decode('utf-8', 'replace')
+                        )
+                        if isinstance(meta, dict):
+                            add(meta.get('id'))
+                            add(meta.get('name'))
+                            for provided in meta.get('provides') or []:
+                                if isinstance(provided, str):
+                                    add(provided)
+                            quilt = meta.get('quilt_loader')
+                            if isinstance(quilt, dict):
+                                add(quilt.get('id'))
+                                metadata = quilt.get('metadata')
+                                if isinstance(metadata, dict):
+                                    add(metadata.get('name'))
+                        continue
+                    meta_name = ''
+                    if 'META-INF/neoforge.mods.toml' in names:
+                        meta_name = 'META-INF/neoforge.mods.toml'
+                    elif 'META-INF/mods.toml' in names:
+                        meta_name = 'META-INF/mods.toml'
+                    if meta_name:
+                        text = zf.read(meta_name).decode('utf-8', 'replace')
+                        for value in re.findall(
+                            '(?im)^\\s*modId\\s*=\\s*["\\\']([^"\\\']+)',
+                            text,
+                        ):
+                            add(value)
+                        for value in re.findall(
+                            '(?im)^\\s*displayName\\s*=\\s*["\\\']([^"\\\']+)',
+                            text,
+                        ):
+                            add(value)
+                        continue
+                    if 'mcmod.info' in names:
+                        data = json.loads(
+                            zf.read('mcmod.info').decode('utf-8', 'replace')
+                        )
+                        if isinstance(data, dict):
+                            data = [data]
+                        for item in data if isinstance(data, list) else []:
+                            if not isinstance(item, dict):
+                                continue
+                            add(item.get('modid'))
+                            add(item.get('name'))
+            except (OSError, ValueError, RuntimeError,
+                    NotImplementedError, zipfile.BadZipFile):
+                pass
+        except OSError:
+            continue
+    return tokens
 
 
 def get_source(name):

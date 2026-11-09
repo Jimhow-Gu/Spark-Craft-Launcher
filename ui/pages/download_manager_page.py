@@ -1,11 +1,22 @@
 '''下载管理页面：显示所有下载/修复任务与步骤。'''
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton,
-                               QScrollArea, QVBoxLayout, QWidget)
+from PySide6.QtGui import QPalette
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
+                               QPushButton, QScrollArea, QVBoxLayout, QWidget)
 from core.download_manager import DownloadManager
+from ui.design import (ACCENT_TEXT, DEEP_ACCENT_LIGHT, MUTED_LIGHT,
+                       TEXT_DARK, TEXT_LIGHT)
 from ui.widgets.back_button import BackButton
 from ui.widgets.smooth_progress import SmoothProgressBar
+
+
+def _is_light_theme():
+    try:
+        palette = QApplication.palette()
+        return palette.color(QPalette.Window).lightness() > 128
+    except Exception:
+        return False
 
 
 class _TaskCard(QFrame):
@@ -14,13 +25,11 @@ class _TaskCard(QFrame):
     def __init__(self, task: dict, parent=None, start_percent: float = 0.0):
         super().__init__(parent)
         self.task_id = task.get('id', '')
+        self._light = _is_light_theme()
+        self._task = dict(task)
         self.setObjectName('DownloadTaskCard')
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setStyleSheet(
-            '\n            QFrame#DownloadTaskCard { background:rgba(30,32,40,0.9);\n'
-            "                border:1px solid rgba(255,255,255,0.22); border-radius:10px; }\n"
-            '            QLabel { background:transparent; }\n        '
-        )
+        self.setProperty('_theme_ignore', True)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 12, 16, 12)
         layout.setSpacing(8)
@@ -28,19 +37,16 @@ class _TaskCard(QFrame):
         self.title_label = QLabel(task.get('title', '下载任务'))
         self.title_label.setWordWrap(True)
         self.title_label.setMinimumWidth(0)
-        self.title_label.setStyleSheet('color:#f0f0f0; font-size:14px; font-weight:900;')
+        self.title_label.setProperty('_theme_ignore', True)
         header.addWidget(self.title_label, 1)
         header.addStretch(1)
         self.pct_label = QLabel(f'{float(task.get("percent", 0)):.2f}%')
-        self.pct_label.setStyleSheet('color:#A8E6E6; font-size:13px; font-weight:900;')
+        self.pct_label.setProperty('_theme_ignore', True)
         header.addWidget(self.pct_label)
         self.close = QPushButton('✕')
         self.close.setFixedSize(24, 24)
         self.close.setToolTip('关闭任务' if task.get('done') else '取消并关闭下载')
-        self.close.setStyleSheet(
-            'QPushButton { background:transparent; color:#aaa; border:none; font-size:13px; }'
-            'QPushButton:hover { color:#fff; background:rgba(255,255,255,0.12); border-radius:12px; }'
-        )
+        self.close.setProperty('_theme_ignore', True)
         self.close.clicked.connect(lambda: self.remove_requested.emit(self.task_id))
         header.addWidget(self.close)
         layout.addLayout(header)
@@ -50,10 +56,7 @@ class _TaskCard(QFrame):
         self.bar.setValue(start)
         self.bar.setTextVisible(False)
         self.bar.setFixedHeight(7)
-        self.bar.setStyleSheet(
-            '\n            QProgressBar { background:rgba(255,255,255,0.12); border:none; border-radius:3px; }\n'
-            '            QProgressBar::chunk { background:#88DDDD; border-radius:3px; }\n        '
-        )
+        self.bar.setProperty('_theme_ignore', True)
         self.bar.valueChanged.connect(self._on_bar_value)
         layout.addWidget(self.bar)
         percent = float(task.get('percent', 0))
@@ -61,6 +64,7 @@ class _TaskCard(QFrame):
             self.bar.set_animated_value(int(max(0.0, min(100, percent)) * 10))
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
+        self.status_label.setProperty('_theme_ignore', True)
         self.status_label.hide()
         layout.addWidget(self.status_label)
         self.steps_layout = QVBoxLayout()
@@ -68,7 +72,54 @@ class _TaskCard(QFrame):
         self.steps_layout.setSpacing(0)
         layout.addLayout(self.steps_layout)
         self._step_rows = []
+        self._apply_theme()
         self.update_task(task)
+
+    def _apply_theme(self):
+        light = self._light
+        background = 'rgba(249,251,251,0.94)' if light else 'rgba(30,32,40,0.9)'
+        border = 'rgba(64,153,153,0.28)' if light else 'rgba(255,255,255,0.22)'
+        self.setStyleSheet(
+            f'QFrame#DownloadTaskCard {{ background:{background};'
+            f' border:1px solid {border}; border-radius:10px; }}'
+            'QFrame#DownloadTaskCard QLabel { background:transparent; }'
+        )
+        self.title_label.setStyleSheet(
+            f'color:{TEXT_LIGHT if light else TEXT_DARK};'
+            'font-size:14px; font-weight:900;'
+        )
+        self.pct_label.setStyleSheet(
+            f'color:{DEEP_ACCENT_LIGHT if light else ACCENT_TEXT};'
+            'font-size:13px; font-weight:900;'
+        )
+        if light:
+            close_style = (
+                'QPushButton { background:transparent; color:#666; border:none; font-size:13px; }'
+                'QPushButton:hover { color:#111; background:rgba(0,0,0,0.10); border-radius:12px; }'
+            )
+            bar_style = (
+                'QProgressBar { background:rgba(64,153,153,0.16); border:none; border-radius:3px; }'
+                f'QProgressBar::chunk {{ background:{DEEP_ACCENT_LIGHT}; border-radius:3px; }}'
+            )
+        else:
+            close_style = (
+                'QPushButton { background:transparent; color:#aaa; border:none; font-size:13px; }'
+                'QPushButton:hover { color:#fff; background:rgba(255,255,255,0.12); border-radius:12px; }'
+            )
+            bar_style = (
+                'QProgressBar { background:rgba(255,255,255,0.12); border:none; border-radius:3px; }'
+                'QProgressBar::chunk { background:#88DDDD; border-radius:3px; }'
+            )
+        self.close.setStyleSheet(close_style)
+        self.bar.setStyleSheet(bar_style)
+
+    def set_light(self, light):
+        light = bool(light)
+        if light == self._light:
+            return
+        self._light = light
+        self._apply_theme()
+        self.update_task(self._task)
 
     def _on_bar_value(self, value):
         try:
@@ -79,6 +130,7 @@ class _TaskCard(QFrame):
     def update_task(self, task: dict):
         '''原地更新卡片内容，避免整卡重建造成的闪烁。'''
 
+        self._task = dict(task)
         title = str(task.get('title', '下载任务'))
         if self.title_label.text() != title:
             self.title_label.setText(title)
@@ -89,11 +141,11 @@ class _TaskCard(QFrame):
         if status:
             failed = task.get('done') and task.get('success') is False
             self.status_label.setText(status)
-            self.status_label.setStyleSheet(
-                'color:#ff8a8a; font-size:12px;'
-                if failed else
-                'color:rgba(255,255,255,0.58); font-size:12px;'
-            )
+            if failed:
+                color = '#B42318' if self._light else '#ff8a8a'
+            else:
+                color = MUTED_LIGHT if self._light else 'rgba(255,255,255,0.58)'
+            self.status_label.setStyleSheet(f'color:{color}; font-size:12px;')
             self.status_label.show()
         else:
             self.status_label.clear()
@@ -121,20 +173,29 @@ class _TaskCard(QFrame):
                 text = QLabel()
                 text.setWordWrap(True)
                 text.setStyleSheet('font-size:13px;')
+                icon.setProperty('_theme_ignore', True)
+                text.setProperty('_theme_ignore', True)
                 lay.addWidget(icon)
                 lay.addWidget(text, 1)
                 self.steps_layout.addWidget(row)
                 self._step_rows.append((icon, text))
+        light = self._light
+        active_color = DEEP_ACCENT_LIGHT if light else ACCENT_TEXT
+        pending_icon = 'rgba(0,0,0,0.35)' if light else 'rgba(255,255,255,0.35)'
+        active_text = 'rgba(0,0,0,0.76)' if light else 'rgba(255,255,255,0.8)'
+        pending_text = 'rgba(0,0,0,0.48)' if light else 'rgba(255,255,255,0.5)'
         for (icon, text), step in zip(self._step_rows, steps):
             state = step.get('state', 'pending')
             mark = {'done': '✓', 'active': '●', 'error': '✕'}.get(state, '•')
-            color = {'done': '#A8E6E6', 'active': '#A8E6E6',
-                     'error': '#ff6b6b'}.get(state, 'rgba(255,255,255,0.35)')
+            color = {'done': active_color, 'active': active_color,
+                     'error': '#B42318' if light else '#ff6b6b'}.get(
+                         state, pending_icon
+                     )
             icon.setText(mark)
             icon.setStyleSheet(f'color:{color}; font-size:15px; font-weight:900;')
             text.setText(f'{step.get("text", "")}    {float(step.get("percent", 0)):.0f}%')
             text.setStyleSheet(
-                f'color:{"rgba(255,255,255,0.8)" if state in ("done", "active") else "rgba(255,255,255,0.5)"};'
+                f'color:{active_text if state in ("done", "active") else pending_text};'
                 'font-size:13px;'
             )
 
@@ -148,6 +209,7 @@ class DownloadManagerPage(QWidget):
         self._percent_cache = {}
         self._had_tasks = False
         self._cards = {}
+        self._light = _is_light_theme()
         self.setObjectName('DownloadManagerPage')
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet('QWidget#DownloadManagerPage { background:transparent; }')
@@ -157,54 +219,50 @@ class DownloadManagerPage(QWidget):
         top = QHBoxLayout()
         back = BackButton()
         back.clicked.connect(lambda: self.back_requested.emit())
-        title = QLabel('下载管理')
-        title.setStyleSheet('color:#f0f0f0; font-size:22px; font-weight:900;')
+        self.title_label = QLabel('下载管理')
+        self.title_label.setProperty('_theme_ignore', True)
         top.addWidget(back)
-        top.addWidget(title)
+        top.addWidget(self.title_label)
         top.addStretch(1)
         root.addLayout(top)
         body = QHBoxLayout()
         body.setSpacing(18)
-        stats = QFrame()
-        stats.setObjectName('DownloadStats')
-        stats.setAttribute(Qt.WA_StyledBackground, True)
-        stats.setFixedWidth(190)
-        stats.setStyleSheet(
-            'QFrame#DownloadStats { background:rgba(30,32,40,0.9);'
-            ' border:1px solid rgba(255,255,255,0.22); border-radius:10px; }'
-            ' QLabel { background:transparent; }'
-        )
-        stats_layout = QVBoxLayout(stats)
+        self.stats = QFrame()
+        self.stats.setObjectName('DownloadStats')
+        self.stats.setAttribute(Qt.WA_StyledBackground, True)
+        self.stats.setFixedWidth(190)
+        self.stats.setProperty('_theme_ignore', True)
+        stats_layout = QVBoxLayout(self.stats)
         stats_layout.setContentsMargins(16, 22, 16, 22)
         stats_layout.setSpacing(6)
-        total_title = QLabel('总进度')
-        total_title.setAlignment(Qt.AlignCenter)
-        total_title.setStyleSheet('color:#A8E6E6; font-size:14px;')
-        stats_layout.addWidget(total_title)
+        self.total_title = QLabel('总进度')
+        self.total_title.setAlignment(Qt.AlignCenter)
+        self.total_title.setProperty('_theme_ignore', True)
+        stats_layout.addWidget(self.total_title)
         self.total_label = QLabel('0.00 %')
         self.total_label.setAlignment(Qt.AlignCenter)
-        self.total_label.setStyleSheet('color:#f0f0f0; font-size:24px; font-weight:900;')
+        self.total_label.setProperty('_theme_ignore', True)
         stats_layout.addWidget(self.total_label)
         stats_layout.addSpacing(16)
-        speed_title = QLabel('下载速度')
-        speed_title.setAlignment(Qt.AlignCenter)
-        speed_title.setStyleSheet('color:#A8E6E6; font-size:14px;')
-        stats_layout.addWidget(speed_title)
+        self.speed_title = QLabel('下载速度')
+        self.speed_title.setAlignment(Qt.AlignCenter)
+        self.speed_title.setProperty('_theme_ignore', True)
+        stats_layout.addWidget(self.speed_title)
         self.speed_label = QLabel('0 B/s')
         self.speed_label.setAlignment(Qt.AlignCenter)
-        self.speed_label.setStyleSheet('color:#f0f0f0; font-size:20px;')
+        self.speed_label.setProperty('_theme_ignore', True)
         stats_layout.addWidget(self.speed_label)
         stats_layout.addSpacing(16)
-        remaining_title = QLabel('剩余文件')
-        remaining_title.setAlignment(Qt.AlignCenter)
-        remaining_title.setStyleSheet('color:#A8E6E6; font-size:14px;')
-        stats_layout.addWidget(remaining_title)
+        self.remaining_title = QLabel('剩余文件')
+        self.remaining_title.setAlignment(Qt.AlignCenter)
+        self.remaining_title.setProperty('_theme_ignore', True)
+        stats_layout.addWidget(self.remaining_title)
         self.remaining_label = QLabel('0')
         self.remaining_label.setAlignment(Qt.AlignCenter)
-        self.remaining_label.setStyleSheet('color:#f0f0f0; font-size:20px;')
+        self.remaining_label.setProperty('_theme_ignore', True)
         stats_layout.addWidget(self.remaining_label)
         stats_layout.addStretch(1)
-        body.addWidget(stats)
+        body.addWidget(self.stats)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -229,7 +287,43 @@ class DownloadManagerPage(QWidget):
         self._refresh_timer.setInterval(150)
         self._refresh_timer.timeout.connect(self.refresh)
         self.manager.changed.connect(self._on_manager_changed)
+        self._apply_theme()
         self.refresh()
+
+    def _apply_theme(self):
+        light = self._light
+        self.title_label.setStyleSheet(
+            f'color:{TEXT_LIGHT if light else TEXT_DARK};'
+            'font-size:22px; font-weight:900;'
+        )
+        background = 'rgba(249,251,251,0.94)' if light else 'rgba(30,32,40,0.9)'
+        border = 'rgba(64,153,153,0.28)' if light else 'rgba(255,255,255,0.22)'
+        self.stats.setStyleSheet(
+            f'QFrame#DownloadStats {{ background:{background};'
+            f' border:1px solid {border}; border-radius:10px; }}'
+            'QFrame#DownloadStats QLabel { background:transparent; }'
+        )
+        accent = DEEP_ACCENT_LIGHT if light else ACCENT_TEXT
+        primary = TEXT_LIGHT if light else TEXT_DARK
+        for label in (self.total_title, self.speed_title, self.remaining_title):
+            label.setStyleSheet(f'color:{accent}; font-size:14px;')
+        self.total_label.setStyleSheet(
+            f'color:{primary}; font-size:24px; font-weight:900;'
+        )
+        self.speed_label.setStyleSheet(f'color:{primary}; font-size:20px;')
+        self.remaining_label.setStyleSheet(f'color:{primary}; font-size:20px;')
+
+    def set_light(self, light):
+        light = bool(light)
+        if light == self._light:
+            return
+        self._light = light
+        self._apply_theme()
+        for card in list(self._cards.values()):
+            try:
+                card.set_light(light)
+            except RuntimeError:
+                continue
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -272,9 +366,11 @@ class DownloadManagerPage(QWidget):
                 )
                 self.remaining_label.setText(str(pending_steps))
             return
-        failed = [t for t in tasks if t.get('done') and not t.get('success')]
-        if failed:
-            self.total_label.setText(f'{float(failed[-1].get("percent", 0)):.2f} %')
+        snapshot = self.manager.snapshot()
+        if snapshot.get('failed'):
+            self.total_label.setText(
+                f'{float(snapshot.get("percent", 0)):.2f} %'
+            )
         else:
             self.total_label.setText('0.00 %')
         self.speed_label.setText('0 B/s')

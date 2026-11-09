@@ -8,7 +8,7 @@ import shutil
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QThread, QTimer, Signal, QEasingCurve, QPropertyAnimation
+from PySide6.QtCore import Qt, QSize, QThread, QTimer, Signal, QEasingCurve
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -28,6 +28,8 @@ from PySide6.QtWidgets import (
 
 from core.app_font import ui_font
 from core.paths import safe_rmtree
+from ui.widgets.height_animation import HeightAnimation
+from ui.widgets.rotating_chevron import RotatingChevronButton
 from core.config import ConfigManager
 from core.download_manager import DownloadManager
 from core.installers import create_alias, install_fabric, install_forge, install_neoforge, pick_java
@@ -1255,16 +1257,11 @@ class LoaderModifyPage(QWidget):
         remove.clicked.connect((lambda _=False, k=key: self._clear_selection(k)))
         row.addWidget(remove)
 
-        arrow = QToolButton()
-        arrow.setToolTip('展开版本列表')
-        arrow.setFixedSize(26, 26)
-        arrow.setIconSize(QSize(16, 16))
-        set_button_icon(arrow, 'chevron_right', 16, '#aab4c0')
-        arrow.setStyleSheet(
-            'QToolButton { background:transparent; border:none; border-radius:5px; }'
-            'QToolButton:hover { background:rgba(255,255,255,0.10); }'
-            'QToolButton:disabled { background:transparent; }'
+        arrow = RotatingChevronButton(
+            size=26, collapsed_angle=-90, expanded_angle=0,
+            light_color='#5F6F6F', dark_color='#AAB4C0',
         )
+        arrow.setToolTip('展开版本列表')
         arrow.clicked.connect((lambda _=False, k=key: self._toggle_row(k)))
         row.addWidget(arrow)
         outer.addWidget(header)
@@ -1519,10 +1516,7 @@ class LoaderModifyPage(QWidget):
 
     def _set_arrow(self, key, expanded):
         button = self._rows[key]['arrow']
-        set_button_icon(
-            button, 'chevron_up' if expanded else 'chevron_right',
-            16, '#aab4c0',
-        )
+        button.set_expanded(expanded, animate=self.isVisible())
         button.setToolTip('收起版本列表' if expanded else '展开版本列表')
 
     def _populate_versions(self, key):
@@ -1581,7 +1575,7 @@ class LoaderModifyPage(QWidget):
                 return
             body.setMaximumHeight(0)
             body.show()
-            animation = QPropertyAnimation(body, b'maximumHeight', self)
+            animation = HeightAnimation(body, self)
             animation.setDuration(160)
             animation.setStartValue(0)
             animation.setEndValue(target)
@@ -1604,7 +1598,7 @@ class LoaderModifyPage(QWidget):
             body.setMaximumHeight(16777215)
             return
         start = max(1, body.height())
-        animation = QPropertyAnimation(body, b'maximumHeight', self)
+        animation = HeightAnimation(body, self)
         animation.setDuration(160)
         animation.setStartValue(start)
         animation.setEndValue(0)

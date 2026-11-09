@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, Signal
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtCore import QEasingCurve, Qt, Signal
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from core.app_font import ui_font
-from ui.widgets.painted_icons import set_button_icon
+from ui.widgets.height_animation import HeightAnimation
+from ui.widgets.rotating_chevron import RotatingChevronButton
+from ui.widgets.rounded_surface import RoundedFrame
 
 
 class _CollapsibleHeader(QFrame):
@@ -34,12 +36,9 @@ class CollapsibleSection(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        self.card = QFrame()
+        self.card = RoundedFrame(radius=12)
         self.card.setObjectName('CollapsibleCard')
-        self.card.setAttribute(Qt.WA_StyledBackground, True)
         self.card.setStyleSheet(
-            'QFrame#CollapsibleCard { background:rgba(30,41,41,0.84);'
-            ' border:1px solid rgba(255,255,255,0.22); border-radius:12px; }'
             'QFrame#CollapsibleCard QLabel { background:transparent; border:none; }'
             'QFrame#CollapsibleHeader { background:transparent; border:none; border-radius:12px; }'
             'QFrame#CollapsibleHeader:hover { background:rgba(255,255,255,0.04); }'
@@ -57,16 +56,12 @@ class CollapsibleSection(QWidget):
         self.title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         header_layout.addWidget(self.title_label)
         header_layout.addStretch(1)
-        self.arrow = QToolButton()
-        self.arrow.setFixedSize(28, 28)
-        self.arrow.setIconSize(QSize(15, 15))
-        set_button_icon(self.arrow, 'chevron_right', 15, '#aab4c0')
-        self.arrow.setStyleSheet(
-            'QToolButton { background:transparent; border:none; border-radius:6px; }'
-            'QToolButton:hover { background:rgba(255,255,255,0.08); }'
+        self.arrow = RotatingChevronButton(
+            size=26, collapsed_angle=-90, expanded_angle=0,
+            light_color='#5F6F6F', dark_color='#AAB4C0',
         )
         self.arrow.setToolTip('展开')
-        self.arrow.clicked.connect(self.toggle)
+        self.arrow.clicked.connect(lambda *_: self.toggle())
         header_layout.addWidget(self.arrow)
         card_layout.addWidget(self.header)
         self.content = QWidget()
@@ -75,7 +70,7 @@ class CollapsibleSection(QWidget):
         self.content_layout.setSpacing(10)
         card_layout.addWidget(self.content)
         outer.addWidget(self.card)
-        self._animation = QPropertyAnimation(self.content, b'maximumHeight', self)
+        self._animation = HeightAnimation(self.content, self)
         self._animation.setDuration(180)
         self._animation.setEasingCurve(QEasingCurve.OutCubic)
         self._animation.finished.connect(self._on_animation_finished)
@@ -83,11 +78,12 @@ class CollapsibleSection(QWidget):
         if self._expanded:
             self.content.setMaximumHeight(16777215)
             self.content.show()
-            set_button_icon(self.arrow, 'chevron_up', 15, '#aab4c0')
+            self.arrow.set_expanded(True, animate=False)
             self.arrow.setToolTip('收起')
         else:
             self.content.setMaximumHeight(0)
             self.content.hide()
+            self.arrow.set_expanded(False, animate=False)
 
 
     def set_title(self, text):
@@ -120,7 +116,7 @@ class CollapsibleSection(QWidget):
                 self._animation.setStartValue(0)
                 self._animation.setEndValue(target)
                 self._animation.start()
-            set_button_icon(self.arrow, 'chevron_up', 15, '#aab4c0')
+            self.arrow.set_expanded(True, animate=animate)
             self.arrow.setToolTip('收起')
         else:
             if not animate or not self.content.isVisible():
@@ -132,7 +128,7 @@ class CollapsibleSection(QWidget):
                 self._animation.setStartValue(start)
                 self._animation.setEndValue(0)
                 self._animation.start()
-            set_button_icon(self.arrow, 'chevron_right', 15, '#aab4c0')
+            self.arrow.set_expanded(False, animate=animate)
             self.arrow.setToolTip('展开')
         self.toggled.emit(expanded)
 

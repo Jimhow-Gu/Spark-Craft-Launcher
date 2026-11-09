@@ -1342,6 +1342,9 @@ class HomePage(QWidget):
             except RuntimeError:
                 continue
 
+    def set_light(self, light):
+        self._refresh_running_row_styles()
+
     def changeEvent(self, event):
         if event.type() in (QEvent.PaletteChange, QEvent.StyleChange):
             self._refresh_running_row_styles()
@@ -1352,11 +1355,13 @@ class HomePage(QWidget):
         if not info:
             return
         row = QWidget()
+        row.setProperty('_theme_ignore', True)
         row.setStyleSheet(f'background: {self._running_row_background()}; border-radius: 6px;')
         layout = QHBoxLayout(row)
         layout.setContentsMargins(10, 8, 10, 8)
         pid_text = f'  (PID {info["pid"]})' if info.get('pid') else ''
         label = QLabel(f'运行中：{info["nickname"]}{pid_text}')
+        label.setProperty('_theme_ignore', True)
         label.setStyleSheet(
             f'color: {self._running_row_label_color()}; font-size: 13px; background: transparent;'
         )
@@ -1552,10 +1557,16 @@ class HomePage(QWidget):
             self._append_log(f'{nickname} 已被手动终止')
             self._restore_launcher_after_game()
         else:
-            self.status_label.setText(f'{nickname} 启动失败（退出码 {exit_code}）')
+            self.status_label.setText(
+                f'{nickname} '
+                + ('运行中崩溃' if window_seen else '启动失败')
+                + f'（退出码 {exit_code}）'
+            )
             from core.crash import analyze_crash
             from ui.widgets.crash_dialog import CrashDialog
-            report = analyze_crash(lines, nickname, exit_code)
+            report = analyze_crash(
+                lines, nickname, exit_code, window_seen=window_seen
+            )
             extra = []
             try:
                 mc_dir = Path(self.config.get_mc_dir())
