@@ -117,14 +117,24 @@ def _icon_label(size=44):
 
 
 def _head_from_skin(pixmap, size=44):
+    '''从皮肤纹理合成双层头部（底层 + Hat 覆盖层）。'''
+
     if pixmap.width() >= 64 and pixmap.height() >= 32:
         from PySide6.QtGui import QImage
+        scale = max(1, int(round(pixmap.width() / 64.0)))
         out = QImage(8, 8, QImage.Format_ARGB32_Premultiplied)
         out.fill(Qt.transparent)
         painter = QPainter(out)
-        painter.drawPixmap(0, 0, pixmap.copy(8, 8, 8, 8))
-        if pixmap.height() >= 64:
-            painter.drawPixmap(0, 0, pixmap.copy(40, 8, 8, 8))
+        base = pixmap.copy(8 * scale, 8 * scale, 8 * scale, 8 * scale).scaled(
+            8, 8, Qt.IgnoreAspectRatio, Qt.FastTransformation
+        )
+        painter.drawPixmap(0, 0, base)
+        # 64x32 的旧皮肤也有 Hat 层，只是高度不足 64；不能只看高度跳过。
+        if pixmap.height() >= 16 * scale:
+            hat = pixmap.copy(40 * scale, 8 * scale, 8 * scale, 8 * scale).scaled(
+                8, 8, Qt.IgnoreAspectRatio, Qt.FastTransformation
+            )
+            painter.drawPixmap(0, 0, hat)
         painter.end()
         pixmap = QPixmap.fromImage(out)
     return hidpi_pixmap(pixmap, size, size, smooth=False)
@@ -392,7 +402,9 @@ class AboutPage(QWidget):
         # 同时继续请求官方资料，网络恢复后自动替换为最新头像。
         cache = scl_dir() / 'icon_cache' / 'gubwon_head.png'
         bundled = _IMAGES_DIR / 'gubwon_head.png'
-        initial = cache if cache.is_file() else bundled
+        # 内置头像已合成 Hat 覆盖层；旧缓存可能是单层，优先使用内置版本，
+        # 网络恢复后再用 Mojang 的最新皮肤覆盖。
+        initial = bundled if bundled.is_file() else cache
         pixmap = QPixmap(str(initial)) if initial.is_file() else QPixmap()
         if pixmap.isNull():
             steve = _IMAGES_DIR / 'steve_head.png'

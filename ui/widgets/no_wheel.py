@@ -5,7 +5,9 @@ from PySide6.QtWidgets import QComboBox, QSlider
 
 class WheelGuard(QObject):
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Wheel and isinstance(obj, (QComboBox, QSlider)):
+        if event.type() != QEvent.Wheel:
+            return False
+        if isinstance(obj, (QComboBox, QSlider)):
             event.ignore()
             return True
         return super().eventFilter(obj, event)

@@ -161,27 +161,21 @@ class VersionDetailPage(QWidget):
         header = QHBoxLayout()
         header.setContentsMargins(0, 24, 0, 8)
         header.setSpacing(10)
-        back = BackButton()
-        back.setStyleSheet(
-            f'QPushButton {{ background:transparent; color:{self._text_color()}; border:none;'
-            ' border-radius:19px; }'
-            'QPushButton:hover { background:rgba(136,221,221,0.18); }'
-        )
-        back.clicked.connect(self.back_requested.emit)
-        header.addWidget(back)
+        self.back_btn = BackButton()
+        self.back_btn.clicked.connect(self.back_requested.emit)
+        header.addWidget(self.back_btn)
         heading = version or str(self._data.get('title') or '').strip()
-        title = QLabel(f'{heading}版本详情页' if heading else '版本详情页')
-        title.setFont(ui_font(24, 700))
-        title.setStyleSheet(f'color:{self._text_color()}; font-size:24px; font-weight:900;')
-        header.addWidget(title)
+        self.title_label = QLabel(f'{heading}版本详情页' if heading else '版本详情页')
+        self.title_label.setFont(ui_font(24, 700))
+        header.addWidget(self.title_label)
         header.addStretch(1)
         root.addLayout(header)
 
+        self.date_label = None
         if self._data.get('date'):
-            date = QLabel(f"最后更新：{self._data['date']}")
-            date.setContentsMargins(0, 0, 0, 8)
-            date.setStyleSheet(f'color:{self._muted_color()}; font-size:12px;')
-            root.addWidget(date)
+            self.date_label = QLabel(f"最后更新：{self._data['date']}")
+            self.date_label.setContentsMargins(0, 0, 0, 8)
+            root.addWidget(self.date_label)
 
         light = self._is_light()
         card_bg = 'rgba(255,255,255,0.92)' if light else 'rgba(30,41,41,0.88)'
@@ -189,11 +183,6 @@ class VersionDetailPage(QWidget):
         self.card = QFrame()
         self.card.setObjectName('VersionDetailCard')
         self.card.setAttribute(Qt.WA_StyledBackground, True)
-        self.card.setStyleSheet(
-            f'QFrame#VersionDetailCard {{ background:{card_bg};'
-            f' border:1px solid {card_border}; border-radius:12px; }}'
-            'QFrame#VersionDetailCard QLabel { background:transparent; border:none; }'
-        )
         card_layout = QVBoxLayout(self.card)
         card_layout.setContentsMargins(18, 12, 18, 14)
         card_layout.setSpacing(8)
@@ -202,11 +191,11 @@ class VersionDetailPage(QWidget):
         status.setContentsMargins(0, 0, 0, 0)
         self.loading_icon = FireworksLoader(36)
         self.loading_text = QLabel('正在加载版本详情...')
-        self.loading_text.setStyleSheet(f'color:{self._muted_color()}; font-size:13px;')
         status.addWidget(self.loading_icon)
         status.addWidget(self.loading_text)
         status.addStretch(1)
         card_layout.addLayout(status)
+        self._apply_header_theme(light)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -423,8 +412,35 @@ class VersionDetailPage(QWidget):
             QTimer.singleShot(0, self._fit_browser)
         return super().eventFilter(obj, event)
 
+    def _apply_header_theme(self, light):
+        text_color = '#1b1b1b' if light else '#f0f1f3'
+        muted = '#3f6666' if light else '#bfe3e3'
+        card_bg = 'rgba(255,255,255,0.92)' if light else 'rgba(30,41,41,0.88)'
+        card_border = 'rgba(0,0,0,0.14)' if light else 'rgba(255,255,255,0.18)'
+        widgets = (self.back_btn, self.title_label, self.date_label, self.card, self.loading_text)
+        for widget in widgets:
+            if widget is not None:
+                widget.setProperty('_theme_ignore', True)
+        self.back_btn.setStyleSheet(
+            f'QPushButton {{ background:transparent; color:{text_color}; border:none;'
+            ' border-radius:19px; }'
+            'QPushButton:hover { background:rgba(136,221,221,0.18); }'
+        )
+        self.title_label.setStyleSheet(
+            f'color:{text_color}; font-size:24px; font-weight:900;'
+        )
+        if self.date_label is not None:
+            self.date_label.setStyleSheet(f'color:{muted}; font-size:12px;')
+        self.loading_text.setStyleSheet(f'color:{muted}; font-size:13px;')
+        self.card.setStyleSheet(
+            f'QFrame#VersionDetailCard {{ background:{card_bg};'
+            f' border:1px solid {card_border}; border-radius:12px; }}'
+            'QFrame#VersionDetailCard QLabel { background:transparent; border:none; }'
+        )
+
     def set_light(self, light):
         light = bool(light)
+        self._apply_header_theme(light)
         if not self._last_source or self._html_light == light:
             return
         try:

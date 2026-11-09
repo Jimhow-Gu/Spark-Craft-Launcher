@@ -406,6 +406,43 @@ def _pending_update_marker(version):
 
 DOWNLOADED_MARKER = 'downloaded_update.json'
 
+# 更新后需要重新获取的下载素材；不触碰背景、音乐、皮肤等用户文件。
+_CACHE_REFRESH_ITEMS = (
+    'mcnews_home.xaml',
+    'mcnews_images',
+    'mcnews_details',
+    'mcnews_detail_images',
+    'community_translations.json',
+    'optifabric',
+)
+
+
+def _pending_update_path():
+    return scl_dir() / 'update' / 'pending_update.json'
+
+
+def pending_update_exists():
+    return _pending_update_path().is_file()
+
+
+def clear_launcher_caches():
+    '''新版首次启动时清理旧版下载素材，避免继续显示过期缓存。'''
+
+    root = scl_dir() / 'cache'
+    cleared = 0
+    for name in _CACHE_REFRESH_ITEMS:
+        path = root / name
+        try:
+            if path.is_dir():
+                safe_rmtree(path)
+                cleared += 1
+            elif path.is_file():
+                path.unlink(missing_ok=True)
+                cleared += 1
+        except OSError:
+            continue
+    write_update_log(f'cache refresh: cleared {cleared} cache items')
+
 
 def _downloaded_marker_path():
     return scl_dir() / 'update' / DOWNLOADED_MARKER
@@ -734,6 +771,7 @@ __all__ = [
     'UpdateDownloadWorker', 'apply_downloaded_update_on_startup',
     'apply_update_inplace', 'cleanup_old_executable', 'clear_downloaded_update',
     'consume_updated_marker', 'downloaded_update_available',
+    'pending_update_exists', 'clear_launcher_caches',
     'fetch_latest_release', 'is_newer', 'prepare_update', 'update_kind',
     'write_downloaded_update', 'write_update_log',
 ]

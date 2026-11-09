@@ -714,14 +714,17 @@ class ThemeManager(QObject):
         self._overlays = [item for item in self._overlays if item is not overlay]
 
     def eventFilter(self, obj, event):
-        if (
-            event.type() == QEvent.Show
-            and self._theme
-            and isinstance(obj, QWidget)
-        ):
+        event_type = event.type()
+        if event_type not in (QEvent.Show, QEvent.StyleChange):
+            return super().eventFilter(obj, event)
+        # 主窗口首次显示前，页面还在批量构造；此时处理 Show/StyleChange
+        # 会把每个新控件都重刷一遍。等窗口显示后统一处理可见区域更划算。
+        if not self._window.isVisible():
+            return super().eventFilter(obj, event)
+        if event_type == QEvent.Show and self._theme and isinstance(obj, QWidget):
             self._style_shown_widget(obj)
         elif (
-            event.type() == QEvent.StyleChange
+            event_type == QEvent.StyleChange
             and self._theme
             and not self._theme_updating
             and isinstance(obj, QWidget)

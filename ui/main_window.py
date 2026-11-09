@@ -32,6 +32,11 @@ from core.update import CURRENT_VERSION
 from core.seasonal import is_fireworks_period, is_snow_period
 from ui.scaling import apply_control_scale, apply_widget_scale, control_scale
 
+_WINDOW_FILTER_EVENTS = frozenset((
+    QEvent.Enter, QEvent.Leave, QEvent.DragEnter, QEvent.DragMove, QEvent.Drop,
+    QEvent.ApplicationDeactivate, QEvent.ApplicationActivate, QEvent.Show,
+))
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -261,6 +266,16 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             app.installEventFilter(self._wheel_guard)
+        # 先建立主题、调色板和全局样式，再创建页面。页面构造时即可拿到
+        # 正确主题，避免启动后再遍历成千上万个控件重刷样式。
+        self.theme_manager = ThemeManager(self)
+        try:
+            from core.config import ConfigManager
+            self.theme_manager.apply(
+                ConfigManager().get('theme', 'system'), animate=False
+            )
+        except Exception:
+            pass
         self.init_all_pages()
         self.nav_list.currentItemChanged.connect(self._on_page_changed)
         self.nav_list.itemClicked.connect(self._on_nav_clicked)
@@ -740,16 +755,8 @@ class MainWindow(QMainWindow):
         self._apply_ui_depth()
         self._apply_title()
         self._apply_default_nav_page()
-        self.theme_manager = ThemeManager(self)
         try:
             self.settings_page.theme_changed.connect(self._on_theme_changed)
-        except Exception:
-            pass
-        try:
-            self.theme_manager.apply(
-                self.settings_page.config.get('theme', 'system'),
-                animate=False,
-            )
         except Exception:
             pass
         try:
@@ -1007,27 +1014,30 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, '导入整合包失败', str(exc))
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Enter:
+        event_type = event.type()
+        if event_type not in _WINDOW_FILTER_EVENTS:
+            return super().eventFilter(obj, event)
+        if event_type == QEvent.Enter:
             if self._is_sidebar_widget(obj):
                 self._expand_sidebar()
-        elif event.type() == QEvent.Leave:
+        elif event_type == QEvent.Leave:
             if self._is_sidebar_widget(obj):
                 self._sidebar_collapse_timer.start()
-        if event.type() in (QEvent.DragEnter, QEvent.DragMove):
+        elif event_type in (QEvent.DragEnter, QEvent.DragMove):
             if self._modpack_paths_from_mime(event.mimeData()):
                 event.acceptProposedAction()
                 return True
-        elif event.type() == QEvent.Drop:
+        elif event_type == QEvent.Drop:
             paths = self._modpack_paths_from_mime(event.mimeData())
             if paths:
                 event.acceptProposedAction()
                 self._import_dropped_modpack(paths[0])
                 return True
-        if event.type() == QEvent.ApplicationDeactivate:
+        elif event_type == QEvent.ApplicationDeactivate:
             self._pause_background_media()
-        elif event.type() == QEvent.ApplicationActivate:
+        elif event_type == QEvent.ApplicationActivate:
             self._resume_background_media()
-        elif event.type() == QEvent.Show and 0.0 < getattr(self, '_ui_scale', 0.0) < 0.999:
+        elif event_type == QEvent.Show and 0.0 < getattr(self, '_ui_scale', 0.0) < 0.999:
             try:
                 if (
                     isinstance(obj, QWidget)

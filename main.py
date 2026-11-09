@@ -260,6 +260,14 @@ def main():
     except Exception:
         pass
 
+    # 更新后首次启动时在页面读取缓存前刷新旧素材/新闻/翻译缓存。
+    try:
+        from core.update import pending_update_exists, clear_launcher_caches
+        if pending_update_exists():
+            clear_launcher_caches()
+    except Exception:
+        pass
+
     # 只有首个实例才整理 SCL 运行目录，避免第二个实例移动正在使用的文件
     migrate_legacy_dirs()
     ensure_runtime_dirs()

@@ -220,6 +220,11 @@ class VersionPage(QWidget):
             self.config.set('version_list_source', 'auto')
         self.config.save()
         self._sections = {}
+        self._browsers = {}
+        self._browser_specs = {
+            'mod': 'mod', 'modpack': 'modpack', 'datapack': 'datapack',
+            'resourcepack': 'resourcepack', 'shader': 'shader',
+        }
         self._init_ui()
         self._refresh_game_dir_combo()
         QTimer.singleShot(50, self._load_installed_versions)
@@ -233,23 +238,67 @@ class VersionPage(QWidget):
         root.addWidget(self.stack)
         self.installed_page = self._build_installed_page()
         self.available_page = self._build_available_page()
-        self.mod_browser = ModBrowserPage('mod', self)
-        self.modpack_browser = ModBrowserPage('modpack', self)
-        self.datapack_browser = ModBrowserPage('datapack', self)
-        self.resourcepack_browser = ModBrowserPage('resourcepack', self)
-        self.shader_browser = ModBrowserPage('shader', self)
-        for browser in self.mod_browser, self.modpack_browser, self.datapack_browser, self.resourcepack_browser, self.shader_browser:
-            browser.import_pack_requested.connect(self._start_modpack_import)
-            browser.download_game_requested.connect(self._switch_to_version_page)
-        pages = [('installed', self.installed_page), ('available', self.available_page), ('mod', self.mod_browser), ('modpack', self.modpack_browser), ('datapack', self.datapack_browser), ('resourcepack', self.resourcepack_browser), ('shader', self.shader_browser)]
+        pages = [('installed', self.installed_page), ('available', self.available_page)]
+        # 社区资源页体积较大且启动时不需要，先放占位页，首次进入时再创建。
+        for key in self._browser_specs:
+            placeholder = QWidget()
+            placeholder.setStyleSheet('background: transparent;')
+            pages.append((key, placeholder))
         for key, widget in pages:
             self._sections[key] = self.stack.addWidget(widget)
         self._show_section('available')
+
+    def _ensure_browser(self, key):
+        browser = self._browsers.get(key)
+        if browser is not None:
+            return browser
+        spec = self._browser_specs.get(key)
+        if spec is None:
+            return None
+        browser = ModBrowserPage(spec, self)
+        browser.import_pack_requested.connect(self._start_modpack_import)
+        browser.download_game_requested.connect(self._switch_to_version_page)
+        index = self._sections.get(key, self.stack.count())
+        self.stack.insertWidget(index, browser)
+        old = self.stack.widget(index + 1)
+        if old is not None:
+            self.stack.removeWidget(old)
+            old.deleteLater()
+        self._browsers[key] = browser
+        self._sections[key] = self.stack.indexOf(browser)
+        return browser
+
+    @property
+    def mod_browser(self):
+        return self._ensure_browser('mod')
+
+    @property
+    def modpack_browser(self):
+        return self._ensure_browser('modpack')
+
+    @property
+    def datapack_browser(self):
+        return self._ensure_browser('datapack')
+
+    @property
+    def resourcepack_browser(self):
+        return self._ensure_browser('resourcepack')
+
+    @property
+    def shader_browser(self):
+        return self._ensure_browser('shader')
 
     def _select_section(self, key):
         self._show_section(key)
 
     def _show_section(self, key):
+        if key in self._browser_specs:
+            browser = self._ensure_browser(key)
+            if browser is None:
+                return
+            self.stack.setCurrentWidget(browser)
+            browser.activate()
+            return
         index = self._sections.get(key)
         if index is None:
             return
@@ -265,20 +314,6 @@ class VersionPage(QWidget):
             if self.available_list.count() == 0 and self.isVisible():
                 self._load_available_versions_async()
             return
-        if key == 'mod':
-            self.mod_browser.activate()
-            return
-        if key == 'modpack':
-            self.modpack_browser.activate()
-            return
-        if key == 'datapack':
-            self.datapack_browser.activate()
-            return
-        if key == 'resourcepack':
-            self.resourcepack_browser.activate()
-            return
-        if key == 'shader':
-            self.shader_browser.activate()
 
     def switch_to_available_tab(self):
         self._select_section('available')
@@ -1638,7 +1673,7 @@ class VersionPage(QWidget):
                     return True
             except RuntimeError:
                 continue
-        for browser in self.mod_browser, self.modpack_browser, self.datapack_browser, self.resourcepack_browser, self.shader_browser:
+        for browser in list(self._browsers.values()):
             try:
                 if browser.has_active_downloads():
                     return True
@@ -1652,7 +1687,7 @@ class VersionPage(QWidget):
                 self._current_detail_page.shutdown()
         except Exception:
             pass
-        for browser in self.mod_browser, self.modpack_browser, self.datapack_browser, self.resourcepack_browser, self.shader_browser:
+        for browser in list(self._browsers.values()):
             try:
                 browser.shutdown()
             except Exception:

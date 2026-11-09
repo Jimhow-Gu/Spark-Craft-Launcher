@@ -139,11 +139,7 @@ class NewsCard(QFrame):
         super().__init__(parent)
         self.setObjectName('NewsCard')
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setStyleSheet(
-            'QFrame#NewsCard { background: rgba(30,41,41,0.88);'
-            ' border: 1px solid rgba(255,255,255,0.18); border-radius: 12px; }'
-            'QFrame#NewsCard QLabel { background: transparent; border: none; }'
-        )
+        self.setProperty('_theme_ignore', True)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 12, 18, 14)
         layout.setSpacing(8)
@@ -154,11 +150,10 @@ class NewsCard(QFrame):
         self.header_widget.installEventFilter(self)
         header = QHBoxLayout(self.header_widget)
         header.setContentsMargins(0, 0, 0, 0)
-        title = QLabel(str(data.get('title') or data.get('version') or 'Minecraft 新闻'))
-        title.setStyleSheet('color:#f4fbfb; font-size:17px; font-weight:900;')
-        title.setWordWrap(True)
-        title.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        header.addWidget(title, 1)
+        self.title_label = QLabel(str(data.get('title') or data.get('version') or 'Minecraft 新闻'))
+        self.title_label.setWordWrap(True)
+        self.title_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        header.addWidget(self.title_label, 1)
         self.toggle_btn = QToolButton()
         self.toggle_btn.setFixedSize(30, 30)
         self.toggle_btn.setText('▲' if expanded else '▼')
@@ -175,6 +170,7 @@ class NewsCard(QFrame):
         self._body_anim = None
         self._page = page
         self._light = self.palette().color(QPalette.Window).lightness() > 128
+        self._apply_card_style()
         self._image_urls = list(data.get('images') or [])
         self._image_requested = False
         self.image_label = None
@@ -189,9 +185,8 @@ class NewsCard(QFrame):
         body_layout.setSpacing(8)
 
         meta_text = f"版本 {data.get('version', '')}"
-        meta = QLabel(meta_text)
-        meta.setStyleSheet('color:#bfe3e3; font-size:12px;')
-        body_layout.addWidget(meta)
+        self.meta_label = QLabel(meta_text)
+        body_layout.addWidget(self.meta_label)
 
         if self._image_urls:
             self.image_label = NewsImageLabel()
@@ -248,15 +243,41 @@ class NewsCard(QFrame):
             )
             bottom_row.addWidget(button)
         bottom_row.addStretch(1)
+        self.date_label = None
         if data.get('date'):
-            date_label = QLabel(f"最后更新：{data['date']}")
-            date_label.setStyleSheet('color:#bfe3e3; font-size:12px;')
-            bottom_row.addWidget(date_label, 0, Qt.AlignRight)
+            self.date_label = QLabel(f"最后更新：{data['date']}")
+            bottom_row.addWidget(self.date_label, 0, Qt.AlignRight)
         body_layout.addLayout(bottom_row)
         layout.addWidget(self.body)
         if not expanded:
             self.body.hide()
         self.toggle_btn.clicked.connect(self._toggle)
+        self._apply_theme_styles()
+
+    def _apply_card_style(self):
+        background = 'rgba(248,251,251,0.88)' if self._light else 'rgba(30,41,41,0.88)'
+        border = 'rgba(0,0,0,0.11)' if self._light else 'rgba(255,255,255,0.18)'
+        self.setStyleSheet(
+            f'QFrame#NewsCard {{ background: {background};'
+            f' border: 1px solid {border}; border-radius: 12px; }}'
+            'QFrame#NewsCard QLabel { background: transparent; border: none; }'
+        )
+
+    def _apply_theme_styles(self):
+        self._apply_card_style()
+        title_color = '#1b1b1b' if self._light else '#f4fbfb'
+        muted = '#3f6666' if self._light else '#bfe3e3'
+        toggle = '#2f6f6f' if self._light else '#A8E6E6'
+        self.title_label.setStyleSheet(
+            f'color:{title_color}; font-size:17px; font-weight:900;'
+        )
+        self.meta_label.setStyleSheet(f'color:{muted}; font-size:12px;')
+        self.toggle_btn.setStyleSheet(
+            'QToolButton { border:none; background:transparent; color:%s;'
+            ' font-size:14px; }' % toggle
+        )
+        if self.date_label is not None:
+            self.date_label.setStyleSheet(f'color:{muted}; font-size:12px;')
 
     def eventFilter(self, obj, event):
         if obj is self.header_widget and event.type() == QEvent.MouseButtonRelease:
@@ -284,6 +305,7 @@ class NewsCard(QFrame):
         if light == self._light:
             return
         self._light = light
+        self._apply_theme_styles()
         if self._content_browser is None:
             return
         html_text = self._content_html_for_theme()
@@ -437,10 +459,10 @@ class NewsPage(QWidget):
         self.header_widget = QWidget()
         header = QHBoxLayout(self.header_widget)
         header.setContentsMargins(40, 24, 40, 8)
-        title = QLabel('欢迎使用新闻主页！')
-        title.setFont(ui_font(24, 700))
-        title.setStyleSheet(f"color: {self._title_color()}; font-size:24px; font-weight:900;")
-        header.addWidget(title)
+        self.title_label = QLabel('欢迎使用新闻主页！')
+        self.title_label.setFont(ui_font(24, 700))
+        self.title_label.setStyleSheet(f"color: {self._title_color()}; font-size:24px; font-weight:900;")
+        header.addWidget(self.title_label)
         header.addStretch(1)
         self.refresh_btn = QPushButton('刷新')
         self.refresh_btn.setCursor(Qt.PointingHandCursor)
@@ -473,7 +495,7 @@ class NewsPage(QWidget):
         content_layout.addWidget(self.cards_container, 1)
 
         self.footer = QLabel(
-            f'<a href="{NEWS_SOURCE_URL}" style="color:#88DDDD;">'
+            f'<a href="{NEWS_SOURCE_URL}">'
             '新闻数据来源：PCL2 新闻主页 · 最亮的信标</a>'
         )
         self.footer.setTextFormat(Qt.RichText)
@@ -511,6 +533,21 @@ class NewsPage(QWidget):
         except Exception:
             light = False
         return '#1b1b1b' if light else '#f0f1f3'
+
+    def set_light(self, light):
+        light = bool(light)
+        title_color = '#1b1b1b' if light else '#f0f1f3'
+        muted = '#3f6666' if light else 'rgba(205,238,238,0.78)'
+        try:
+            self.title_label.setStyleSheet(
+                f'color:{title_color}; font-size:24px; font-weight:900;'
+            )
+            self.footer.setStyleSheet(
+                f'color:{muted}; font-size:11px; padding:6px;'
+            )
+        except RuntimeError:
+            pass
+        self.update()
 
     def _muted_color(self):
         try:
