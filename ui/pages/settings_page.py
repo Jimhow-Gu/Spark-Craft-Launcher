@@ -16,6 +16,7 @@ from PySide6.QtGui import (QFont, QDesktopServices, QColor, QPainter, QPalette, 
 from PySide6.QtCore import QRectF
 from core.app_font import ui_font
 from core.config import ConfigManager
+from core.memory import safe_memory_limit_mb
 from core.launch import (
     LaunchManager, format_java_label, normalize_java_executable,
     pretty_java_version, unique_java_entries,
@@ -235,7 +236,7 @@ class SettingsPage(QWidget):
         mem_group_layout.addWidget(self.memory_optimize_check)
         slider_row = QHBoxLayout()
         self.mem_slider = PrimarySlider(Qt.Horizontal)
-        self.mem_slider.setRange(512, 32768)
+        self.mem_slider.setRange(512, safe_memory_limit_mb())
         self.mem_slider.setTickInterval(512)
         self.mem_slider.setTickPosition(QSlider.TicksBelow)
         self.mem_slider.setStyleSheet(SLIDER_STYLE)
@@ -1409,7 +1410,7 @@ class SettingsPage(QWidget):
             self.custom_radio.setChecked(True)
         self.auto_radio.blockSignals(False)
         self.custom_radio.blockSignals(False)
-        size = self._parse_mem(mem_max)
+        size = max(512, min(self._parse_mem(mem_max), self.mem_slider.maximum()))
         self.mem_slider.setValue(size)
         optimize = bool(self.config.get('memory_optimize_before_launch', False))
         self.memory_optimize_check.blockSignals(True)

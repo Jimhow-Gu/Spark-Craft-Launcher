@@ -195,7 +195,7 @@ class AboutPage(QWidget):
         content = QWidget()
         content.setStyleSheet('background: transparent;')
         root = QVBoxLayout(content)
-        root.setContentsMargins(0, 24, 0, 24)
+        root.setContentsMargins(40, 24, 40, 24)
         root.setSpacing(16)
         self.scroll.setWidget(content)
         outer.addWidget(self.scroll)

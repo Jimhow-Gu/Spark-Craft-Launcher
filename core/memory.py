@@ -56,6 +56,18 @@ def count_mods(mc_dir, version_id=''):
     return 0
 
 
+
+def safe_memory_limit_mb():
+    """返回为系统保留余量后的最大可用堆内存（MB）。
+
+    过大的 -Xmx 会让 G1 管理超大堆并挤压系统内存，表现为周期性卡顿；
+    这里最多分配 20GB，并为 Windows/其他程序至少保留约 2GB。
+    """
+
+    total_gb, _available_gb = memory_info_gb()
+    limit = min(20 * 1024, int(max(1.0, total_gb - 2.0) * 1024))
+    return max(1024, limit)
+
 def auto_memory_gb(available_gb, mod_count, *, modable=False, optifine=False):
     '''PCL GetRam：阶段一 100%、阶段二 70%、阶段三 40%、阶段四 15%。'''
 
@@ -92,9 +104,10 @@ def recommended_ram_mb(mc_dir, version_id='', loader='', mod_count=None):
     modable = bool(version_id) and (bool(mod_count) or loader in MOD_LOADERS)
     optifine = loader == 'optifine' or (not loader and 'optifine' in str(version_id).lower())
     give_gb = auto_memory_gb(available_gb, mod_count, modable=modable, optifine=optifine)
-    give_gb = min(give_gb, max(0.5, total_gb - 0.5), 32.0)
-    mb = int(round(give_gb * 1024))
+    safe_limit_mb = safe_memory_limit_mb()
+    give_gb = min(give_gb, safe_limit_mb / 1024.0, max(0.5, total_gb - 0.5), 20.0)
+    mb = min(int(round(give_gb * 1024)), safe_limit_mb)
     return max(512, mb)
 
 
-__all__ = ['auto_memory_gb', 'count_mods', 'memory_info_gb', 'recommended_ram_mb']
+__all__ = ['auto_memory_gb', 'count_mods', 'memory_info_gb', 'recommended_ram_mb', 'safe_memory_limit_mb']

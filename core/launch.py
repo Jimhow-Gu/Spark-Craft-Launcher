@@ -472,10 +472,14 @@ class LaunchManager:
                     creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0,
                 )
                 output = result.stderr + result.stdout
-                match = re.search('version "(\\d+\\.\\d+\\.\\d+[^"]*)"', output)
-                if match:
-                    return match.group(1)
-                match2 = re.search('(\\d+\\.\\d+\\.\\d+[^\\s]*)', output)
+                # 兼容 27、27-ea、17.0.9、1.8.0_402 等不同 JDK 版本格式。
+                for line in output.splitlines():
+                    if 'version' not in line.lower():
+                        continue
+                    match = re.search(r'version\s+"?([0-9][^"\s]*)', line, re.I)
+                    if match:
+                        return match.group(1)
+                match2 = re.search(r'(?<![\d.])(\d+(?:\.\d+)*(?:[_-][0-9A-Za-z+._-]+)?)', output)
                 if match2:
                     return match2.group(1)
             except Exception:
@@ -528,12 +532,12 @@ class LaunchManager:
         text = str(version_text or '').strip()
         if not text:
             return None
-        try:
-            if text.startswith('1.'):
-                return int(text.split('.')[1])
-            return int(text.split('.')[0])
-        except (IndexError, ValueError):
-            return None
+        # 支持 1.8 / 17.0.9 / 27-ea / 27+12 等格式。
+        match = re.match(r'^(?:1\.)?(\d+)', text)
+        if match:
+            return int(match.group(1))
+        match = re.search(r'(?:version\s*"?)(\d+)', text, re.I)
+        return int(match.group(1)) if match else None
 
     @staticmethod
     def _java_arch_rank(java_path) -> int:
@@ -619,7 +623,10 @@ class LaunchManager:
         from core.java_requirements import java_major_bounds
         bounds = java_major_bounds(self._get_base_mc_version(final_id))
         if bounds:
-            return int(bounds[0]), int(bounds[1]), True
+            low, high = int(bounds[0]), bounds[1]
+            if high is None:
+                return low, None, False
+            return low, int(high), True
         return int(required), None, False
 
     def preflight_java(self, version_id: str) -> dict:
@@ -1044,6 +1051,18 @@ class LaunchManager:
 
         max_mb = parse_mem_to_mb(mem_max)
         min_mb = parse_mem_to_mb(mem_min)
+        # 过大的 Xmx 会挤压系统内存并让超大堆的 GC 停顿更明显。
+        try:
+            from core.memory import safe_memory_limit_mb
+            safe_mb = safe_memory_limit_mb()
+            if max_mb > safe_mb:
+                logger.warning(
+                    f'内存分配 {max_mb}M 超过稳定上限，已限制为 {safe_mb}M'
+                )
+                max_mb = safe_mb
+                mem_max = f'{safe_mb}M'
+        except Exception:
+            pass
         if min_mb > max_mb:
             logger.warning(f'最小内存 {mem_min} > 最大内存 {mem_max}，自动调整')
             mem_min = mem_max
@@ -1052,7 +1071,11 @@ class LaunchManager:
                 version_settings['memory_max'] = mem_max
                 version_settings['memory_min'] = mem_min
                 self.save_version_settings(version_id, version_settings)
-        jvm_args = [f'-Xmx{mem_max}', f'-Xms{mem_min}']
+        # 预留一部分初始堆，减少进入游戏后堆动态扩张造成的周期性卡顿。
+        initial_mb = max(512, int(max_mb * 0.5))
+        initial_mb = max(min_mb, min(initial_mb, max_mb))
+        logger.info(f'内存参数: -Xmx{max_mb}M -Xms{initial_mb}M')
+        jvm_args = [f'-Xmx{max_mb}M', f'-Xms{initial_mb}M']
         from core.jvm import (DEFAULT_JVM_ARGS, gc_arguments, split_arguments)
         def advanced(key, default=None):
             value = version_settings.get(key)
@@ -1063,7 +1086,22 @@ class LaunchManager:
         jvm_text = str(advanced('jvm_args', DEFAULT_JVM_ARGS) or '').strip()
         if jvm_text:
             jvm_args.extend(split_arguments(jvm_text))
-        jvm_args.extend(gc_arguments(str(advanced('memory_gc', 'tuned_g1') or 'tuned_g1')))
+        gc_key = str(advanced('memory_gc', 'auto') or 'auto')
+        if gc_key.strip().lower() != 'none':
+            # 清理用户参数里已有的 GC 冲突项；保留 Xmx/Xms 和其它自定义参数。
+            gc_pattern = re.compile(
+                r'^-XX:[+-]?(?:Use\w+GC|ZGenerational|UseCompactObjectHeaders|'
+                r'G1\w+Percent|G1\w+Size|(?:Max|Min)(?:GCPauseMillis|HeapFreeRatio))'
+            )
+            jvm_args = [arg for arg in jvm_args if not gc_pattern.match(str(arg))]
+        try:
+            java_major = self._parse_java_major(self._get_java_version(java_path))
+        except Exception:
+            java_major = None
+        gc_args = gc_arguments(gc_key, java_major)
+        if gc_args:
+            logger.info(f'GC 参数（Java {java_major or "未知"}）: ' + ' '.join(gc_args))
+        jvm_args.extend(gc_args)
         # 不再强制 allowSoftwareOpenGL=false：该参数会在部分驱动/远程桌面
         # 环境下直接导致 GLFW 65542，且并不能真正切换到高性能显卡。
         login_type = login_opts.get('login_type', 'offline')

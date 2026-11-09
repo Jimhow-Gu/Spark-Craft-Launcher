@@ -22,6 +22,7 @@ from ui.design import MUTED_DARK, MUTED_LIGHT, ON_ACCENT
 from ui.widgets.painted_icons import painted_icon
 from ui.widgets.settings_widgets import hidpi_pixmap
 from core.config import ConfigManager
+from core.memory import safe_memory_limit_mb
 from core.download_manager import DownloadManager
 from core.launch import (
     LaunchManager, format_java_label, normalize_java_executable,
@@ -380,7 +381,7 @@ class GameSettingsPage(QWidget):
         mem_layout.addLayout(mode_layout)
         slider_layout = QHBoxLayout()
         self.mem_slider = PrimarySlider(Qt.Horizontal)
-        self.mem_slider.setRange(512, 32768)
+        self.mem_slider.setRange(512, safe_memory_limit_mb())
         self.mem_slider.setTickInterval(512)
         self.mem_slider.setTickPosition(QSlider.TicksBelow)
         self.mem_slider.setStyleSheet(SLIDER_STYLE)
@@ -1235,12 +1236,12 @@ class GameSettingsPage(QWidget):
             self.custom_radio.setChecked(True)
         mem_max = self.settings.get('memory_max', '')
         if mem_max:
-            size = self._parse_mem(mem_max)
+            size = max(512, min(self._parse_mem(mem_max), self.mem_slider.maximum()))
             if size:
                 self.mem_slider.setValue(size)
         else:
             global_mem = self.config.get('memory_max', '4G')
-            size = self._parse_mem(global_mem)
+            size = max(512, min(self._parse_mem(global_mem), self.mem_slider.maximum()))
             self.mem_slider.setValue(size)
         self._update_mem_label()
         self.title_edit.setText(self.settings.get('window_title', ''))

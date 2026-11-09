@@ -102,9 +102,9 @@ class AdvancedOptionsPanel(QWidget):
         self.jvm_edit.setPlainText(str(self._getter('jvm_args', DEFAULT_JVM_ARGS) or DEFAULT_JVM_ARGS))
         self.game_edit.setText(str(self._getter('game_args', '') or ''))
         self.pre_edit.setText(str(self._getter('pre_launch_command', '') or ''))
-        gc = str(self._getter('memory_gc', 'tuned_g1') or 'tuned_g1')
+        gc = str(self._getter('memory_gc', 'auto') or 'auto')
         idx = self.gc_combo.findData(gc)
-        self.gc_combo.setCurrentIndex(idx if idx >= 0 else self.gc_combo.findData('tuned_g1'))
+        self.gc_combo.setCurrentIndex(idx if idx >= 0 else self.gc_combo.findData('auto'))
         self.mod_update_check.setChecked(bool(self._getter('disable_mod_update', False)))
         self.file_verify_check.setChecked(bool(self._getter('disable_file_verification', False)))
         self.wrapper_check.setChecked(bool(self._getter('disable_java_launch_wrapper', False)))
@@ -168,7 +168,7 @@ class AdvancedOptionsPanel(QWidget):
         self._set('pre_launch_command', self.pre_edit.text().strip())
 
     def _save_gc(self):
-        self._set('memory_gc', self.gc_combo.currentData() or 'tuned_g1')
+        self._set('memory_gc', self.gc_combo.currentData() or 'auto')
 
     def _save_java(self):
         if self._loading or self.java_combo is None:
