@@ -1088,9 +1088,10 @@ class VersionPage(QWidget):
         for v in items:
             self._add_available_version(v)
         self.available_list.setUpdatesEnabled(True)
-        # 列表项绘制完成后再结束加载遮罩，避免空列表短暂闪现。
+        # 列表已经填好，立即撤掉加载遮罩；不再走 100% 动画，避免遮罩
+        # 盖在已加载列表上。
         if not silent:
-            self.available_loading.finish()
+            self.available_loading.stop()
 
     def _on_version_double_clicked(self, item):
         version_id = item.data(Qt.UserRole)
