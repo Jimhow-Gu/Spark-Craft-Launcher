@@ -21,25 +21,25 @@ def _new_pixmap(size):
     return pixmap, painter
 
 
-def _draw_littleskin(painter):
-    pen = QPen(QColor(GRAY), 1.5)
+def _draw_littleskin(painter, color=GRAY):
+    pen = QPen(QColor(color), 1.5)
     pen.setJoinStyle(Qt.RoundJoin)
     painter.setPen(pen)
     painter.setBrush(Qt.NoBrush)
     painter.drawRoundedRect(QRectF(1.0, 2.5, 14.0, 11.0), 2.2, 2.2)
-    painter.setPen(QPen(QColor(GRAY), 1.2))
+    painter.setPen(QPen(QColor(color), 1.2))
     painter.drawLine(3.5, 6.2, 6.2, 6.2)
     painter.drawLine(3.5, 8.8, 6.2, 8.8)
-    painter.setBrush(QColor(GRAY))
+    painter.setBrush(QColor(color))
     painter.setPen(Qt.NoPen)
     painter.drawEllipse(QRectF(9.0, 4.8, 3.2, 3.2))
     painter.setBrush(Qt.NoBrush)
-    painter.setPen(QPen(QColor(GRAY), 1.5))
+    painter.setPen(QPen(QColor(color), 1.5))
     painter.drawArc(QRectF(7.6, 8.2, 6.2, 5.2), 0, 180 * 16)
 
 
-def _draw_offline(painter):
-    pen = QPen(QColor(GRAY), 1.9)
+def _draw_offline(painter, color=GRAY):
+    pen = QPen(QColor(color), 1.9)
     pen.setCapStyle(Qt.RoundCap)
     painter.setPen(pen)
     painter.setBrush(Qt.NoBrush)
@@ -59,8 +59,8 @@ def _draw_microsoft(painter):
     painter.drawRect(QRectF(8.6, 8.6, 5.4, 5.4))
 
 
-def _draw_thirdparty(painter):
-    pen = QPen(QColor('#66BBBB'), 1.5)
+def _draw_thirdparty(painter, color=GRAY):
+    pen = QPen(QColor(color), 1.5)
     pen.setJoinStyle(Qt.RoundJoin)
     painter.setPen(pen)
     painter.setBrush(Qt.NoBrush)
@@ -69,11 +69,11 @@ def _draw_thirdparty(painter):
     painter.drawLine(2.5, 8.0, 13.5, 8.0)
 
 
-def login_icon(kind: str, size: int = 14) -> QPixmap:
+def login_icon(kind: str, size: int = 14, color: str = GRAY) -> QPixmap:
     kind = str(kind or 'offline').lower()
     if kind not in ('littleskin', 'offline', 'microsoft', 'thirdparty'):
         kind = 'thirdparty'
-    key = (kind, int(size))
+    key = (kind, int(size), str(color))
     cached = _CACHE.get(key)
     if cached is not None:
         return cached
@@ -82,11 +82,11 @@ def login_icon(kind: str, size: int = 14) -> QPixmap:
         if kind == 'microsoft':
             _draw_microsoft(painter)
         elif kind == 'offline':
-            _draw_offline(painter)
+            _draw_offline(painter, color)
         elif kind == 'littleskin':
-            _draw_littleskin(painter)
+            _draw_littleskin(painter, color)
         else:
-            _draw_thirdparty(painter)
+            _draw_thirdparty(painter, color)
     finally:
         painter.end()
     _CACHE[key] = pixmap

@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import shutil
+import threading
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -62,6 +63,18 @@ class RepairEngine:
         self.http = self.downloader.client()
         self.result = RepairResult()
         self._virtual_assets = []
+        self._progress_lock = threading.Lock()
+        self._task_sizes = {}
+        self._task_progress = {}
+        self._task_categories = {}
+        self._category_sizes = {}
+        self._category_tasks = {}
+        self._category_finished = {}
+        self._total_bytes = 0
+        self._total_tasks = 0
+        self._completed_tasks = 0
+        self._last_status_at = 0.0
+        self._last_percent = 0
 
     def _resolve_version(self):
         version_id = self.requested_id
@@ -374,6 +387,103 @@ class RepairEngine:
         mode = 'missing' if self.missing_only else 'fast' if self.fast else 'full'
         return task.valid(mode)
 
+    def _register_tasks(self, tasks):
+        with self._progress_lock:
+            self._total_tasks = len(tasks)
+            self._task_sizes = {}
+            self._task_progress = {}
+            self._task_categories = {}
+            self._category_sizes = {}
+            self._category_tasks = {}
+            self._category_finished = {}
+            self._last_percent = 0
+            for task in tasks:
+                key = id(task)
+                size = max(0, int(task.size or 0))
+                self._task_sizes[key] = size
+                self._task_progress[key] = 0
+                self._task_categories[key] = task.category
+                self._category_sizes[task.category] = (
+                    self._category_sizes.get(task.category, 0) + size
+                )
+                self._category_tasks[task.category] = (
+                    self._category_tasks.get(task.category, 0) + 1
+                )
+                self._category_finished.setdefault(task.category, 0)
+            self._total_bytes = sum(self._task_sizes.values())
+
+    def _task_progress_cb(self, task, current, file_total):
+        key = id(task)
+        size = self._task_sizes.get(key) or max(0, int(file_total or 0))
+        if size <= 0:
+            return
+        with self._progress_lock:
+            if not self._task_sizes.get(key):
+                self._task_sizes[key] = size
+                category = self._task_categories.get(key, task.category)
+                self._category_sizes[category] = (
+                    self._category_sizes.get(category, 0) + size
+                )
+                self._total_bytes += size
+            current = max(0, min(size, int(current or 0)))
+            previous = self._task_progress.get(key, 0)
+            if current <= previous:
+                return
+            self._task_progress[key] = current
+        self._publish_byte_progress(task.category)
+
+    def _mark_task_finished(self, task):
+        key = id(task)
+        size = self._task_sizes.get(key, 0)
+        with self._progress_lock:
+            self._task_progress[key] = size
+            self._completed_tasks += 1
+            self._category_finished[task.category] = (
+                self._category_finished.get(task.category, 0) + 1
+            )
+        self._publish_byte_progress(task.category)
+
+    def _publish_byte_progress(self, category=None):
+        with self._progress_lock:
+            total_bytes = self._total_bytes
+            done_bytes = sum(self._task_progress.values())
+            total_tasks = self._total_tasks
+            completed_tasks = self._completed_tasks
+            category_done = sum(
+                value for key, value in self._task_progress.items()
+                if self._task_categories.get(key) == category
+            )
+            category_total = self._category_sizes.get(category, 0)
+            category_finished = self._category_finished.get(category, 0)
+            category_tasks = self._category_tasks.get(category, 0)
+            if total_bytes > 0:
+                percent = min(99, int(done_bytes * 100 / total_bytes))
+            else:
+                percent = min(99, int(completed_tasks * 100 / max(1, total_tasks)))
+            # 多个下载线程会并发上报，百分比和节流时间必须在锁内更新，
+            # 否则旧线程可能把新进度覆盖回去。
+            percent = max(self._last_percent, percent)
+            self._last_percent = percent
+            now = time.monotonic()
+            should_status = now - self._last_status_at >= 0.12
+            if should_status:
+                self._last_status_at = now
+        self._emit_progress(percent)
+        if category:
+            if category_total > 0:
+                self.phase(category, min(100.0, category_done * 100.0 / category_total))
+            else:
+                self.phase(category, min(100.0, category_finished * 100.0 / max(1, category_tasks)))
+        if not should_status:
+            return
+        if total_bytes > 0:
+            self.status(
+                f'已下载: {done_bytes / 1048576:.1f}/'
+                f'{total_bytes / 1048576:.1f} MB'
+            )
+        else:
+            self.status(f'已下载: {done_bytes / 1048576:.1f} MB')
+
     def _repair_task(self, task):
         '''校验并下载单个文件；返回 (成功, 是否缺失, 错误, 标签, 是否可选)。'''
 
@@ -383,10 +493,15 @@ class RepairEngine:
             return True, False, '', task.label, task.optional
         if self._is_valid(task):
             return True, False, '', task.label, task.optional
-        if not task.label.startswith('资源 '):
-            self.status(f'补全 {task.label} ...')
         try:
-            self.downloader.download(task, cancel=self.cancel)
+            self.downloader.download(
+                task,
+                cancel=self.cancel,
+                progress=(
+                    lambda current, total, item=task:
+                    self._task_progress_cb(item, current, total)
+                ),
+            )
         except DownloadCancelled:
             if self.cancel():
                 raise RepairCancelled()
@@ -412,14 +527,9 @@ class RepairEngine:
         if self.missing_only:
             tasks = [task for task in tasks if task.category != 'assets']
         self.result.checked = len(tasks)
-        total = max(1, len(tasks))
-        self.status(f'正在校验 {len(tasks)} 个文件...')
-        category_totals = {}
-        category_done = {}
-        for task in tasks:
-            category_totals[task.category] = category_totals.get(task.category, 0) + 1
-        for category in category_totals:
-            category_done[category] = 0
+        self._register_tasks(tasks)
+        self.status('正在准备下载...')
+        for category in set(task.category for task in tasks):
             self.phase(category, 0)
         # 低配机器上 16 个并发下载会抢占磁盘/网络并拖慢 UI；按 CPU 核心数收敛。
         worker_count = max(1, min(DownloadGate.max_threads(), 16, max(2, (os.cpu_count() or 4) * 2)))
@@ -451,16 +561,16 @@ class RepairEngine:
                         if len(self.result.failed_items) < 8:
                             self.result.failed_items.append(label)
                         self.log(f'修复失败: {label} ({error})')
-                category = task.category
-                category_done[category] = category_done.get(category, 0) + 1
-                self.phase(category, category_done[category] * 100 / max(1, category_totals.get(category, 1)))
+                self._mark_task_finished(task)
                 completed += 1
-                self._emit_progress(min(99, int(completed * 100 / total)))
-                if completed % 25 == 0:
-                    self.status(f'校验进度 {completed}/{len(tasks)}，已修复 {self.result.fixed} 个')
+                if completed % 50 == 0:
+                    self.log(
+                        f'下载进度：{completed}/{len(tasks)}，'
+                        f'已补全 {self.result.fixed} 个'
+                    )
         if cancelled or self.cancel():
             raise RepairCancelled()
-        for category in category_totals:
+        for category in self._category_tasks:
             self.phase(category, 100)
         self._ensure_forge_runtime(chain, libraries)
         self.status('正在校验并解压 natives...')
@@ -472,9 +582,10 @@ class RepairEngine:
 
     def _emit_progress(self, value, force=False):
         now = time.monotonic()
-        if not force and now - self._progress_last < 0.08:
-            return
-        self._progress_last = now
+        with self._progress_lock:
+            if not force and now - self._progress_last < 0.08:
+                return
+            self._progress_last = now
         self.progress(value)
 
     def _ensure_forge_runtime(self, chain, libraries):

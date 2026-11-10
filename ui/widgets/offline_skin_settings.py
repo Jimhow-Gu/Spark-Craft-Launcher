@@ -51,12 +51,20 @@ def _rounded(pixmap, radius=10):
 
 def _head_from_skin(pixmap, size=80):
     if pixmap.width() >= 64 and pixmap.height() >= 32:
+        scale = max(1, int(round(pixmap.width() / 64.0)))
         out = QImage(8, 8, QImage.Format_ARGB32_Premultiplied)
         out.fill(Qt.transparent)
         painter = QPainter(out)
-        painter.drawPixmap(0, 0, pixmap.copy(8, 8, 8, 8))
-        if pixmap.height() >= 64:
-            painter.drawPixmap(0, 0, pixmap.copy(40, 8, 8, 8))
+        base = pixmap.copy(
+            8 * scale, 8 * scale, 8 * scale, 8 * scale
+        ).scaled(8, 8, Qt.IgnoreAspectRatio, Qt.FastTransformation)
+        painter.drawPixmap(0, 0, base)
+        # 64x32 旧皮肤、64x64 和 HD 皮肤都有 Hat 覆盖层。
+        if pixmap.height() >= 16 * scale:
+            hat = pixmap.copy(
+                40 * scale, 8 * scale, 8 * scale, 8 * scale
+            ).scaled(8, 8, Qt.IgnoreAspectRatio, Qt.FastTransformation)
+            painter.drawPixmap(0, 0, hat)
         painter.end()
         pixmap = QPixmap.fromImage(out)
     return pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.FastTransformation)

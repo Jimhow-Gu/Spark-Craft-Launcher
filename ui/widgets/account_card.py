@@ -109,9 +109,13 @@ class AccountCard(QFrame):
         if urls:
             self.avatar.set_image_url(urls, cache_path=avatar_cache)
             return
-        steve_head = Path(__file__).resolve().parent.parent / 'imgs' / 'steve_head.png'
-        if steve_head.is_file():
-            self.avatar.set_head_file(str(steve_head))
+        try:
+            from ui.pages.account_page import default_head_path
+            head = default_head_path()
+        except Exception:
+            head = Path(__file__).resolve().parent.parent / 'imgs' / 'steve_head.png'
+        if head.is_file():
+            self.avatar.set_head_file(str(head))
             return
         self.avatar.setText(name or '?')
 

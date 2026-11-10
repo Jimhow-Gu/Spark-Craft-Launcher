@@ -7,10 +7,11 @@ import shutil
 import webbrowser
 from pathlib import Path
 from urllib.parse import urlparse
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QScrollArea, QMessageBox, QComboBox, QFileDialog, QApplication, QMenu, QDialog, QListWidget, QListWidgetItem, QCheckBox, QToolButton, QListView, QSizePolicy, QStylePainter, QStyleOptionComboBox, QStyle)
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QScrollArea, QMessageBox, QComboBox, QFileDialog, QApplication, QMenu, QDialog, QListWidget, QListWidgetItem, QCheckBox, QToolButton, QListView, QSizePolicy, QStylePainter, QStyleOptionComboBox, QStyle, QButtonGroup, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QGridLayout)
 from ui.widgets.themed_checkbox import ThemedCheckBox
-from PySide6.QtCore import (Qt, Signal, QUrl, QThread, QTimer, QSize, QObject, QEasingCurve, QEvent)
-from PySide6.QtGui import (QFont, QPixmap, QPainter, QColor, QPainterPath, QImage, QAction, QIcon, QPalette)
+from ui.widgets.login_icons import login_icon
+from PySide6.QtCore import (Qt, Signal, QUrl, QThread, QTimer, QSize, QObject, QEasingCurve, QEvent, QPropertyAnimation, QRectF)
+from PySide6.QtGui import (QFont, QPixmap, QPainter, QColor, QPainterPath, QImage, QAction, QIcon, QPalette, QPen)
 from PySide6.QtNetwork import (QNetworkAccessManager, QNetworkReply, QNetworkRequest)
 from core.app_font import ui_font
 from core.config import ConfigManager
@@ -19,12 +20,13 @@ from core.paths import scl_dir
 from ui.widgets.frameless_dialog import (FramelessDialog, FramelessInputDialog, FramelessListDialog)
 from ui.widgets.height_animation import HeightAnimation
 from ui.widgets.rotating_chevron import RotatingChevronButton
-from ui.widgets.rounded_surface import RoundedGroupBox
+from ui.widgets.rounded_surface import RoundedGroupBox, RoundedFrame
 from ui.widgets.toast import notify_network_failure, show_toast
 from ui.design import IMAGE_PLACEHOLDER_DARK, IMAGE_PLACEHOLDER_LIGHT
 from ui.widgets.painted_icons import painted_icon, set_button_icon
 from core.auth import (AuthManager, MicrosoftSilentLoginWorker, MicrosoftProfileWorker, SavedMicrosoftLoginWorker, MicrosoftDeviceLoginWorker, ThirdPartyLoginWorker, CapeListWorker, CapeApplyWorker, DEFAULT_LITTLESKIN_API, DEFAULT_LITTLESKIN_REGISTER, friendly_auth_error)
-MICROSOFT_PURCHASE_URL = 'https://www.minecraft.net/en-us/store/minecraft-java-bedrock-edition-pc'
+MICROSOFT_PURCHASE_URL = 'https://www.minecraft.net/zh-hans/store/minecraft-java-bedrock-edition-pc'
+MICROSOFT_OFFICIAL_URL = 'https://www.minecraft.net/zh-hans'
 
 def _show_microsoft_login_notice(parent, message: str, kind: str='general'):
     '''正版登录失败提示。'''
@@ -43,8 +45,34 @@ def _show_microsoft_login_notice(parent, message: str, kind: str='general'):
     dialog = DarkQuestionDialog(parent, '登录失败', text, actions=[('确定', 'ok', True)])
     dialog.exec()
 
+
+_DEFAULT_HEAD_PATH = None
+
+
+def default_head_path():
+    '''未登录时随机使用 Steve/Alex 头颅，同一次运行内保持稳定。'''
+
+    global _DEFAULT_HEAD_PATH
+    if _DEFAULT_HEAD_PATH is not None and _DEFAULT_HEAD_PATH.is_file():
+        return _DEFAULT_HEAD_PATH
+    import random
+    base = Path(__file__).resolve().parent.parent / 'imgs'
+    name = random.choice(('steve_head.png', 'alex_head.png'))
+    path = base / name
+    _DEFAULT_HEAD_PATH = path if path.is_file() else base / 'steve_head.png'
+    return _DEFAULT_HEAD_PATH
+
+
 class AvatarComboBox(QComboBox):
     '''关闭状态下手动绘制当前头像，避免 QComboBox 按文字行高裁掉头像下半部分。'''
+
+    def showPopup(self):
+        # 弹出列表跟随组合框宽度，避免条目宽度把列表撑出账户卡片区域。
+        view = self.view()
+        width = max(210, self.width())
+        view.setMinimumWidth(width)
+        view.setMaximumWidth(width)
+        super().showPopup()
 
     def paintEvent(self, event):
         painter = QStylePainter(self)
@@ -60,12 +88,20 @@ class AvatarComboBox(QComboBox):
         text_rect = edit_rect
         if not icon.isNull():
             size = self.iconSize()
-            pix = icon.pixmap(size)
+            dpr = max(1.0, float(self.devicePixelRatioF()))
+            physical = QSize(
+                max(1, int(round(size.width() * dpr))),
+                max(1, int(round(size.height() * dpr))),
+            )
+            pix = icon.pixmap(physical)
             if not pix.isNull():
+                pix.setDevicePixelRatio(dpr)
+                logical_w = pix.width() / dpr
+                logical_h = pix.height() / dpr
                 x = edit_rect.left()
-                y = edit_rect.center().y() - pix.height() // 2 + 1
+                y = int(round(edit_rect.center().y() - logical_h / 2.0 + 1))
                 painter.drawPixmap(x, y, pix)
-                text_rect = edit_rect.adjusted(pix.width() + 10, 0, 0, 0)
+                text_rect = edit_rect.adjusted(int(round(logical_w)) + 10, 0, 0, 0)
         painter.setPen(self.palette().color(QPalette.ButtonText))
         painter.setFont(self.font())
         elided = self.fontMetrics().elidedText(
@@ -90,8 +126,15 @@ class AvatarLabel(QLabel):
         self._light = self.palette().color(QPalette.Window).lightness() > 128
         self._showing_default = False
         self._setting_default = False
+        self._showing_person = False
+        self._setting_person = False
         self.setFixedSize(self._size, self._size)
         self.setAlignment(Qt.AlignCenter)
+        self._shadow = QGraphicsDropShadowEffect(self)
+        self._shadow.setBlurRadius(max(8.0, self._size * 0.18))
+        self._shadow.setOffset(0, max(2.0, self._size * 0.045))
+        self._shadow.setColor(QColor(0, 0, 0, 72))
+        self.setGraphicsEffect(self._shadow)
         self._update_placeholder_style()
         self._name = '?'
         self._manager = QNetworkAccessManager(self)
@@ -106,6 +149,9 @@ class AvatarLabel(QLabel):
         return IMAGE_PLACEHOLDER_LIGHT if self._light else IMAGE_PLACEHOLDER_DARK
 
     def _update_placeholder_style(self):
+        if self._showing_person:
+            self.setStyleSheet('border-radius: 0px; background: transparent;')
+            return
         self.setStyleSheet(
             f'border-radius: {self._radius}px; background: {self._placeholder_color()};'
         )
@@ -115,13 +161,65 @@ class AvatarLabel(QLabel):
         changed = light != self._light
         self._light = light
         self._update_placeholder_style()
-        if self._showing_default and changed:
+        if self._showing_person:
+            self._showing_person = False
+            self.set_person_icon()
+        elif self._showing_default and changed:
             self._set_default()
 
     def setPixmap(self, pixmap):
+        if self._showing_person and not self._setting_person:
+            self._showing_person = False
+            self._update_placeholder_style()
         if not self._setting_default:
             self._showing_default = False
         super().setPixmap(pixmap)
+
+    def set_person_icon(self):
+        '''未登录正版账号时使用通用人物图标代替头像。'''
+
+        if self._showing_person and not self._setting_person:
+            return
+        self._showing_person = True
+        self._showing_default = False
+        self._image_urls = []
+        self._fallback_head = ''
+        self._cache_path = None
+        for reply in list(self._replies):
+            try:
+                reply.abort()
+            except RuntimeError:
+                pass
+        self._replies.clear()
+        self._update_placeholder_style()
+        from ui.widgets.settings_widgets import device_pixel_ratio
+        dpr = device_pixel_ratio()
+        phys = max(1, int(round(self._size * dpr)))
+        pixmap = QPixmap(phys, phys)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        color = QColor('#4F8F7F') if self._light else QColor('#8FD8C0')
+        pen = QPen(color, max(2.0, phys * 0.045))
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        head_r = phys * 0.16
+        painter.drawEllipse(
+            QRectF(phys * 0.5 - head_r, phys * 0.35 - head_r, head_r * 2, head_r * 2)
+        )
+        painter.drawArc(
+            QRectF(phys * 0.24, phys * 0.55, phys * 0.52, phys * 0.31),
+            0, 180 * 16,
+        )
+        painter.end()
+        pixmap.setDevicePixelRatio(dpr)
+        self._setting_person = True
+        try:
+            self.setPixmap(pixmap)
+        finally:
+            self._setting_person = False
 
     @staticmethod
     def config():
@@ -192,7 +290,7 @@ class AvatarLabel(QLabel):
                 8, 8, Qt.IgnoreAspectRatio, Qt.FastTransformation
             )
             painter.drawPixmap(0, 0, face)
-            if pixmap.height() >= 64 * scale:
+            if pixmap.height() >= 16 * scale:
                 hat = pixmap.copy(40 * scale, 8 * scale, 8 * scale, 8 * scale).scaled(
                     8, 8, Qt.IgnoreAspectRatio, Qt.FastTransformation
                 )
@@ -232,6 +330,8 @@ class AvatarLabel(QLabel):
         self._try_next_image()
 
     def _try_next_image(self):
+        if self._showing_person:
+            return
         if not self._image_urls:
             fallback = self._fallback_head
             self._fallback_head = ''
@@ -258,6 +358,9 @@ class AvatarLabel(QLabel):
 
     def _on_image_loaded(self, reply):
         self._replies.discard(reply)
+        if self._showing_person:
+            reply.deleteLater()
+            return
         loaded = False
         if reply.error() == QNetworkReply.NoError:
             pix = QPixmap()
@@ -887,24 +990,50 @@ class AccountPage(QWidget):
         self._tp_inline_api = DEFAULT_LITTLESKIN_API
         self._tp_inline_switching = False
         self._ms_code_dialog = None
+        self._ms_switching = False
+        self._ms_login_progress_value = 0
+        self._tp_server_anim = None
         self._section_toggles = {}
         self._section_hidden = {}
         self._section_collapsed = {}
         self._section_metrics = {}
         self._login_groups = []
-        self._init_ui()
         self._ms_profile_worker = None
         self._ms_saved_login_worker = None
         self._tp_skin_worker = None
         self._tp_skin_last_attempt = 0.0
         self._ms_icon_loader = SavedAccountIconLoader(self)
         self._ms_icon_loader.ready.connect(self._on_ms_account_icon_ready)
+        self._init_ui()
+        self._tp_settings_save_timer = QTimer(self)
+        self._tp_settings_save_timer.setSingleShot(True)
+        self._tp_settings_save_timer.setInterval(400)
+        self._tp_settings_save_timer.timeout.connect(self._save_tp_server_settings)
+        for edit in (
+            self.tp_api_edit, self.tp_register_edit,
+            self.tp_server_name_edit, self.tp_auto_server_edit,
+        ):
+            edit.textChanged.connect(
+                lambda _text=None: self._tp_settings_save_timer.start()
+            )
+            edit.editingFinished.connect(self._save_tp_server_settings)
+        self.tp_method_combo.currentIndexChanged.connect(
+            lambda _index=None: self._tp_settings_save_timer.start()
+        )
+        self.tp_server_name_edit.textChanged.connect(
+            lambda _text=None: self._update_thirdparty_tab_label()
+        )
+        self._ms_login_progress_timer = QTimer(self)
+        self._ms_login_progress_timer.setInterval(140)
+        self._ms_login_progress_timer.timeout.connect(self._tick_ms_login_progress)
         self._offline_name_timer = QTimer(self)
         self._offline_name_timer.setSingleShot(True)
         self._offline_name_timer.setInterval(500)
         self._offline_name_timer.timeout.connect(self._auto_update_offline_name)
         self.name_input.textChanged.connect((lambda: self._offline_name_timer.start()))
+        self._ensure_valid_login_mode()
         self._refresh_account_info()
+        self._refresh_offline_accounts()
         self._load_thirdparty_fields()
         self._ensure_current_account_saved()
         self.account_changed.connect(self._apply_login_section_order)
@@ -931,6 +1060,37 @@ class AccountPage(QWidget):
         except Exception:
             pass
 
+    def _refresh_offline_accounts(self):
+        combo = getattr(self, 'offline_name_combo', None)
+        if combo is None:
+            return
+        names = []
+        current = str(
+            self.config.get('player_name', '')
+            or self.config.get('offline_last_name', '')
+            or self.auth.get_offline_name()
+            or ''
+        ).strip()
+        if current:
+            names.append(current)
+        try:
+            for entry in self.auth.get_saved_accounts():
+                if not isinstance(entry, dict) or entry.get('type') != 'offline':
+                    continue
+                name = str(entry.get('name') or '').strip()
+                if name and name not in names:
+                    names.append(name)
+        except Exception:
+            pass
+        combo.blockSignals(True)
+        combo.clear()
+        for name in names:
+            combo.addItem(name)
+        combo.setEditText(current)
+        combo.blockSignals(False)
+        if current:
+            self.name_input.setText(current)
+
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -946,7 +1106,56 @@ class AccountPage(QWidget):
         title = QLabel('账号管理')
         title.setFont(ui_font(24, QFont.DemiBold))
         title.setStyleSheet('color: #f0f0f0;')
+        title.hide()
         layout.addWidget(title)
+        self._account_tab_mode = 'offline'
+        self._last_tab_rendered = None
+        self._tab_animation = None
+        self._tab_effect_group = None
+        self._account_tab_buttons = {}
+        self._account_tab_icon_kinds = {}
+        tab_bar = QWidget()
+        tab_bar.setStyleSheet('background:transparent;')
+        tab_layout = QHBoxLayout(tab_bar)
+        tab_layout.setContentsMargins(0, 0, 0, 4)
+        tab_layout.setSpacing(8)
+        tab_layout.addStretch(1)
+        tab_group = QButtonGroup(self)
+        tab_group.setExclusive(True)
+        for mode, label, icon_kind in (
+            ('microsoft', '正版', 'microsoft'),
+            ('offline', '离线', 'offline'),
+            ('thirdparty', 'LittleSkin 登录', 'littleskin'),
+        ):
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setMinimumHeight(34)
+            btn.setIcon(QIcon(login_icon(icon_kind, 18)))
+            btn.setIconSize(QSize(18, 18))
+            btn.setStyleSheet(
+                'QPushButton { background:transparent; color:rgba(255,255,255,0.62);'
+                ' border:none; border-radius:17px; padding:7px 20px;'
+                ' font-size:14px; font-weight:700; text-align:center; }'
+                'QPushButton:hover { background:rgba(255,255,255,0.08); }'
+                'QPushButton:checked { background:#90D9D9; color:#122828; }'
+            )
+            btn.clicked.connect(
+                (lambda _checked=False, m=mode: self._on_account_tab_clicked(m))
+            )
+            tab_group.addButton(btn)
+            tab_layout.addWidget(btn)
+            self._account_tab_buttons[mode] = btn
+            self._account_tab_icon_kinds[mode] = icon_kind
+        tab_layout.addStretch(1)
+        layout.addWidget(tab_bar)
+        # 账户卡和服务器卡放在同一个容器里，切换 tab 时一起做淡入动画。
+        self.account_cards_host = QWidget()
+        self.account_cards_host.setStyleSheet('background:transparent;')
+        self.account_cards_layout = QVBoxLayout(self.account_cards_host)
+        self.account_cards_layout.setContentsMargins(0, 0, 0, 0)
+        self.account_cards_layout.setSpacing(24)
+        layout.addWidget(self.account_cards_host)
         group = RoundedGroupBox(radius=12)
         group_layout = QVBoxLayout(group)
         group_layout.setContentsMargins(24, 22, 24, 20)
@@ -986,6 +1195,14 @@ class AccountPage(QWidget):
         tp_actions.addStretch(1)
         self.tp_actions_row.hide()
         group_layout.addWidget(self.tp_actions_row)
+        # 卡面内容容器：正版切号 / 离线输入 / 第三方登录都在这里原地切换，
+        # 不再往页面下方追加新的登录卡片。
+        self.mode_content = QWidget()
+        self.mode_content.setStyleSheet('background:transparent;')
+        self.mode_content_layout = QVBoxLayout(self.mode_content)
+        self.mode_content_layout.setContentsMargins(0, 0, 0, 0)
+        self.mode_content_layout.setSpacing(6)
+        group_layout.addWidget(self.mode_content)
         self.tp_inline_wrap = QWidget()
         self.tp_inline_wrap.setMinimumWidth(460)
         self.tp_inline_wrap.setMaximumWidth(620)
@@ -1015,6 +1232,7 @@ class AccountPage(QWidget):
         self.tp_inline_email.setStyleSheet(f'QComboBox {{ {inline_input_style} }}QComboBox QAbstractItemView {{ background:#24262c; color:#f0f0f0; selection-background-color:#88DDDD; border:1px solid rgba(255,255,255,0.14); }}')
         if self.tp_inline_email.lineEdit() is not None:
             self.tp_inline_email.lineEdit().setStyleSheet('background:transparent; border:none; color:#f0f0f0; padding:1px;')
+            self.tp_inline_email.lineEdit().setPlaceholderText('LittleSkin 邮箱或用户名')
         self.tp_inline_email.activated.connect(self._on_tp_inline_account_changed)
         self.tp_inline_email.editTextChanged.connect(self._on_tp_inline_email_edited)
         email_row.addWidget(self.tp_inline_email, 1)
@@ -1063,7 +1281,7 @@ class AccountPage(QWidget):
         inline_action_row.addWidget(self.tp_inline_login_btn)
         inline_layout.addLayout(inline_action_row)
         self.tp_inline_wrap.hide()
-        group_layout.addWidget(self.tp_inline_wrap, 0, Qt.AlignHCenter)
+        self.mode_content_layout.addWidget(self.tp_inline_wrap, 0, Qt.AlignHCenter)
         actions_row = QHBoxLayout()
         actions_row.addStretch(1)
         action_style = '\n            QPushButton { background:#3a3a3a; color:#8ee08e; border:none;\n                          border-radius:7px; font-size:16px; padding:4px 12px; }\n            QPushButton:hover { background:#4a4a4a; }\n        '
@@ -1087,7 +1305,7 @@ class AccountPage(QWidget):
         set_button_icon(self.switch_action_btn, 'switch', 20, '#7ee787')
         self.switch_action_btn.setIconSize(QSize(20, 20))
         self.switch_action_btn.setStyleSheet(action_style)
-        self.switch_action_btn.clicked.connect(self._show_account_switcher)
+        self.switch_action_btn.clicked.connect(self._show_ms_inline_switcher)
         actions_row.addWidget(self.skin_action_btn)
         actions_row.addWidget(self.edit_action_btn)
         actions_row.addWidget(self.switch_action_btn)
@@ -1102,138 +1320,212 @@ class AccountPage(QWidget):
         btn_row.addWidget(self.logout_btn)
         btn_row.addStretch(1)
         group_layout.addLayout(btn_row)
-        layout.addWidget(group)
-        self.login_methods_layout = QVBoxLayout()
-        self.login_methods_layout.setSpacing(10)
-        layout.addLayout(self.login_methods_layout)
-        offline_group = RoundedGroupBox(radius=12)
-        offline_layout = QVBoxLayout(offline_group)
-        offline_layout.setContentsMargins(24, 20, 24, 20)
+        self.profile_group = group
+        self.account_cards_layout.addWidget(group)
+        self.offline_inline_widget = QWidget()
+        self.offline_inline_widget.setMaximumWidth(520)
+        offline_layout = QVBoxLayout(self.offline_inline_widget)
+        offline_layout.setContentsMargins(0, 4, 0, 0)
         offline_layout.setSpacing(14)
-        section_title = QLabel('离线登录')
-        section_title.setStyleSheet('color: rgba(255,255,255,0.85); font-size: 16px; font-weight:900;')
-        offline_layout.addWidget(section_title)
-        desc = QLabel('使用自定义玩家名离线游戏，无法进入正版服务器')
-        desc.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 13px;')
-        desc.setWordWrap(True)
-        offline_layout.addWidget(desc)
-        name_row = QHBoxLayout()
-        name_label = QLabel('玩家名')
-        name_label.setFixedWidth(60)
-        name_label.setStyleSheet('color: rgba(255,255,255,0.7);')
+        self.offline_name_combo = QComboBox()
+        self.offline_name_combo.setEditable(True)
+        self.offline_name_combo.setMinimumHeight(40)
+        self.offline_name_combo.setMinimumWidth(360)
+        self.offline_name_combo.setStyleSheet(
+            'QComboBox { background: rgba(255,255,255,0.06);'
+            ' border:1px solid rgba(255,255,255,0.16); border-radius:6px;'
+            ' color:#f0f0f0; padding:5px 10px; font-size:13px; }'
+            'QComboBox::drop-down { border:none; width:22px; }'
+            'QComboBox QAbstractItemView { background:#24262c; color:#f0f0f0;'
+            ' border:1px solid rgba(255,255,255,0.16);'
+            ' selection-background-color:#88DDDD; }'
+        )
+        if self.offline_name_combo.lineEdit() is not None:
+            self.offline_name_combo.lineEdit().setStyleSheet(
+                'background:transparent; border:none; color:#f0f0f0; padding:1px;'
+            )
+            self.offline_name_combo.lineEdit().setPlaceholderText('输入玩家名称')
+            self.offline_name_combo.lineEdit().editingFinished.connect(
+                self._remember_offline_name
+            )
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText('输入玩家名称')
-        self.name_input.setMinimumHeight(36)
-        self.name_input.setStyleSheet('\n            QLineEdit {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.1);\n                border-radius: 6px;\n                color: #f0f0f0;\n                padding: 4px 8px;\n            }\n        ')
-        name_row.addWidget(name_label)
-        name_row.addWidget(self.name_input, 1)
+        self.name_input.hide()
+        self.offline_name_combo.currentTextChanged.connect(
+            self.name_input.setText
+        )
         self.name_input.editingFinished.connect(self._remember_offline_name)
-        offline_layout.addLayout(name_row)
-        btn_row2 = QHBoxLayout()
-        offline_login_btn = QPushButton('使用离线登录')
-        offline_login_btn.setStyleSheet('QPushButton { background: #90D9D9; color: #122828; border: none; border-radius: 6px; padding: 8px 16px; } QPushButton:hover { background: #78CACA; }')
-        offline_login_btn.clicked.connect(self._on_offline_login)
-        btn_row2.addStretch(1)
-        btn_row2.addWidget(offline_login_btn)
-        offline_layout.addLayout(btn_row2)
-        self.offline_group = offline_group
-        self.login_methods_layout.addWidget(offline_group)
+        offline_layout.addWidget(self.offline_name_combo)
+        self.offline_group = self.offline_inline_widget
+        self.mode_content_layout.addWidget(self.offline_inline_widget, 0, Qt.AlignHCenter)
         ms_group = RoundedGroupBox(radius=12)
         ms_layout = QVBoxLayout(ms_group)
         ms_layout.setContentsMargins(24, 20, 24, 20)
         ms_layout.setSpacing(10)
-        ms_title = QLabel('正版登录')
-        ms_title.setStyleSheet('color: rgba(255,255,255,0.85); font-size: 16px; font-weight:900;')
-        ms_layout.addWidget(ms_title)
-        ms_desc = QLabel('使用正版账号登录；已保存的账号会显示在下方列表中，优先使用保存的登录凭据直接登录。')
-        ms_desc.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 13px;')
-        ms_desc.setWordWrap(True)
-        ms_layout.addWidget(ms_desc)
+        self.ms_title_label = QLabel('正版登录')
+        self.ms_title_label.setStyleSheet('color: rgba(255,255,255,0.85); font-size: 16px; font-weight:900;')
+        self.ms_title_label.hide()
+        ms_layout.addWidget(self.ms_title_label)
+        self.ms_desc_label = QLabel('使用正版账号登录；已保存的账号会显示在下方列表中，优先使用保存的登录凭据直接登录。')
+        self.ms_desc_label.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 13px;')
+        self.ms_desc_label.setWordWrap(True)
+        self.ms_desc_label.hide()
+        ms_layout.addWidget(self.ms_desc_label)
         self.ms_status_label = QLabel('就绪，点击「正版登录」')
+        self.ms_status_label.setAlignment(Qt.AlignCenter)
         self.ms_status_label.setStyleSheet('color: rgba(255,255,255,0.6); font-size: 13px;')
         self.ms_status_label.setWordWrap(True)
-        ms_layout.addWidget(self.ms_status_label)
         self.ms_device_code_label = QLabel('')
         self.ms_device_code_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.ms_device_code_label.setAlignment(Qt.AlignCenter)
         self.ms_device_code_label.setStyleSheet('color:#A8E6E6; font-size:26px; font-weight:900; background:rgba(136,221,221,0.12); border:1px solid rgba(136,221,221,0.4); border-radius:8px; padding:10px;')
         self.ms_device_code_label.hide()
-        ms_layout.addWidget(self.ms_device_code_label)
         self.ms_accounts_row = QWidget()
+        self.ms_accounts_row.setMinimumWidth(440)
+        self.ms_accounts_row.setMaximumWidth(500)
         ms_accounts_layout = QHBoxLayout(self.ms_accounts_row)
         ms_accounts_layout.setContentsMargins(0, 0, 0, 0)
         ms_accounts_layout.setSpacing(10)
         self.ms_accounts_combo = AvatarComboBox()
-        self.ms_accounts_combo.setIconSize(QSize(42, 42))
-        self.ms_accounts_combo.setMinimumHeight(60)
+        self.ms_accounts_combo.setMinimumHeight(42)
         self.ms_accounts_combo.setMinimumWidth(210)
-        self.ms_accounts_combo.setMaximumWidth(340)
+        self.ms_accounts_combo.setMaximumWidth(360)
         self.ms_accounts_combo.setMaxVisibleItems(10)
-        self.ms_accounts_combo.setStyleSheet('\n            QComboBox {\n                background: rgba(30,41,41,0.62); color:#f0f0f0;\n                border:1px solid rgba(255,255,255,0.16); border-radius:8px;\n                padding:5px 10px; font-size:13px;\n            }\n            QComboBox:hover { border-color: rgba(136,221,221,0.55); }\n            QComboBox::drop-down { border:none; width:22px; }\n            QComboBox QAbstractItemView {\n                background:#24262c; color:#f0f0f0; outline:none;\n                border:1px solid rgba(255,255,255,0.16);\n                selection-background-color:#88DDDD;\n            }\n            QComboBox QAbstractItemView::item { min-height:54px; padding:4px 8px; }\n        ')
+        self.ms_accounts_combo.setStyleSheet('\n            QComboBox {\n                background: rgba(30,41,41,0.62); color:#f0f0f0;\n                border:1px solid rgba(255,255,255,0.16); border-radius:8px;\n                padding:5px 10px; font-size:13px;\n            }\n            QComboBox:hover { border-color: rgba(136,221,221,0.55); }\n            QComboBox::drop-down { border:none; width:22px; }\n            QComboBox QAbstractItemView {\n                background:#24262c; color:#f0f0f0; outline:none;\n                border:1px solid rgba(255,255,255,0.16);\n                selection-background-color:#88DDDD;\n            }\n            QComboBox QAbstractItemView::item { min-height:32px; padding:4px 8px; }\n        ')
+        self.ms_accounts_combo.setFixedHeight(40)
         ms_accounts_layout.addWidget(self.ms_accounts_combo, 1)
         self.ms_saved_login_btn = QPushButton('登录')
         self.ms_saved_login_btn.setMinimumHeight(40)
-        self.ms_saved_login_btn.setStyleSheet('QPushButton { background:#90D9D9; color:#122828; border:none; border-radius:6px; padding:8px 20px; } QPushButton:hover { background:#78CACA; } QPushButton:disabled { background:#333; color:#777; }')
+        self.ms_saved_login_btn.setFixedWidth(112)
+        self.ms_saved_login_btn.setStyleSheet('QPushButton { background:#90D9D9; color:#122828; border:none; border-radius:6px; padding:8px 20px; } QPushButton:hover { background:#78CACA; } QPushButton:disabled { background:#3b3f3f; color:#c7c7c7; }')
         self.ms_saved_login_btn.clicked.connect(self._on_ms_saved_login)
         ms_accounts_layout.addWidget(self.ms_saved_login_btn)
         self.ms_device_login_btn = QPushButton('登录其他账号')
+        self.ms_device_login_btn.setFixedWidth(126)
         self.ms_device_login_btn.setMinimumHeight(40)
         self.ms_device_login_btn.setStyleSheet('QPushButton { background:#90D9D9; color:#122828; border:none; border-radius:6px; padding:8px 16px; } QPushButton:hover { background:#78CACA; } QPushButton:pressed { background:#5FAFAF; } QPushButton:disabled { background:#2c6f66; color:#dbeafe; }')
         self.ms_device_login_btn.clicked.connect(self._on_ms_device_login)
         ms_accounts_layout.addWidget(self.ms_device_login_btn)
-        ms_layout.addWidget(self.ms_accounts_row)
+        self.ms_inline_widget = QWidget()
+        self.ms_inline_widget.setStyleSheet('background:transparent;')
+        ms_inline_layout = QVBoxLayout(self.ms_inline_widget)
+        ms_inline_layout.setContentsMargins(0, 6, 0, 0)
+        ms_inline_layout.setSpacing(8)
+        ms_inline_layout.addWidget(self.ms_status_label)
+        ms_inline_layout.addWidget(self.ms_device_code_label)
+        ms_inline_layout.addWidget(self.ms_accounts_row, 0, Qt.AlignHCenter)
+        self.ms_links_row = QWidget()
+        self.ms_links_row.setStyleSheet('background:transparent;')
+        ms_links_layout = QHBoxLayout(self.ms_links_row)
+        ms_links_layout.setContentsMargins(0, 2, 0, 0)
+        ms_links_layout.setSpacing(18)
+        ms_links_layout.addStretch(1)
+        link_style = (
+            'QPushButton { background:transparent; color:rgba(255,255,255,0.42);'
+            ' border:none; padding:5px 8px; font-size:13px; }'
+            'QPushButton:hover { color:#A8E6E6; }'
+        )
+        self.ms_purchase_btn = QPushButton('»  购买正版')
+        self.ms_purchase_btn.setCursor(Qt.PointingHandCursor)
+        self.ms_purchase_btn.setStyleSheet(link_style)
+        self.ms_purchase_btn.clicked.connect(
+            lambda: webbrowser.open(MICROSOFT_PURCHASE_URL)
+        )
+        ms_links_layout.addWidget(self.ms_purchase_btn)
+        self.ms_official_btn = QPushButton('»  前往官网')
+        self.ms_official_btn.setCursor(Qt.PointingHandCursor)
+        self.ms_official_btn.setStyleSheet(link_style)
+        self.ms_official_btn.clicked.connect(
+            lambda: webbrowser.open(MICROSOFT_OFFICIAL_URL)
+        )
+        ms_links_layout.addWidget(self.ms_official_btn)
+        ms_links_layout.addStretch(1)
+        ms_inline_layout.addWidget(self.ms_links_row)
+        self.ms_inline_widget.hide()
+        self.mode_content_layout.addWidget(self.ms_inline_widget)
         self.ms_group = ms_group
-        self.login_methods_layout.addWidget(ms_group)
+        self.ms_group.setParent(self)
+        self.ms_group.hide()
         tp_group = RoundedGroupBox(radius=12)
         tp_layout = QVBoxLayout(tp_group)
         tp_layout.setContentsMargins(24, 20, 24, 20)
         tp_layout.setSpacing(10)
-        tp_title = QLabel('第三方登录（Authlib Injector / LittleSkin）')
-        tp_title.setStyleSheet('color: rgba(255,255,255,0.85); font-size: 16px; font-weight:900;')
-        tp_layout.addWidget(tp_title)
-        tp_desc = QLabel('支持 LittleSkin 及任何兼容 Yggdrasil 的认证服务器，登录后自动启用 authlib-injector。')
-        tp_desc.setWordWrap(True)
-        tp_desc.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 12px;')
-        tp_layout.addWidget(tp_desc)
+        self.tp_title_label = QLabel('第三方登录（Authlib Injector / LittleSkin）')
+        self.tp_title_label.setStyleSheet('color: rgba(255,255,255,0.85); font-size: 16px; font-weight:900;')
+        self.tp_title_label.hide()
+        tp_layout.addWidget(self.tp_title_label)
+        self.tp_desc_label = QLabel('支持 LittleSkin 及任何兼容 Yggdrasil 的认证服务器，登录后自动启用 authlib-injector。')
+        self.tp_desc_label.setWordWrap(True)
+        self.tp_desc_label.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 12px;')
+        self.tp_desc_label.hide()
+        tp_layout.addWidget(self.tp_desc_label)
+        self.tp_advanced_panel = QWidget()
+        self.tp_advanced_panel.setStyleSheet('background:transparent;')
+        advanced_layout = QVBoxLayout(self.tp_advanced_panel)
+        advanced_layout.setContentsMargins(0, 4, 0, 0)
+        advanced_layout.setSpacing(12)
+        server_input_style = (
+            'QLineEdit { background: rgba(255,255,255,0.06);'
+            ' border:1px solid rgba(255,255,255,0.16); border-radius:6px;'
+            ' color:#f0f0f0; padding:6px 9px; font-size:13px; }'
+            'QLineEdit:focus { border-color:#90D9D9; }'
+            'QComboBox { background: rgba(255,255,255,0.06);'
+            ' border:1px solid rgba(255,255,255,0.16); border-radius:6px;'
+            ' color:#f0f0f0; padding:5px 9px; font-size:13px; }'
+            'QComboBox:focus { border-color:#90D9D9; }'
+            'QComboBox::drop-down { border:none; width:22px; }'
+            'QComboBox QAbstractItemView { background:#24262c; color:#f0f0f0;'
+            ' border:1px solid rgba(255,255,255,0.16);'
+            ' selection-background-color:#88DDDD; }'
+        )
+        # 服务器设置表单保持一列标签、一列输入框，整体居中。
+        self.tp_server_form = QWidget()
+        form_layout = QGridLayout(self.tp_server_form)
+        form_layout.setContentsMargins(0, 0, 0, 0)
+        form_layout.setHorizontalSpacing(14)
+        form_layout.setVerticalSpacing(10)
+        form_layout.setColumnMinimumWidth(0, 170)
+        form_layout.setColumnStretch(1, 1)
         def add_tp_row(label, widget):
-            row = QHBoxLayout()
+            row = form_layout.rowCount()
             label_widget = QLabel(label)
+            label_widget.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
             label_widget.setStyleSheet(
                 'color: rgba(255,255,255,0.72); font-size: 13px; background: transparent;'
             )
-            row.addWidget(label_widget)
-            row.addWidget(widget, 1)
-            tp_layout.addLayout(row)
+            widget.setMinimumHeight(36)
+            form_layout.addWidget(label_widget, row, 0)
+            form_layout.addWidget(widget, row, 1)
             return widget
 
         self.tp_method_combo = QComboBox()
         self.tp_method_combo.addItem('LittleSkin 登录', 'littleskin')
         self.tp_method_combo.addItem('自定义 Authlib Injector', 'custom')
-        self.tp_method_combo.setStyleSheet(self.name_input.styleSheet())
+        self.tp_method_combo.setStyleSheet(server_input_style)
         self.tp_method_combo.currentIndexChanged.connect(self._on_tp_method_changed)
         add_tp_row('登录方式', self.tp_method_combo)
         self.tp_api_edit = QLineEdit()
-        self.tp_api_edit.setStyleSheet(self.name_input.styleSheet())
-        self.tp_api_edit.setPlaceholderText('https://littleskin.cn/api/yggdrasil')
+        self.tp_api_edit.setStyleSheet(server_input_style)
+        self.tp_api_edit.setPlaceholderText('例如 https://example.com/api/yggdrasil')
         add_tp_row('认证服务器（必填）', self.tp_api_edit)
         self.tp_register_edit = QLineEdit()
-        self.tp_register_edit.setStyleSheet(self.name_input.styleSheet())
+        self.tp_register_edit.setStyleSheet(server_input_style)
+        self.tp_register_edit.setPlaceholderText('例如 https://example.com/auth/register')
         add_tp_row('注册链接', self.tp_register_edit)
         self.tp_server_name_edit = QLineEdit()
-        self.tp_server_name_edit.setStyleSheet(self.name_input.styleSheet())
-        self.tp_server_name_edit.setPlaceholderText('LittleSkin 登录')
+        self.tp_server_name_edit.setStyleSheet(server_input_style)
+        self.tp_server_name_edit.setPlaceholderText('例如 我的服务器')
         add_tp_row('服务器名称', self.tp_server_name_edit)
         self.tp_auto_server_edit = QLineEdit()
-        self.tp_auto_server_edit.setStyleSheet(self.name_input.styleSheet())
+        self.tp_auto_server_edit.setStyleSheet(server_input_style)
         self.tp_auto_server_edit.setPlaceholderText('可选，例如 play.example.com 或 play.example.com:25565')
         add_tp_row('自动进入服务器', self.tp_auto_server_edit)
         self.tp_user_edit = QLineEdit()
-        self.tp_user_edit.setStyleSheet(self.name_input.styleSheet())
+        self.tp_user_edit.setStyleSheet(server_input_style)
         self.tp_user_edit.setPlaceholderText('LittleSkin 邮箱或用户名')
-        add_tp_row('账号', self.tp_user_edit)
         self.tp_pass_edit = QLineEdit()
         self.tp_pass_edit.setEchoMode(QLineEdit.Password)
-        self.tp_pass_edit.setStyleSheet(self.name_input.styleSheet())
+        self.tp_pass_edit.setStyleSheet(server_input_style)
         self.tp_pass_edit.setPlaceholderText('密码')
         pass_row = QHBoxLayout()
         pass_label = QLabel('密码')
@@ -1251,13 +1543,17 @@ class AccountPage(QWidget):
         self.tp_eye_btn.setStyleSheet('QToolButton { background:transparent; color:#cfcfcf; border:1px solid rgba(255,255,255,0.15); border-radius:6px; font-size:15px; } QToolButton:hover { background:rgba(255,255,255,0.08); } QToolButton:checked { color:#A8E6E6; border-color:#A8E6E6; }')
         self.tp_eye_btn.toggled.connect(self._toggle_tp_password)
         pass_row.addWidget(self.tp_eye_btn)
-        tp_layout.addLayout(pass_row)
+        self.tp_legacy_panel = QWidget()
+        legacy_layout = QVBoxLayout(self.tp_legacy_panel)
+        legacy_layout.setContentsMargins(0, 0, 0, 0)
+        legacy_layout.setSpacing(10)
+        legacy_layout.addLayout(pass_row)
         self.tp_remember_check = ThemedCheckBox('记住账号和密码')
         self.tp_remember_check.setToolTip('仅保存在本机，并使用 Windows 当前用户加密')
-        tp_layout.addWidget(self.tp_remember_check)
+        legacy_layout.addWidget(self.tp_remember_check)
         tp_btn_row = QHBoxLayout()
         set_little_btn = QPushButton('设置为 LittleSkin')
-        set_little_btn.setStyleSheet('QPushButton { background:#3a3a3a; color:white; border:none; border-radius:6px; padding:8px 14px; } QPushButton:hover { background:#4a4a4a; }')
+        set_little_btn.setStyleSheet('QPushButton { background:#3a3a3a; color:white; border:none; border-radius:6px; padding:8px 14px; text-align:left; min-width:150px; } QPushButton:hover { background:#4a4a4a; }')
         set_little_btn.clicked.connect(self._set_littleskin_defaults)
         open_reg_btn = QPushButton('打开注册页')
         open_reg_btn.setStyleSheet(set_little_btn.styleSheet())
@@ -1265,21 +1561,66 @@ class AccountPage(QWidget):
         self.tp_login_btn = QPushButton('第三方登录')
         self.tp_login_btn.setStyleSheet('QPushButton { background:#90D9D9; color:#122828; border:none; border-radius:6px; padding:8px 18px; } QPushButton:hover { background:#78CACA; }')
         self.tp_login_btn.clicked.connect(self._on_tp_login)
-        tp_btn_row.addWidget(set_little_btn)
+        form_layout.addWidget(
+            set_little_btn, form_layout.rowCount(), 0, 1, 2, Qt.AlignLeft
+        )
+        advanced_layout.addWidget(self.tp_server_form)
         tp_btn_row.addWidget(open_reg_btn)
         tp_btn_row.addStretch(1)
         tp_btn_row.addWidget(self.tp_login_btn)
-        tp_layout.addLayout(tp_btn_row)
+        legacy_layout.addLayout(tp_btn_row)
         self.tp_status_label = QLabel('')
         self.tp_status_label.setWordWrap(True)
         self.tp_status_label.setStyleSheet('color: rgba(255,255,255,0.55); font-size: 12px;')
-        tp_layout.addWidget(self.tp_status_label)
+        legacy_layout.addWidget(self.tp_status_label)
+        self.tp_legacy_panel.setParent(self)
+        self.tp_legacy_panel.hide()
+        self.tp_server_header = QWidget()
+        self.tp_server_header.setStyleSheet('background:transparent;')
+        server_header_layout = QHBoxLayout(self.tp_server_header)
+        server_header_layout.setContentsMargins(0, 4, 0, 4)
+        server_header_layout.setSpacing(8)
+        self.tp_server_button = QPushButton('服务器')
+        self.tp_server_button.setCursor(Qt.PointingHandCursor)
+        self.tp_server_button.setStyleSheet(
+            'QPushButton { background:transparent; color:rgba(255,255,255,0.9);'
+            ' border:none; padding:0; text-align:left;'
+            ' font-size:14px; font-weight:900; }'
+            'QPushButton:hover { color:#A8E6E6; }'
+        )
+        self.tp_server_button.clicked.connect(self._toggle_tp_server)
+        server_header_layout.addWidget(
+            self.tp_server_button, 0, Qt.AlignLeft | Qt.AlignVCenter
+        )
+        server_header_layout.addStretch(1)
+        self.tp_server_chevron = RotatingChevronButton(
+            size=20, collapsed_angle=-90, expanded_angle=0,
+            light_color='#2F6F6F', dark_color='#A8E6E6',
+        )
+        self.tp_server_chevron.setToolTip('展开服务器设置')
+        self.tp_server_chevron.clicked.connect(self._toggle_tp_server)
+        server_header_layout.addWidget(
+            self.tp_server_chevron, 0, Qt.AlignRight | Qt.AlignVCenter
+        )
+        self.tp_server_header.setCursor(Qt.PointingHandCursor)
+        self.tp_server_header.installEventFilter(self)
+        # 服务器卡不需要 QGroupBox 的标题占位，否则折叠时标题会偏下。
+        self.tp_server_card = RoundedFrame(radius=12)
+        self.tp_server_card.setStyleSheet('background:transparent;')
+        server_card_layout = QVBoxLayout(self.tp_server_card)
+        server_card_layout.setContentsMargins(24, 12, 24, 12)
+        server_card_layout.setSpacing(8)
+        server_card_layout.addWidget(self.tp_server_header)
+        self.tp_advanced_panel.hide()
+        server_card_layout.addWidget(self.tp_advanced_panel)
+        self.tp_server_card.hide()
+        self.tp_server_card.installEventFilter(self)
         self.tp_group = tp_group
-        self.login_methods_layout.addWidget(tp_group)
-        self._login_groups = [offline_group, ms_group, tp_group]
-        self._install_collapsible(offline_group, section_title, '离线登录')
-        self._install_collapsible(ms_group, ms_title, '正版登录')
-        self._install_collapsible(tp_group, tp_title, '第三方登录')
+        self.tp_group.setParent(self)
+        self.tp_group.hide()
+        self.account_cards_layout.addWidget(self.tp_server_card)
+        self._login_groups = []
+        self.tp_inline_title.hide()
         self._apply_login_section_order()
         layout.addStretch(1)
         scroll.setWidget(content)
@@ -1288,6 +1629,22 @@ class AccountPage(QWidget):
 
     def eventFilter(self, obj, event):
         try:
+            if (
+                obj is getattr(self, 'tp_server_header', None)
+                and event.type() == QEvent.MouseButtonRelease
+                and event.button() == Qt.LeftButton
+            ):
+                self._toggle_tp_server()
+                return True
+            if (
+                obj is getattr(self, 'tp_server_card', None)
+                and event.type() == QEvent.MouseButtonRelease
+                and event.button() == Qt.LeftButton
+            ):
+                # 连卡片顶部内边距也算在可点击标题行内。
+                if event.position().y() <= self.tp_server_header.geometry().bottom() + 8:
+                    self._toggle_tp_server()
+                    return True
             if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
                 group = self._group_for_header(obj)
                 if group is not None:
@@ -1365,7 +1722,19 @@ class AccountPage(QWidget):
             if row is not None and row.count():
                 widget = row.itemAt(0).widget()
                 if widget is not None:
-                    header_h = max(header_h, widget.sizeHint().height(), widget.height())
+                    width = max(1, widget.width() or group.width())
+                    try:
+                        wrapped = (
+                            widget.heightForWidth(width)
+                            if widget.hasHeightForWidth()
+                            else widget.sizeHint().height()
+                        )
+                    except Exception:
+                        wrapped = widget.sizeHint().height()
+                    header_h = max(
+                        header_h, widget.sizeHint().height(),
+                        wrapped, widget.height(),
+                    )
         except Exception:
             pass
         btn = self._section_toggles.get(group)
@@ -1451,25 +1820,176 @@ class AccountPage(QWidget):
         anim.start()
 
     def _apply_login_section_order(self):
-        groups = self._login_groups
-        if not groups:
-            return
+        '''按登录模式切换同一张账户卡的内容，不清理其他模式的账号。'''
+
         login_type = self.config.get('login_type', 'offline')
-        if getattr(self, '_tp_inline_switching', False):
-            active = set()
-        elif login_type == 'microsoft':
-            active = {self.ms_group}
-        elif login_type == 'thirdparty':
-            active = {self.tp_group}
+        mode = (
+            'microsoft' if login_type == 'microsoft'
+            else 'thirdparty' if login_type == 'thirdparty'
+            else 'offline'
+        )
+        previous_mode = self._last_tab_rendered
+        self._account_tab_mode = mode
+        if mode != 'microsoft':
+            self._ms_switching = False
+        if mode != 'thirdparty':
+            self._tp_inline_switching = False
+
+        ms_account = self.config.get('microsoft_account') or {}
+        tp_account = self.config.get('thirdparty_account') or {}
+        ms_logged = mode == 'microsoft' and bool(ms_account.get('name'))
+        tp_logged = mode == 'thirdparty' and bool(tp_account.get('name'))
+        show_ms_form = mode == 'microsoft' and (
+            not ms_logged or bool(self._ms_switching)
+        )
+        show_tp_form = mode == 'thirdparty' and (
+            not tp_logged or bool(self._tp_inline_switching)
+        )
+
+        # 卡面内容原地切换：三个模式共用这一张账户卡。
+        self.profile_group.setVisible(True)
+        self.offline_inline_widget.setVisible(mode == 'offline')
+        self.ms_inline_widget.setVisible(show_ms_form)
+        self.ms_status_label.hide()
+        if mode == 'microsoft':
+            if show_ms_form:
+                # 切换账号/未登录时显示通用人物图标和添加账号界面。
+                self.avatar.set_person_icon()
+                self.player_name_label.hide()
+                self.email_label.hide()
+                self.login_type_label.hide()
+            else:
+                self.player_name_label.show()
+                self.login_type_label.show()
+                if ms_account.get('email'):
+                    self.email_label.show()
+        self.tp_inline_wrap.setVisible(show_tp_form)
+        self.tp_server_card.setVisible(mode == 'thirdparty')
+        self._set_ms_actions_visible(ms_logged and not show_ms_form)
+        self.logout_btn.setVisible(ms_logged and not show_ms_form)
+        self.tp_actions_row.setVisible(tp_logged and not show_tp_form)
+
+        for key, btn in self._account_tab_buttons.items():
+            btn.blockSignals(True)
+            btn.setChecked(key == mode)
+            icon_kind = self._account_tab_icon_kinds.get(key, 'thirdparty')
+            btn.setIcon(QIcon(login_icon(
+                icon_kind, 18, '#122828' if key == mode else '#8F96A3'
+            )))
+            btn.blockSignals(False)
+
+        if previous_mode != mode:
+            # 切换 tab 时同步各列表；同一 tab 内输入/登录不重建离线列表，
+            # 避免打断正在编辑的玩家名。
+            if mode == 'thirdparty':
+                self._set_tp_server_expanded(False, animate=False)
+            self._refresh_ms_accounts_list()
+            self._refresh_offline_accounts()
+            self._refresh_tp_inline_accounts()
+        self._last_tab_rendered = mode
+        if previous_mode is not None and previous_mode != mode and self.isVisible():
+            self._animate_tab_target(self.account_cards_host)
+
+    def _stop_tab_animation(self):
+        anim = getattr(self, '_tab_animation', None)
+        self._tab_animation = None
+        if anim is not None:
+            try:
+                anim.stop()
+                anim.deleteLater()
+            except RuntimeError:
+                pass
+        group = getattr(self, '_tab_effect_group', None)
+        self._tab_effect_group = None
+        if group is not None:
+            try:
+                group.setGraphicsEffect(None)
+            except RuntimeError:
+                pass
+
+    def _animate_tab_target(self, target):
+        if target is None:
+            return
+        self._stop_tab_animation()
+        effect = QGraphicsOpacityEffect(target)
+        effect.setOpacity(0.0)
+        target.setGraphicsEffect(effect)
+        anim = QPropertyAnimation(effect, b'opacity', self)
+        anim.setDuration(170)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        def finish():
+            if self._tab_animation is anim:
+                self._tab_animation = None
+                self._tab_effect_group = None
+                try:
+                    target.setGraphicsEffect(None)
+                except RuntimeError:
+                    pass
+            try:
+                anim.deleteLater()
+            except RuntimeError:
+                pass
+
+        anim.finished.connect(finish)
+        self._tab_animation = anim
+        self._tab_effect_group = target
+        anim.start()
+
+    def _on_account_tab_clicked(self, mode):
+        # 再次点击当前 tab 视为取消“切换账号”，回到账户卡本身。
+        if mode == self._account_tab_mode:
+            cancelled = False
+            if mode == 'microsoft' and self._ms_switching:
+                self._ms_switching = False
+                cancelled = True
+            if mode == 'thirdparty' and self._tp_inline_switching:
+                self._tp_inline_switching = False
+                cancelled = True
+            if cancelled:
+                self._refresh_account_info()
+                self._apply_login_section_order()
+                return
+        self._switch_account_mode(mode)
+
+    def _switch_account_mode(self, mode):
+        '''切换启动使用的登录模式，保留其他模式的账号与 token。'''
+
+        if mode == 'microsoft':
+            account = self.config.get('microsoft_account') or {}
+            if not account.get('name'):
+                account = self.auth.get_last_microsoft_account_entry() or {}
+            self.config.set('login_type', 'microsoft')
+            self.config.set('microsoft_account', account or None)
+            if account:
+                try:
+                    self.auth.save_microsoft_account(account)
+                except Exception:
+                    pass
+        elif mode == 'thirdparty':
+            account = self.config.get('thirdparty_account') or {}
+            if not account.get('name'):
+                for entry in self.auth.get_saved_accounts():
+                    if isinstance(entry, dict) and entry.get('type') == 'thirdparty':
+                        account = entry
+                        break
+            self.config.set('login_type', 'thirdparty')
+            self.config.set('thirdparty_account', account or None)
         else:
-            active = {self.offline_group}
-        ordered = [g for g in groups if g in active] + [g for g in groups if g not in active]
-        for group in groups:
-            self.login_methods_layout.removeWidget(group)
-        for group in ordered:
-            self.login_methods_layout.addWidget(group)
-        for group in groups:
-            self._set_section_collapsed(group, group not in active, animate=False)
+            name = str(
+                self.name_input.text()
+                or self.config.get('player_name', '')
+                or self.config.get('offline_last_name', '')
+            ).strip()
+            self.config.set('login_type', 'offline')
+            if name:
+                self.config.set('player_name', name)
+        self.config.save()
+        self._refresh_account_info()
+        self._apply_login_section_order()
+        self.account_changed.emit()
 
     def _current_account_id(self):
         login_type = self.config.get('login_type', 'offline')
@@ -1506,6 +2026,79 @@ class AccountPage(QWidget):
         else:
             menu.addAction('修改玩家名', (lambda: self.name_input.setFocus()))
         menu.exec(self.edit_action_btn.mapToGlobal(self.edit_action_btn.rect().bottomLeft()))
+
+    def _show_ms_inline_switcher(self):
+        '''正版切换账号：原地展开账号下拉，不弹新的切换窗口。'''
+
+        self._ms_switching = True
+        self._switch_account_mode('microsoft')
+        self.profile_group.setVisible(True)
+        self.ms_inline_widget.setVisible(True)
+        # 已登录账号切换时只显示账号列表，去掉提示小字。
+        self.ms_status_label.hide()
+        self._refresh_ms_accounts_list()
+        # 切换账号默认停在“添加新账号”，和未登录界面一致；
+        # 已保存账号仍可从下拉列表中选。
+        if self.ms_accounts_combo.count():
+            self.ms_accounts_combo.setCurrentIndex(
+                self.ms_accounts_combo.count() - 1
+            )
+        self._scroll_account_to_top()
+
+    def _set_ms_login_progress(self, value):
+        try:
+            value = max(self._ms_login_progress_value, min(99, int(value)))
+        except (TypeError, ValueError):
+            return
+        self._ms_login_progress_value = value
+        try:
+            self.ms_saved_login_btn.setEnabled(False)
+            self.ms_saved_login_btn.setText(f'{value}%')
+        except RuntimeError:
+            pass
+
+    def _begin_ms_login_progress(self, value=3):
+        self._ms_login_progress_value = max(0, min(99, int(value)))
+        try:
+            self.ms_saved_login_btn.setEnabled(False)
+            self.ms_saved_login_btn.setText(f'{self._ms_login_progress_value}%')
+        except RuntimeError:
+            pass
+        self._ms_login_progress_timer.start()
+
+    def _tick_ms_login_progress(self):
+        if self._ms_login_progress_value >= 95:
+            return
+        if self._ms_login_progress_value < 40:
+            step = 3
+        elif self._ms_login_progress_value < 70:
+            step = 2
+        else:
+            step = 1
+        self._set_ms_login_progress(self._ms_login_progress_value + step)
+
+    def _finish_ms_login_progress(self, success=False):
+        self._ms_login_progress_timer.stop()
+        try:
+            self.ms_saved_login_btn.setEnabled(True)
+            if success:
+                self._ms_login_progress_value = 100
+                self.ms_saved_login_btn.setText('100%')
+                QTimer.singleShot(500, self._reset_ms_login_button_text)
+            else:
+                self._ms_login_progress_value = 0
+                self.ms_saved_login_btn.setText('登录')
+        except RuntimeError:
+            pass
+
+    def _reset_ms_login_button_text(self):
+        if self._ms_login_progress_value < 100:
+            return
+        self._ms_login_progress_value = 0
+        try:
+            self.ms_saved_login_btn.setText('登录')
+        except RuntimeError:
+            pass
 
     def _show_account_switcher(self):
         accounts = [
@@ -1625,20 +2218,89 @@ class AccountPage(QWidget):
     def _show_tp_inline_login(self):
         if self._tp_inline_worker is not None and self._tp_inline_worker.isRunning():
             return
-        login_type = self.config.get('login_type', 'offline')
-        if login_type == 'thirdparty':
-            self._refresh_tp_inline_accounts()
-            self.auth.logout()
-            self._tp_inline_switching = True
-            self._set_account_summary_visible(False)
-            self.account_changed.emit()
-        elif not self.tp_inline_wrap.isVisible():
-            self._refresh_tp_inline_accounts()
-        if not self.tp_inline_wrap.isVisible():
-            self.tp_inline_wrap.show()
+        # 切换第三方账号只把当前账户卡的内容换成登录表单，不退出当前账号，
+        # 也不清理已保存的正版/第三方凭据。
+        self._tp_inline_switching = True
+        self._refresh_tp_inline_accounts()
+        self.profile_group.setVisible(True)
+        self.tp_inline_wrap.setVisible(True)
+        self.tp_server_card.setVisible(True)
+        self.tp_actions_row.hide()
+        self._set_ms_actions_visible(False)
+        self.logout_btn.hide()
+        # 每次进入账号切换都从折叠状态开始，和 PCL 的服务器设置一致。
+        self._set_tp_server_expanded(False, animate=False)
         self.tp_inline_wrap.raise_()
         QTimer.singleShot(0, self._scroll_account_to_top)
         QTimer.singleShot(80, self._scroll_account_to_top)
+
+    def _toggle_tp_server(self):
+        # 用显式隐藏状态判断，父卡片隐藏时 isVisible() 会误判为收起。
+        self._set_tp_server_expanded(self.tp_advanced_panel.isHidden(), animate=True)
+
+    def _set_tp_server_expanded(self, expanded, animate=True):
+        panel = self.tp_advanced_panel
+        old_anim = getattr(self, '_tp_server_anim', None)
+        if old_anim is not None:
+            try:
+                old_anim.stop()
+            except RuntimeError:
+                pass
+            self._tp_server_anim = None
+        expanded = bool(expanded)
+        self.tp_server_chevron.set_expanded(expanded, animate=animate)
+        self.tp_server_chevron.setToolTip(
+            '收起服务器设置' if expanded else '展开服务器设置'
+        )
+        if not animate:
+            panel.setMaximumHeight(16777215)
+            panel.setVisible(expanded)
+            return
+        if expanded:
+            was_hidden = panel.isHidden()
+            panel.setVisible(True)
+            current = 0 if was_hidden else max(1, panel.height())
+            panel.setMaximumHeight(16777215)
+            layout = panel.layout()
+            if layout is not None:
+                layout.activate()
+            target = max(1, panel.sizeHint().height())
+            panel.setMaximumHeight(current)
+            animation = HeightAnimation(panel, self)
+            animation.setDuration(220)
+            animation.setStartValue(current)
+            animation.setEndValue(target)
+            animation.setEasingCurve(QEasingCurve.OutCubic)
+            def finish_expand():
+                if self._tp_server_anim is animation:
+                    panel.setMaximumHeight(16777215)
+                    self._tp_server_anim = None
+                try:
+                    animation.deleteLater()
+                except RuntimeError:
+                    pass
+            animation.finished.connect(finish_expand)
+        else:
+            if panel.isHidden():
+                panel.setVisible(True)
+            current = max(1, panel.height())
+            animation = HeightAnimation(panel, self)
+            animation.setDuration(180)
+            animation.setStartValue(current)
+            animation.setEndValue(0)
+            animation.setEasingCurve(QEasingCurve.InCubic)
+            def finish_collapse():
+                if self._tp_server_anim is animation:
+                    panel.setVisible(False)
+                    panel.setMaximumHeight(16777215)
+                    self._tp_server_anim = None
+                try:
+                    animation.deleteLater()
+                except RuntimeError:
+                    pass
+            animation.finished.connect(finish_collapse)
+        self._tp_server_anim = animation
+        animation.start()
 
     def _scroll_account_to_top(self):
         try:
@@ -1729,6 +2391,7 @@ class AccountPage(QWidget):
                     self.auth.set_thirdparty_saved_password(api, username, '', False)
                 self._tp_inline_switching = False
                 self.tp_inline_wrap.hide()
+                self._store_tp_server_settings_from_account(account)
                 self._load_thirdparty_fields()
                 self._refresh_account_info()
                 self.account_changed.emit()
@@ -1773,6 +2436,7 @@ class AccountPage(QWidget):
         self._tp_inline_pending_password = ''
         self._tp_inline_switching = False
         self.tp_inline_wrap.hide()
+        self._store_tp_server_settings_from_account(account)
         self._load_thirdparty_fields()
         self._refresh_account_info()
         self.account_changed.emit()
@@ -1978,17 +2642,66 @@ class AccountPage(QWidget):
         if login_type == 'microsoft':
             webbrowser.open('https://account.microsoft.com/security' if kind == 'password' else 'https://www.minecraft.net/en-us/profile')
 
+    def _thirdparty_display_name(self):
+        return self.tp_server_name_edit.text().strip() or '第三方登录'
+
+    def _update_thirdparty_tab_label(self):
+        btn = getattr(self, '_account_tab_buttons', {}).get('thirdparty')
+        if btn is None:
+            return
+        label = self._thirdparty_display_name()
+        try:
+            btn.setText(label)
+            btn.setToolTip(label)
+            account = self.config.get('thirdparty_account', {}) or {}
+            if (
+                self.config.get('login_type', 'offline') == 'thirdparty'
+                and not account.get('name')
+            ):
+                self.login_type_label.setText(label)
+        except RuntimeError:
+            pass
+
     def _load_thirdparty_fields(self):
         account = self.config.get('thirdparty_account', {}) or {}
-        api = account.get('api') or DEFAULT_LITTLESKIN_API
-        self.tp_api_edit.setText(api)
-        self.tp_register_edit.setText(account.get('register_url') or DEFAULT_LITTLESKIN_REGISTER)
-        self.tp_server_name_edit.setText(account.get('server_name') or 'LittleSkin 登录')
-        self.tp_auto_server_edit.setText(account.get('auto_server') or '')
-        is_little = 'littleskin.cn' in api.lower()
+        saved = self.config.get('thirdparty_server_settings', None)
+        have_saved = isinstance(saved, dict)
+        if have_saved:
+            api = str(saved.get('api') or '')
+            register = str(saved.get('register_url') or '')
+            server_name = str(saved.get('server_name') or '')
+            auto_server = str(saved.get('auto_server') or '')
+            method = str(saved.get('method') or '')
+        elif account:
+            api = str(account.get('api') or '')
+            register = str(account.get('register_url') or '')
+            server_name = str(account.get('server_name') or '')
+            auto_server = str(account.get('auto_server') or '')
+            method = ''
+        else:
+            # 首次使用不预填 LittleSkin 配置，让用户输入自己的服务器。
+            api = register = server_name = auto_server = ''
+            method = ''
+        for edit, value in (
+            (self.tp_api_edit, api),
+            (self.tp_register_edit, register),
+            (self.tp_server_name_edit, server_name),
+            (self.tp_auto_server_edit, auto_server),
+        ):
+            edit.blockSignals(True)
+            edit.setText(value)
+            edit.blockSignals(False)
+        if not method:
+            # 首次没有配置时保持 LittleSkin 登录方式，但服务器字段留空；
+            # 已填写非 LittleSkin 地址时自动识别为自定义服务器。
+            method = 'littleskin' if not api or 'littleskin.cn' in api.lower() else 'custom'
         self.tp_method_combo.blockSignals(True)
-        self.tp_method_combo.setCurrentIndex(0 if is_little else 1)
+        self.tp_method_combo.setCurrentIndex(0 if method == 'littleskin' else 1)
         self.tp_method_combo.blockSignals(False)
+        if account and not have_saved and any((api, register, server_name, auto_server)):
+            # 从旧版本升级时，把当前账号的服务器配置保存下来。
+            self._save_tp_server_settings()
+        self._update_thirdparty_tab_label()
         remember = bool(self.config.get('thirdparty_remember', False))
         self.tp_remember_check.setChecked(remember)
         if remember:
@@ -1998,6 +2711,34 @@ class AccountPage(QWidget):
             except Exception:
                 password = ''
             self.tp_pass_edit.setText(password)
+
+    def _save_tp_server_settings(self):
+        data = {
+            'method': self.tp_method_combo.currentData() or '',
+            'api': self.tp_api_edit.text().strip(),
+            'register_url': self.tp_register_edit.text().strip(),
+            'server_name': self.tp_server_name_edit.text().strip(),
+            'auto_server': self.tp_auto_server_edit.text().strip(),
+        }
+        self.config.set('thirdparty_server_settings', data, auto_save=False)
+        self.config.save()
+        self._update_thirdparty_tab_label()
+
+    def _store_tp_server_settings_from_account(self, account):
+        if not isinstance(account, dict):
+            return
+        api = str(account.get('api') or '').strip()
+        if not api:
+            return
+        data = {
+            'method': 'littleskin' if 'littleskin.cn' in api.lower() else 'custom',
+            'api': api,
+            'register_url': str(account.get('register_url') or '').strip(),
+            'server_name': str(account.get('server_name') or '').strip(),
+            'auto_server': str(account.get('auto_server') or '').strip(),
+        }
+        self.config.set('thirdparty_server_settings', data, auto_save=False)
+        self.config.save()
 
     def _toggle_tp_password(self, shown: bool):
         self.tp_pass_edit.setEchoMode(QLineEdit.Normal if shown else QLineEdit.Password)
@@ -2011,10 +2752,14 @@ class AccountPage(QWidget):
             self._set_littleskin_defaults()
 
     def _set_littleskin_defaults(self):
+        self.tp_method_combo.blockSignals(True)
+        self.tp_method_combo.setCurrentIndex(0)
+        self.tp_method_combo.blockSignals(False)
         self.tp_api_edit.setText(DEFAULT_LITTLESKIN_API)
         self.tp_register_edit.setText(DEFAULT_LITTLESKIN_REGISTER)
         self.tp_server_name_edit.setText('LittleSkin 登录')
         self.tp_status_label.setText('已填入 LittleSkin 默认配置')
+        self._save_tp_server_settings()
 
     def _open_tp_register(self):
         url = self.tp_register_edit.text().strip()
@@ -2062,6 +2807,7 @@ class AccountPage(QWidget):
         self._tp_pending_password = ''
         self._tp_inline_switching = False
         self.tp_inline_wrap.hide()
+        self._store_tp_server_settings_from_account(account)
         self._refresh_account_info()
         self.account_changed.emit()
         QMessageBox.information(self, '登录成功', f'已登录第三方账号：{account.get("name")}')
@@ -2078,24 +2824,28 @@ class AccountPage(QWidget):
         QMessageBox.critical(self, '第三方登录失败', message)
 
     def focus_offline_name(self):
-        try:
-            self._set_section_collapsed(self.offline_group, False)
-        except Exception:
-            pass
-        self.name_input.setFocus()
-        self.name_input.selectAll()
+        self.offline_name_combo.setFocus()
+        line_edit = self.offline_name_combo.lineEdit()
+        if line_edit is not None:
+            line_edit.selectAll()
         QTimer.singleShot(0, self._scroll_to_offline_input)
         QTimer.singleShot(80, self._scroll_to_offline_input)
 
     def _scroll_to_offline_input(self):
         try:
-            self.account_scroll.ensureWidgetVisible(self.offline_group, 20, 20)
+            self.account_scroll.ensureWidgetVisible(self.profile_group, 20, 20)
         except RuntimeError:
             pass
 
     def shutdown(self):
         try:
             self._remember_offline_name()
+        except Exception:
+            pass
+        try:
+            if self._tp_settings_save_timer.isActive():
+                self._tp_settings_save_timer.stop()
+                self._save_tp_server_settings()
         except Exception:
             pass
         self._close_ms_code_dialog()
@@ -2119,6 +2869,51 @@ class AccountPage(QWidget):
         for btn in self.skin_action_btn, self.edit_action_btn, self.switch_action_btn:
             btn.setVisible(visible)
 
+    def _ensure_valid_login_mode(self):
+        '''没有可用账号时默认回到离线模式，避免启动时停在空的正版/第三方页。'''
+
+        login_type = str(self.config.get('login_type', 'offline') or 'offline')
+        if login_type == 'microsoft':
+            account = self.config.get('microsoft_account') or {}
+            if not account.get('name'):
+                saved = self.auth.get_last_microsoft_account_entry()
+                if saved:
+                    self.config.set('microsoft_account', saved)
+                else:
+                    self.config.set('login_type', 'offline')
+                    self.config.save()
+        elif login_type == 'thirdparty':
+            account = self.config.get('thirdparty_account') or {}
+            if not account.get('name'):
+                saved = next(
+                    (
+                        entry for entry in self.auth.get_saved_accounts()
+                        if isinstance(entry, dict)
+                        and entry.get('type') == 'thirdparty'
+                    ),
+                    None,
+                )
+                if saved:
+                    self.config.set('thirdparty_account', saved)
+                else:
+                    self.config.set('login_type', 'offline')
+                    self.config.save()
+
+    def _show_empty_profile(self, label):
+        self.player_name_label.setText('未登录')
+        self.player_name_label.show()
+        self.login_type_label.setText(label)
+        self.login_type_label.show()
+        self.email_label.hide()
+        self.tp_actions_row.hide()
+        self.logout_btn.hide()
+        self._set_ms_actions_visible(False)
+        head = default_head_path()
+        if head.is_file():
+            self.avatar.set_head_file(str(head))
+        else:
+            self.avatar.set_image_url([])
+
     def _refresh_account_info(self):
         if getattr(self, '_tp_inline_switching', False):
             return
@@ -2137,6 +2932,10 @@ class AccountPage(QWidget):
                 self.name_input.setText(remembered_name)
             if login_type == 'microsoft':
                 account = self.config.get('microsoft_account', {})
+                if not (account and account.get('name')):
+                    self._show_empty_profile('正版账号')
+                    self.ms_status_label.setText('请登录正版账号')
+                    return
                 if account and account.get('name'):
                     self._set_ms_actions_visible(True)
                     name = account.get('name', 'Steve')
@@ -2157,6 +2956,9 @@ class AccountPage(QWidget):
                     return
             if login_type == 'thirdparty':
                 account = self.config.get('thirdparty_account', {}) or {}
+                if not account.get('name'):
+                    self._show_empty_profile(self._thirdparty_display_name())
+                    return
                 if account.get('name'):
                     name = account.get('name')
                     email = account.get('email') or ''
@@ -2215,9 +3017,9 @@ class AccountPage(QWidget):
                 self.login_type_label.setText('')
                 self.email_label.hide()
                 self.logout_btn.hide()
-                steve_head = Path(__file__).resolve().parent.parent / 'imgs' / 'steve_head.png'
-                if steve_head.is_file():
-                    self.avatar.set_head_file(str(steve_head))
+                head = default_head_path()
+                if head.is_file():
+                    self.avatar.set_head_file(str(head))
                 else:
                     self.avatar.set_image_url(['https://mc-heads.net/avatar/MHF_Steve/96', 'https://minotar.net/helm/MHF_Steve/96.png'])
             self.ms_status_label.setText('就绪，点击「正版登录」')
@@ -2264,6 +3066,9 @@ class AccountPage(QWidget):
             self.auth.save_offline_account(name)
         except Exception:
             pass
+        combo = getattr(self, 'offline_name_combo', None)
+        if combo is not None and combo.findText(name) < 0:
+            combo.addItem(name)
         self.player_name_label.setText(name)
         self.login_type_label.setText('离线登录')
         self._refresh_offline_avatar(name)
@@ -2292,11 +3097,10 @@ class AccountPage(QWidget):
         self.config.set('player_name', name)
         self.config.set('offline_last_name', name)
         self.config.set('offline_name_set', True)
-        self.config.set('microsoft_account', None)
-        self.config.set('thirdparty_account', None)
         self.auth.save_offline_account(name)
         self._tp_inline_switching = False
         self.tp_inline_wrap.hide()
+        self._refresh_offline_accounts()
         self._refresh_account_info()
         self.account_changed.emit()
         QMessageBox.information(self, '成功', f'已切换为离线登录：{name}')
@@ -2314,14 +3118,22 @@ class AccountPage(QWidget):
 
     @staticmethod
     def _combo_icon(pixmap):
-        '''QComboBox 的 QIcon 不会可靠处理 DPR；统一转成 42px 逻辑图，避免只显示左上角。'''
+        '''为 QComboBox 提供物理分辨率更高的图标，避免高 DPI 下头像发糊。'''
         if pixmap is None or pixmap.isNull():
             return QIcon()
-        size = 42
-        if pixmap.width() != size or pixmap.height() != size or pixmap.devicePixelRatio() != 1.0:
-            pixmap = pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        from ui.widgets.settings_widgets import device_pixel_ratio
+        dpr = max(1.0, float(device_pixel_ratio()))
+        size = max(42, int(round(42 * dpr)))
+        if (
+            pixmap.width() != size
+            or pixmap.height() != size
+            or pixmap.devicePixelRatio() != 1.0
+        ):
+            pixmap = pixmap.scaled(
+                size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation
+            )
             pixmap.setDevicePixelRatio(1.0)
-        return QIcon(AvatarLabel._rounded(pixmap, 10))
+        return QIcon(AvatarLabel._rounded(pixmap, int(round(10 * dpr))))
 
     def _ms_entry_icon(self, entry: dict):
         # 优先使用完整 64x64 皮肤裁头，确保第二层（帽子/外套）也参与合成。
@@ -2360,32 +3172,31 @@ class AccountPage(QWidget):
         previous_id = previous.get('id') if isinstance(previous, dict) else ''
         self.ms_accounts_combo.blockSignals(True)
         self.ms_accounts_combo.clear()
-        has_accounts = bool(accounts)
-        self.ms_accounts_combo.setVisible(has_accounts)
-        self.ms_saved_login_btn.setVisible(has_accounts)
-        if not has_accounts:
-            self.ms_accounts_combo.blockSignals(False)
-            return
+        self.ms_accounts_combo.setVisible(True)
+        self.ms_saved_login_btn.setVisible(True)
+        if self._ms_login_progress_value < 100:
+            self.ms_saved_login_btn.setText('登录')
+        self.ms_device_login_btn.hide()
         last_id = str(self.config.get('last_microsoft_account_id', '') or '')
         if not last_id:
             last_id = self._current_account_id()
         accounts.sort(key=(lambda entry: 0 if entry.get('id') == last_id else 1))
         for index, entry in enumerate(accounts):
-            self.ms_accounts_combo.addItem(self._ms_entry_icon(entry), entry.get('name') or '未命名', entry)
+            # 正版账号列表只显示名称，不再显示头像。
+            self.ms_accounts_combo.addItem(entry.get('name') or '未命名', entry)
             self.ms_accounts_combo.setItemData(index, entry.get('email') or entry.get('uuid') or '', Qt.ToolTipRole)
-            try:
-                from core.skin import microsoft_skin_cache_path
-                cached = microsoft_skin_cache_path(entry.get('uuid', ''), entry.get('name', ''))
-            except Exception:
-                cached = Path()
-            if not cached.is_file():
-                from core.skin import avatar_urls_for_account
-                self._ms_icon_loader.request(entry.get('id', ''), avatar_urls_for_account(entry))
-        select_index = 0
+        self.ms_accounts_combo.addItem('添加新账号', {'type': 'new'})
+        select_index = self.ms_accounts_combo.count() - 1
         if previous_id:
             for index in range(self.ms_accounts_combo.count()):
                 entry = self.ms_accounts_combo.itemData(index) or {}
                 if isinstance(entry, dict) and entry.get('id') == previous_id:
+                    select_index = index
+                    break
+        elif accounts:
+            for index in range(self.ms_accounts_combo.count()):
+                entry = self.ms_accounts_combo.itemData(index) or {}
+                if isinstance(entry, dict) and entry.get('id') == last_id:
                     select_index = index
                     break
         self.ms_accounts_combo.setCurrentIndex(select_index)
@@ -2407,10 +3218,13 @@ class AccountPage(QWidget):
         if self._ms_saved_login_worker is not None and self._ms_saved_login_worker.isRunning():
             return
         entry = self.ms_accounts_combo.currentData() or {}
-        if not entry:
+        if not entry or entry.get('type') == 'new':
+            self._start_ms_device_flow()
             return
+        self._begin_ms_login_progress(3)
         self.ms_saved_login_btn.setEnabled(False)
         self.ms_device_login_btn.setEnabled(False)
+        self.ms_status_label.show()
         self.ms_status_label.setText(f'正在登录正版账号：{entry.get("name", "")}...')
         self.ms_status_label.setStyleSheet('color: rgba(255,255,255,0.6); font-size:13px;')
         worker = SavedMicrosoftLoginWorker(entry)
@@ -2424,7 +3238,9 @@ class AccountPage(QWidget):
     def _on_ms_saved_login_done(self, worker):
         if self._ms_saved_login_worker is worker:
             self._ms_saved_login_worker = None
-        self.ms_saved_login_btn.setEnabled(True)
+        # 若紧接着进入设备码登录，保持按钮置灰并继续显示百分比。
+        if not self._ms_login_progress_timer.isActive():
+            self.ms_saved_login_btn.setEnabled(True)
         self.ms_device_login_btn.setEnabled(True)
 
     def _on_ms_saved_login_success(self, account: dict):
@@ -2432,7 +3248,9 @@ class AccountPage(QWidget):
         self._refresh_microsoft_profile_async(user_initiated=True)
 
     def _on_ms_saved_login_error(self, message: str, kind: str='general'):
+        self._finish_ms_login_progress(False)
         message = friendly_auth_error(message, kind)
+        self.ms_status_label.show()
         self.ms_status_label.setText(message)
         self.ms_status_label.setStyleSheet('color:#ff7777; font-size:13px;')
         self._refresh_ms_accounts_list()
@@ -2597,8 +3415,10 @@ class AccountPage(QWidget):
     def _start_ms_device_flow(self):
         if self._ms_device_worker and self._ms_device_worker.isRunning():
             return
+        self._begin_ms_login_progress(5)
         self.ms_device_login_btn.setEnabled(False)
         self.ms_device_code_label.hide()
+        self.ms_status_label.show()
         self.ms_status_label.setText('正在获取正版登录代码...')
         self.ms_status_label.setStyleSheet('color: rgba(255,255,255,0.6); font-size:13px;')
         worker = MicrosoftDeviceLoginWorker()
@@ -2639,6 +3459,7 @@ class AccountPage(QWidget):
         self._ms_device_uri = uri
         self.ms_device_code_label.setText(user_code)
         self.ms_device_code_label.show()
+        self._set_ms_login_progress(25)
         QApplication.clipboard().setText(user_code)
         self.ms_status_label.setText('登录代码已复制，请在弹窗中点击「确定」或「复制」打开网页')
         if self._ms_code_dialog is not None:
@@ -2662,6 +3483,12 @@ class AccountPage(QWidget):
 
     def _on_ms_device_status(self, text):
         self.ms_status_label.setText(text)
+        if '获取' in text:
+            self._set_ms_login_progress(8)
+        elif '浏览器' in text or '代码' in text:
+            self._set_ms_login_progress(25)
+        elif '验证' in text or 'Xbox' in text:
+            self._set_ms_login_progress(82)
 
     def _on_ms_device_success(self, account):
         self.ms_device_login_btn.setEnabled(True)
@@ -2672,6 +3499,7 @@ class AccountPage(QWidget):
         self._refresh_microsoft_profile_async(user_initiated=False)
 
     def _on_ms_device_error(self, message, kind='general'):
+        self._finish_ms_login_progress(False)
         message = friendly_auth_error(message, kind)
         self.ms_device_login_btn.setEnabled(True)
         self.ms_saved_login_btn.setEnabled(True)
@@ -2682,6 +3510,7 @@ class AccountPage(QWidget):
         _show_microsoft_login_notice(self, message, kind)
 
     def _on_ms_login_success(self, account, direct=False, notify=True):
+        self._finish_ms_login_progress(True)
         if direct:
             self.ms_status_label.setText(f'已使用保存的登录凭据直接登录：{account.get("name")}')
         else:
@@ -2691,6 +3520,7 @@ class AccountPage(QWidget):
         self.ms_saved_login_btn.setEnabled(True)
         self._close_ms_code_dialog()
         self._tp_inline_switching = False
+        self._ms_switching = False
         self._refresh_account_info()
         self._refresh_ms_accounts_list()
         self.account_changed.emit()
@@ -2698,6 +3528,7 @@ class AccountPage(QWidget):
             QMessageBox.information(self, '登录成功', f'欢迎，{account.get("name", "玩家")}！')
 
     def _on_logout(self):
+        self._finish_ms_login_progress(False)
         self._close_ms_code_dialog()
         # 不等待网络线程，避免退出登录卡 UI；旧线程的信号由 worker done 回调丢弃
         self._thirdparty_worker = None
@@ -2707,6 +3538,7 @@ class AccountPage(QWidget):
         self.tp_inline_login_btn.setEnabled(True)
         self.tp_inline_login_btn.setText('登录')
         self._tp_inline_switching = False
+        self._ms_switching = False
         self.tp_inline_wrap.hide()
         self.auth.logout()
         self.name_input.clear()

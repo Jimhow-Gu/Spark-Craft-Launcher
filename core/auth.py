@@ -542,7 +542,6 @@ class AuthManager:
             raise AuthError('第三方登录校验失败：服务器返回的登录凭据无效，请重新输入密码。', 'expired')
         self.config.set('login_type', 'thirdparty')
         self.config.set('thirdparty_account', account)
-        self.config.set('microsoft_account', None)
         self.config.save()
         self.save_thirdparty_account(account)
         self.config.save()
@@ -676,8 +675,35 @@ class AuthManager:
     def _save_account_entry(self, entry: dict):
         accounts = self.get_saved_accounts()
         key = entry.get('id')
+        kind = entry.get('type')
+        uuid = str(entry.get('uuid') or '')
+        name = str(entry.get('name') or '')
+        api = str(entry.get('api') or '').rstrip('/')
         for index, item in enumerate(accounts):
-            if item.get('id') == key:
+            if not isinstance(item, dict):
+                continue
+            same = item.get('id') == key
+            if not same and item.get('type') == kind:
+                item_uuid = str(item.get('uuid') or '')
+                item_api = str(item.get('api') or '').rstrip('/')
+                if kind == 'microsoft':
+                    same = bool(uuid and item_uuid == uuid)
+                elif kind == 'thirdparty':
+                    same = bool(uuid and item_uuid == uuid and item_api == api)
+                elif kind == 'offline':
+                    same = bool(name and item.get('name') == name)
+            if same:
+                if kind == 'microsoft':
+                    for field in (
+                        'refresh_token', 'email', 'avatar_url',
+                        'skin_url', 'skin_variant', 'skin_updated_at',
+                    ):
+                        if not entry.get(field) and item.get(field):
+                            entry[field] = item.get(field)
+                elif kind == 'thirdparty':
+                    for field in ('client_token', 'server_name', 'register_url'):
+                        if not entry.get(field) and item.get(field):
+                            entry[field] = item.get(field)
                 accounts[index] = entry
                 break
         else:
@@ -745,7 +771,6 @@ class AuthManager:
         info = self._refresh_microsoft_token(refresh_token)
         self.config.set('login_type', 'microsoft')
         self.config.set('microsoft_account', info)
-        self.config.set('thirdparty_account', None)
         self.config.save()
         self.save_microsoft_account(info)
         return info
@@ -834,7 +859,6 @@ class AuthManager:
                 info = self._refresh_microsoft_token(refresh_token)
             self.config.set('login_type', 'microsoft')
             self.config.set('microsoft_account', info)
-            self.config.set('thirdparty_account', None)
             self.config.set('last_microsoft_account_id', entry.get('id', ''), auto_save=False)
             self.config.save()
             self.save_microsoft_account(info)
@@ -852,7 +876,6 @@ class AuthManager:
             account = {'api': selected.get('api', ''), 'access_token': selected.get('access_token', ''), 'client_token': selected.get('client_token', ''), 'name': selected.get('name', ''), 'uuid': selected.get('uuid', ''), 'email': selected.get('email', ''), 'avatar_url': selected.get('avatar_url', ''), 'server_name': selected.get('server_name', ''), 'register_url': selected.get('register_url', ''), 'auto_server': selected.get('auto_server', ''), 'issued_at': selected.get('issued_at', 0), 'last_checked_at': selected.get('last_checked_at', 0)}
             self.config.set('login_type', 'thirdparty')
             self.config.set('thirdparty_account', account)
-            self.config.set('microsoft_account', None)
             self.config.save()
             self.save_thirdparty_account(account)
             self.config.save()
@@ -861,8 +884,6 @@ class AuthManager:
             self.config.set('login_type', 'offline')
             self.config.set('player_name', entry.get('name', ''))
             self.config.set('offline_name_set', True)
-            self.config.set('microsoft_account', None)
-            self.config.set('thirdparty_account', None)
             self.config.save()
             return self._offline_options()
         raise AuthError('未知账号类型')
