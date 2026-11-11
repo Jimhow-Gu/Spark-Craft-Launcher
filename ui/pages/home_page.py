@@ -306,6 +306,10 @@ class LaunchPrepareWorker(QThread):
             if command:
                 self.progress.emit(100)
                 self.success.emit(command, self.version_id)
+            else:
+                message = str(err or '启动命令生成失败，请检查 Java 和账号设置')
+                logger.error(f'启动准备失败（{self.version_id}）：{message}')
+                self.error.emit(message)
             return
         except RepairCancelled:
             if not self._cancelled:
@@ -1273,6 +1277,7 @@ class HomePage(QWidget):
         if not self._prepare_done:
             cancelled = bool(getattr(worker, '_cancelled', False))
             if not cancelled:
+                logger.error(f'启动准备线程未返回结果：version={getattr(worker, "version_id", "")}')
                 self.status_label.setText('启动准备意外中断，请重试')
                 self._restore_action_button()
                 from ui.widgets.toast import show_toast

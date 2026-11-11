@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 import webbrowser
@@ -109,9 +110,24 @@ def _is_transient_login_error(exc: Exception) -> bool:
     return any((marker in text for marker in ('expecting value', 'expecting property name', 'jsondecodeerror', 'char 0', 'unexpected end of json', 'not valid json', 'timed out', 'timeout', 'remote end closed', 'connection reset', 'connection aborted', 'temporarily unavailable', 'eof occurred', 'max retries exceeded', 'failed to establish')))
 
 class AuthManager:
+    # 微软刷新令牌是一次性的；多个线程同时刷新会让后到的请求拿到
+    # invalid_grant。启动器启动账号页和启动游戏时会并发刷新，必须串行化。
+    _microsoft_refresh_lock = threading.RLock()
+
     def __init__(self):
         self.config = ConfigManager()
         self.last_error = ''
+
+    @staticmethod
+    def _microsoft_token_fresh(account: dict, skew: float=120) -> bool:
+        account = account or {}
+        if not account.get('access_token'):
+            return False
+        try:
+            expires_at = float(account.get('expires_at') or 0)
+        except (TypeError, ValueError):
+            return False
+        return expires_at > time.time() + max(0.0, float(skew))
 
     @property
     def CLIENT_ID(self) -> str:
@@ -168,16 +184,19 @@ class AuthManager:
                 raise AuthError(friendly_auth_error(exc, kind), kind) from exc
         raise AuthError(friendly_auth_error(last_exc, classify_auth_error(last_exc)), 'general')
 
-    def refresh_microsoft_login(self) -> Optional[dict]:
-        account = self.config.get('microsoft_account') or {}
-        refresh_token = account.get('refresh_token')
-        if not refresh_token:
-            return
-        info = self._refresh_microsoft_token(refresh_token)
-        self.config.set('microsoft_account', info)
-        self.config.save()
-        self.save_microsoft_account(info)
-        return info
+    def refresh_microsoft_login(self, force: bool=False) -> Optional[dict]:
+        with self._microsoft_refresh_lock:
+            account = self.config.get('microsoft_account') or {}
+            if not force and self._microsoft_token_fresh(account):
+                return account
+            refresh_token = account.get('refresh_token')
+            if not refresh_token:
+                return account or None
+            info = self._refresh_microsoft_token(refresh_token)
+            self.config.set('microsoft_account', info)
+            self.config.save()
+            self.save_microsoft_account(info)
+            return info
 
     def _minecraft_authorized_request(self, method: str, url: str, payload: Optional[dict]=None) -> requests.Response:
         '''请求 Minecraft 服务 API，遇到 401 自动刷新一次登录令牌。'''
@@ -198,12 +217,22 @@ class AuthManager:
                     continue
                 raise AuthError(f'连接 Minecraft 服务失败：{exc}') from exc
             if resp.status_code == 401 and attempt == 0:
+                new_token = ''
                 try:
                     refreshed = self.refresh_microsoft_login()
+                    new_token = str((refreshed or {}).get('access_token') or '')
                 except Exception:
-                    refreshed = None
-                if refreshed:
-                    headers['Authorization'] = f'Bearer {refreshed.get("access_token", "")}'
+                    new_token = ''
+                if not new_token or new_token == token:
+                    # 本地记录看起来未过期，但服务端已拒绝；强制刷新一次。
+                    try:
+                        refreshed = self.refresh_microsoft_login(force=True)
+                        new_token = str((refreshed or {}).get('access_token') or '')
+                    except Exception:
+                        new_token = ''
+                if new_token and new_token != token:
+                    token = new_token
+                    headers['Authorization'] = f'Bearer {token}'
                     continue
             return resp
         raise AuthError(f'连接 Minecraft 服务失败：{last_exc}')
@@ -764,16 +793,26 @@ class AuthManager:
     def try_silent_microsoft_login(self) -> Optional[dict]:
         '''使用已保存的刷新令牌直接恢复微软登录，失败时抛出分类后的 AuthError。'''
 
-        entry = self.get_last_microsoft_account_entry()
-        refresh_token = str(entry.get('refresh_token') or '').strip()
-        if not refresh_token:
-            return
-        info = self._refresh_microsoft_token(refresh_token)
-        self.config.set('login_type', 'microsoft')
-        self.config.set('microsoft_account', info)
-        self.config.save()
-        self.save_microsoft_account(info)
-        return info
+        with self._microsoft_refresh_lock:
+            entry = self.get_last_microsoft_account_entry()
+            current = self.config.get('microsoft_account') or {}
+            same_account = bool(
+                entry and current
+                and str(entry.get('uuid') or entry.get('name') or '')
+                == str(current.get('uuid') or current.get('name') or '')
+            )
+            if same_account and self._microsoft_token_fresh(current):
+                info = current
+            else:
+                refresh_token = str(entry.get('refresh_token') or '').strip()
+                if not refresh_token:
+                    return
+                info = self._refresh_microsoft_token(refresh_token)
+            self.config.set('login_type', 'microsoft')
+            self.config.set('microsoft_account', info)
+            self.config.save()
+            self.save_microsoft_account(info)
+            return info
 
     def save_microsoft_account(self, info: dict):
         entry = {'id': f'microsoft:{info.get("uuid") or info.get("name")}', 'type': 'microsoft', 'name': info.get('name', ''), 'uuid': info.get('uuid', ''), 'email': info.get('email', ''), 'avatar_url': info.get('avatar_url', ''), 'access_token': info.get('access_token', ''), 'refresh_token': info.get('refresh_token', ''), 'expires_at': info.get('expires_at', 0), 'skin_url': info.get('skin_url', ''), 'skin_variant': info.get('skin_variant', ''), 'skin_updated_at': info.get('skin_updated_at', 0)}
@@ -853,16 +892,33 @@ class AuthManager:
     def switch_to_account(self, entry: dict):
         kind = entry.get('type')
         if kind == 'microsoft':
-            info = {'name': entry.get('name', ''), 'uuid': entry.get('uuid', ''), 'access_token': entry.get('access_token', ''), 'refresh_token': entry.get('refresh_token', ''), 'expires_at': entry.get('expires_at', 0), 'avatar_url': entry.get('avatar_url', '')}
-            refresh_token = str(entry.get('refresh_token') or '').strip()
-            if refresh_token:
-                info = self._refresh_microsoft_token(refresh_token)
-            self.config.set('login_type', 'microsoft')
-            self.config.set('microsoft_account', info)
-            self.config.set('last_microsoft_account_id', entry.get('id', ''), auto_save=False)
-            self.config.save()
-            self.save_microsoft_account(info)
-            return info
+            with self._microsoft_refresh_lock:
+                saved_entry = entry
+                entry_id = str(entry.get('id') or '')
+                if entry_id:
+                    for item in self.get_saved_accounts():
+                        if isinstance(item, dict) and item.get('id') == entry_id:
+                            saved_entry = item
+                            break
+                current = self.config.get('microsoft_account') or {}
+                same_account = bool(
+                    current
+                    and str(saved_entry.get('uuid') or saved_entry.get('name') or '')
+                    == str(current.get('uuid') or current.get('name') or '')
+                )
+                if same_account and self._microsoft_token_fresh(current):
+                    info = current
+                else:
+                    info = {'name': saved_entry.get('name', ''), 'uuid': saved_entry.get('uuid', ''), 'access_token': saved_entry.get('access_token', ''), 'refresh_token': saved_entry.get('refresh_token', ''), 'expires_at': saved_entry.get('expires_at', 0), 'avatar_url': saved_entry.get('avatar_url', '')}
+                    refresh_token = str(saved_entry.get('refresh_token') or '').strip()
+                    if refresh_token:
+                        info = self._refresh_microsoft_token(refresh_token)
+                self.config.set('login_type', 'microsoft')
+                self.config.set('microsoft_account', info)
+                self.config.set('last_microsoft_account_id', saved_entry.get('id', ''), auto_save=False)
+                self.config.save()
+                self.save_microsoft_account(info)
+                return info
         if kind == 'thirdparty':
             # 切换前校验令牌，失效时先尝试用 clientToken 刷新；这样没有
             # 勾选“记住密码”的账号也不会因为旧令牌失效而登录失败。
