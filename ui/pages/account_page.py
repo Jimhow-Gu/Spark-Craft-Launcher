@@ -350,13 +350,8 @@ class AvatarLabel(QLabel):
             self.setStyleSheet('border-radius: 0px; background: transparent;')
             return
         if self._showing_head:
-            # 所有尺寸共用同一层半透明底，侧栏和账户卡不会再一个带边框、
-            # 一个像直接贴在卡片上。
-            tint = '255,255,255' if not self._light else '18,24,24'
-            self.setStyleSheet(
-                f'border-radius: {self._radius}px;'
-                f' background: rgba({tint},0.045);'
-            )
+            # 头像本身已经有阴影，不再额外绘制淡色圆角边框。
+            self.setStyleSheet('border-radius: 0px; background: transparent;')
             return
         self.setStyleSheet(
             f'border-radius: {self._radius}px; background: {self._placeholder_color()};'
