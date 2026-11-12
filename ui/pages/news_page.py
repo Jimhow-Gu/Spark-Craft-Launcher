@@ -140,8 +140,9 @@ def parse_news_page(text):
 
 
 class NewsCard(RoundedFrame):
-    def __init__(self, data, page, *, expanded=True, parent=None):
+    def __init__(self, data, page, *, expanded=True, is_latest=False, parent=None):
         super().__init__(parent, radius=12)
+        self._is_latest = bool(is_latest)
         self.setObjectName('NewsCard')
         self.setProperty('_theme_ignore', True)
         layout = QVBoxLayout(self)
@@ -213,13 +214,14 @@ class NewsCard(RoundedFrame):
         if data.get('translation_pending'):
             body_layout.addWidget(TranslationPending())
 
+        # 最新文章直接完整展开，不再提供详情按钮；旧版本保留详情入口。
         self._detail_btn = None
-        if data.get('detail_url'):
+        if data.get('detail_url') and not self._is_latest:
             detail_btn = QPushButton('查看版本详情')
             detail_btn.setCursor(Qt.PointingHandCursor)
             detail_btn.setIcon(QIcon(str(Path(__file__).resolve().parent.parent / 'imgs' / 'Release.png')))
             detail_btn.setIconSize(QSize(20, 20))
-            detail_btn.setToolTip('在主页内查看完整版本更新日志')
+            detail_btn.setToolTip('查看完整版本更新日志')
             detail_btn.setMinimumHeight(36)
             detail_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             detail_btn.setProperty('_theme_ignore', True)
@@ -912,7 +914,10 @@ class NewsPage(QWidget):
         versions = [item for item in items if item.get('kind') == 'version']
         for index, data in enumerate(versions):
             self.cards_layout.addWidget(
-                NewsCard(data, self, expanded=(index == 0))
+                NewsCard(
+                    data, self, expanded=(index == 0),
+                    is_latest=(index == 0),
+                )
             )
             if index == 0 and len(versions) > 1:
                 self.cards_layout.addWidget(NewsSection('历 史 版 本'))

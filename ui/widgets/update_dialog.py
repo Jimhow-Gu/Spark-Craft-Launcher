@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QTextBrowser, QVBoxLayout)
+from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QTextBrowser, QVBoxLayout, QWidget)
 
 from core.update import UpdateDownloadWorker
 from core.paths import scl_dir
@@ -32,18 +32,23 @@ class UpdateDialog(QDialog):
             'QPushButton:hover { background:#4a4d57; }'
             'QPushButton:disabled { background:#30333b; color:#858a94; }'
         )
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 18)
-        layout.setSpacing(12)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        top = QWidget()
+        top_layout = QVBoxLayout(top)
+        top_layout.setContentsMargins(24, 20, 24, 0)
+        top_layout.setSpacing(12)
         title = QLabel(
             '修复了一些bug' if self.update_kind == 'dll'
             else f'发现新版本 {self.info.get("tag") or self.info.get("version") or ""}'
         )
         title.setStyleSheet('font-size:17px; font-weight:900;')
-        layout.addWidget(title)
+        top_layout.addWidget(title)
         name = QLabel(str(self.info.get('name') or ''))
         name.setStyleSheet('color:rgba(255,255,255,0.72); font-size:13px;')
-        layout.addWidget(name)
+        top_layout.addWidget(name)
+        outer.addWidget(top)
         notes = str(self.info.get('body') or '').strip()
         notes = re.sub(r'(?im)^\s*(?:DLL[\s_-]*BUILD|DLL版号)\s*[:=：].*$', '', notes).strip()
         if notes:
@@ -59,25 +64,34 @@ class UpdateDialog(QDialog):
                 'QTextBrowser { background:transparent; border:none;'
                 ' color:rgba(255,255,255,0.58); font-size:12px; }'
             )
-            layout.addWidget(body)
+            notes_row = QHBoxLayout()
+            # 右侧不留边距，让更新说明的滚动条贴到窗口最右侧。
+            notes_row.setContentsMargins(24, 12, 0, 0)
+            notes_row.setSpacing(0)
+            notes_row.addWidget(body)
+            outer.addLayout(notes_row)
+        bottom = QWidget()
+        bottom_layout = QVBoxLayout(bottom)
+        bottom_layout.setContentsMargins(24, 12, 24, 18)
+        bottom_layout.setSpacing(12)
         self.status_label = QLabel(
             '修复了一些bug，是否下载并安装？' if self.update_kind == 'dll'
             else '是否下载并安装此更新？'
         )
         self.status_label.setWordWrap(True)
         self.status_label.setStyleSheet('color:rgba(255,255,255,0.62); font-size:12px;')
-        layout.addWidget(self.status_label)
+        bottom_layout.addWidget(self.status_label)
         self.progress = RoundedProgressBar()
         self.progress.setRange(0, 1000)
         self.progress.setTextVisible(False)
         self.progress.setFixedHeight(12)
         self.progress.hide()
-        layout.addWidget(self.progress)
+        bottom_layout.addWidget(self.progress)
         self.error_label = QLabel('')
         self.error_label.setWordWrap(True)
         self.error_label.setStyleSheet('color:#ff8a8a; font-size:12px;')
         self.error_label.hide()
-        layout.addWidget(self.error_label)
+        bottom_layout.addWidget(self.error_label)
         row = QHBoxLayout()
         row.addStretch(1)
         self.later_btn = QPushButton('稍后更新')
@@ -87,7 +101,8 @@ class UpdateDialog(QDialog):
         self.download_btn.clicked.connect(self._on_primary_clicked)
         row.addWidget(self.later_btn)
         row.addWidget(self.download_btn)
-        layout.addLayout(row)
+        bottom_layout.addLayout(row)
+        outer.addWidget(bottom)
         cached = self._find_cached_asset()
         if cached:
             self._set_ready(cached)
