@@ -440,14 +440,17 @@ class SkinManager:
             model = 'slim' if chosen == 'alex' else 'classic'
             skin_path = self._default_skin(model)
         elif mode == 'premium':
-            name = (settings.get('premium_name') or player_name or '').strip()
+            name = (settings.get('premium_name') or '').strip()
             if not name:
-                return
-            safe = re.sub('[^A-Za-z0-9_\\-]', '_', name)[:32]
-            skin_path = self._download_skin_candidates([PREMIUM_URL.format(name=name), MINOTAR_SKIN_URL.format(name=name)], f'premium_{safe}.png')
-            if skin_path is None:
-                skin_path = self._default_skin('classic')
-            model = 'slim' if model == 'slim' else 'classic'
+                # 正版皮肤名必须由用户明确设置，不能跟着离线昵称变化。
+                skin_path = self._default_skin('slim' if model == 'slim' else 'classic')
+                model = 'slim' if model == 'slim' else 'classic'
+            else:
+                safe = re.sub('[^A-Za-z0-9_\-]', '_', name)[:32]
+                skin_path = self._download_skin_candidates([PREMIUM_URL.format(name=name), MINOTAR_SKIN_URL.format(name=name)], f'premium_{safe}.png')
+                if skin_path is None:
+                    skin_path = self._default_skin('classic')
+                model = 'slim' if model == 'slim' else 'classic'
         elif mode == 'custom':
             path = self._resolve_custom_path(settings.get('custom_path', ''))
             if not path.is_file():
@@ -483,7 +486,11 @@ class SkinManager:
         if mode == 'premium':
             name = (settings.get('premium_name') or '').strip()
             if not name:
-                return
+                # 没有指定正版名时实际使用默认皮肤，预览也必须一致，
+                # 不能退回按离线昵称查询在线皮肤。
+                return self._default_skin(
+                    'slim' if settings.get('model') == 'slim' else 'classic'
+                )
             safe = re.sub('[^A-Za-z0-9_\\-]', '_', name)[:32]
             cached = self.dir / f'premium_{safe}.png'
             if cached.exists() and cached.stat().st_size > 64:
@@ -509,7 +516,10 @@ class SkinManager:
         if mode == 'premium':
             name = (settings.get('premium_name') or '').strip()
             if not name:
-                return
+                # 与 prepare_offline_skin 保持一致：空名字使用默认皮肤。
+                return self._default_skin(
+                    'slim' if settings.get('model') == 'slim' else 'classic'
+                )
             safe = re.sub('[^A-Za-z0-9_\\-]', '_', name)[:32]
             path = self.dir / f'premium_{safe}.png'
             if path.is_file():

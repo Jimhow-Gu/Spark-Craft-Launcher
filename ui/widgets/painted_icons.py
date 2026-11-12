@@ -197,6 +197,23 @@ def _draw_switch(painter, color, stroke):
     painter.drawLine(QPointF(5.0, 15.4), QPointF(8.6, 11.8))
     painter.drawLine(QPointF(5.0, 15.4), QPointF(8.6, 19.0))
 
+def _draw_save(painter, color, stroke):
+    painter.setPen(_pen(color, stroke))
+    painter.setBrush(Qt.NoBrush)
+    painter.drawRoundedRect(QRectF(5.5, 3.5, 13, 17), 1.5, 1.5)
+    painter.drawLine(QPointF(12, 8), QPointF(12, 15))
+    painter.drawLine(QPointF(9, 12), QPointF(12, 15))
+    painter.drawLine(QPointF(15, 12), QPointF(12, 15))
+
+
+def _draw_refresh(painter, color, stroke):
+    painter.setPen(_pen(color, stroke))
+    painter.setBrush(Qt.NoBrush)
+    painter.drawArc(QRectF(4, 4, 16, 16), 38 * 16, 292 * 16)
+    painter.drawLine(QPointF(16.8, 4.4), QPointF(20.0, 4.4))
+    painter.drawLine(QPointF(16.8, 4.4), QPointF(16.8, 7.6))
+
+
 def _draw_cape(painter, color, stroke):
     painter.setPen(Qt.NoPen)
     painter.setBrush(QColor(color))
@@ -443,6 +460,10 @@ def painted_icon(name, size=20, color='#e6edf3', stroke=1.8, light_safe=False):
             _draw_export(painter, color, stroke)
         elif name == 'grid':
             _draw_grid(painter, color, stroke)
+        elif name == 'save':
+            _draw_save(painter, color, stroke)
+        elif name == 'refresh':
+            _draw_refresh(painter, color, stroke)
     finally:
         painter.end()
     icon = QIcon(pixmap)

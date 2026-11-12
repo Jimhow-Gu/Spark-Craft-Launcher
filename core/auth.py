@@ -455,33 +455,54 @@ class AuthManager:
                     raise AuthError('登录已取消')
                 _time.sleep(min(0.25, max(0.0, end - _time.time())))
 
-        try:
-            resp = requests.post(MICROSOFT_TOKEN_URL, data={'grant_type': 'urn:ietf:params:oauth:grant-type:device_code', 'client_id': self.CLIENT_ID, 'device_code': device_code}, headers={'User-Agent': 'PMGL-Launcher/1.1'}, timeout=20)
-            data = resp.json()
-        except Exception as exc:
-            if is_network_error(exc) and not network_available():
-                raise AuthError('因为网络问题导致验证登录失败！', 'network') from exc
-            last_error = str(exc)
-            _sleep(interval)
-            # WARNING: continue outside loop (unrecovered structure)
-        else:
+        while _time.time() < deadline:
+            if cancel_cb and cancel_cb():
+                raise AuthError('登录已取消')
+            try:
+                resp = requests.post(
+                    MICROSOFT_TOKEN_URL,
+                    data={
+                        'grant_type': 'urn:ietf:params:oauth:grant-type:device_code',
+                        'client_id': self.CLIENT_ID,
+                        'device_code': device_code,
+                    },
+                    headers={'User-Agent': 'PMGL-Launcher/1.1'},
+                    timeout=20,
+                )
+                data = resp.json()
+            except Exception as exc:
+                if is_network_error(exc) and not network_available():
+                    raise AuthError('因为网络问题导致验证登录失败！', 'network') from exc
+                last_error = str(exc)
+                if status_cb:
+                    status_cb('网络异常，正在重试微软登录...')
+                _sleep(interval)
+                continue
             if isinstance(data, dict) and data.get('access_token'):
                 return data
             error = (data or {}).get('error') if isinstance(data, dict) else ''
             if error == 'authorization_pending':
+                if status_cb:
+                    status_cb('等待微软账号授权...')
                 _sleep(interval)
-                # WARNING: continue outside loop (unrecovered structure)
+                continue
             if error == 'slow_down':
                 interval += 5
+                if status_cb:
+                    status_cb('等待微软账号授权...')
                 _sleep(interval)
-                # WARNING: continue outside loop (unrecovered structure)
+                continue
+            if error == 'expired_token':
+                raise AuthError('微软设备码已过期，请重新登录')
+            if error == 'authorization_declined':
+                raise AuthError('微软登录已取消授权')
+            if error == 'bad_verification_code':
+                raise AuthError('微软设备码无效，请重新登录')
             if error:
                 desc = data.get('error_description') or error
                 raise AuthError(f'微软登录失败：{desc}')
+            last_error = '微软返回了未知响应'
             _sleep(interval)
-            while _time.time() < deadline:
-                if cancel_cb and cancel_cb():
-                    raise AuthError('登录已取消')
         if not network_available():
             raise AuthError('因为网络问题导致验证登录失败！', 'network')
         raise AuthError(f'微软登录超时，请重试。{last_error}')

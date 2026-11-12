@@ -4,13 +4,15 @@
 '''
 
 import shutil
+import time
 import webbrowser
 from pathlib import Path
 from urllib.parse import urlparse
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QScrollArea, QMessageBox, QComboBox, QFileDialog, QApplication, QMenu, QDialog, QListWidget, QListWidgetItem, QCheckBox, QToolButton, QListView, QSizePolicy, QStylePainter, QStyleOptionComboBox, QStyle, QButtonGroup, QGraphicsOpacityEffect, QGridLayout)
 from ui.widgets.themed_checkbox import ThemedCheckBox
 from ui.widgets.login_icons import login_icon
-from PySide6.QtCore import (Qt, Signal, QUrl, QThread, QTimer, QSize, QObject, QEasingCurve, QEvent, QPropertyAnimation, QRectF)
+from ui.widgets.mc_head import render_head
+from PySide6.QtCore import (Qt, Signal, QUrl, QThread, QTimer, QSize, QObject, QEasingCurve, QEvent, QPropertyAnimation, QRectF, QPoint, Property)
 from PySide6.QtGui import (QFont, QPixmap, QPainter, QColor, QPainterPath, QImage, QAction, QIcon, QPalette, QPen)
 from PySide6.QtNetwork import (QNetworkAccessManager, QNetworkReply, QNetworkRequest)
 from core.app_font import ui_font
@@ -63,8 +65,89 @@ def default_head_path():
     return _DEFAULT_HEAD_PATH
 
 
+def _stop_combo_list_animation(combo):
+    anim = getattr(combo, '_list_anim', None)
+    combo._list_anim = None
+    combo._list_effect = None
+    if anim is not None:
+        try:
+            anim.stop()
+            anim.deleteLater()
+        except RuntimeError:
+            pass
+    view = combo.view()
+    if view is not None:
+        try:
+            view.setGraphicsEffect(None)
+        except RuntimeError:
+            pass
+
+
+def _animate_combo_list(combo):
+    view = combo.view()
+    if view is None:
+        return
+    _stop_combo_list_animation(combo)
+    effect = QGraphicsOpacityEffect(view)
+    view.setGraphicsEffect(effect)
+    animation = QPropertyAnimation(effect, b'opacity', combo)
+    animation.setDuration(140)
+    animation.setStartValue(0.0)
+    animation.setEndValue(1.0)
+    animation.setEasingCurve(QEasingCurve.OutCubic)
+    combo._list_anim = animation
+    combo._list_effect = effect
+
+    def finish():
+        if getattr(combo, '_list_anim', None) is animation:
+            combo._list_anim = None
+            combo._list_effect = None
+            try:
+                view.setGraphicsEffect(None)
+            except RuntimeError:
+                pass
+        try:
+            animation.deleteLater()
+        except RuntimeError:
+            pass
+
+    animation.finished.connect(finish)
+    animation.start()
+
+
 class AvatarComboBox(QComboBox):
     '''关闭状态下手动绘制当前头像，避免 QComboBox 按文字行高裁掉头像下半部分。'''
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._arrow_angle = 0.0
+        self._arrow_anim = None
+
+    def _get_arrow_angle(self):
+        return self._arrow_angle
+
+    def _set_arrow_angle(self, value):
+        self._arrow_angle = float(value)
+        self.update()
+
+    arrowAngle = Property(float, _get_arrow_angle, _set_arrow_angle)
+
+    def _animate_arrow(self, expanded):
+        old = self._arrow_anim
+        if old is not None:
+            try:
+                old.stop()
+                old.deleteLater()
+            except RuntimeError:
+                pass
+        animation = QPropertyAnimation(self, b'arrowAngle', self)
+        animation.setDuration(150)
+        animation.setStartValue(self._arrow_angle)
+        animation.setEndValue(180.0 if expanded else 0.0)
+        animation.setEasingCurve(QEasingCurve.OutCubic)
+        animation.finished.connect(animation.deleteLater)
+        self._arrow_anim = animation
+        animation.start()
 
     def showPopup(self):
         # 弹出列表跟随组合框宽度，避免条目宽度把列表撑出账户卡片区域。
@@ -72,7 +155,14 @@ class AvatarComboBox(QComboBox):
         width = max(210, self.width())
         view.setMinimumWidth(width)
         view.setMaximumWidth(width)
+        self._animate_arrow(True)
         super().showPopup()
+        QTimer.singleShot(0, lambda c=self: _animate_combo_list(c))
+
+    def hidePopup(self):
+        self._animate_arrow(False)
+        _stop_combo_list_animation(self)
+        super().hidePopup()
 
     def paintEvent(self, event):
         painter = QStylePainter(self)
@@ -112,13 +202,117 @@ class AvatarComboBox(QComboBox):
             QStyle.CC_ComboBox, option, QStyle.SC_ComboBoxArrow, self
         )
         if arrow_rect.isValid():
-            arrow_option = QStyleOptionComboBox(option)
-            arrow_option.rect = arrow_rect
-            painter.drawPrimitive(QStyle.PE_IndicatorArrowDown, arrow_option)
+            painter.save()
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            pen = QPen(self.palette().color(QPalette.ButtonText), 1.8)
+            pen.setCapStyle(Qt.RoundCap)
+            pen.setJoinStyle(Qt.RoundJoin)
+            painter.setPen(pen)
+            center = arrow_rect.center()
+            painter.translate(center.x(), center.y())
+            painter.rotate(self._arrow_angle)
+            painter.drawLine(-5, -2, 0, 3)
+            painter.drawLine(0, 3, 5, -2)
+            painter.restore()
+
+
+class AutoSelectLineEdit(QLineEdit):
+    '''首次点击进入输入框时全选；再次点击恢复普通光标定位。'''
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._select_all_pending = False
+
+    def _finish_focus_select(self):
+        if self._select_all_pending:
+            self._select_all_pending = False
+            self.selectAll()
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        self._select_all_pending = True
+        QTimer.singleShot(0, self._finish_focus_select)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if event.button() == Qt.LeftButton and self._select_all_pending:
+            self._select_all_pending = False
+            QTimer.singleShot(0, self.selectAll)
+
+
+class HistoryComboBox(QComboBox):
+    '''可编辑历史列表：右侧绘制箭头，展开时旋转。'''
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._arrow_angle = 0.0
+        self._arrow_anim = None
+
+    def _get_arrow_angle(self):
+        return self._arrow_angle
+
+    def _set_arrow_angle(self, value):
+        self._arrow_angle = float(value)
+        self.update()
+
+    arrowAngle = Property(float, _get_arrow_angle, _set_arrow_angle)
+
+    def _animate_arrow(self, expanded):
+        old = self._arrow_anim
+        if old is not None:
+            try:
+                old.stop()
+                old.deleteLater()
+            except RuntimeError:
+                pass
+        animation = QPropertyAnimation(self, b'arrowAngle', self)
+        animation.setDuration(150)
+        animation.setStartValue(self._arrow_angle)
+        animation.setEndValue(180.0 if expanded else 0.0)
+        animation.setEasingCurve(QEasingCurve.OutCubic)
+        animation.finished.connect(animation.deleteLater)
+        self._arrow_anim = animation
+        animation.start()
+
+    def showPopup(self):
+        self._animate_arrow(True)
+        super().showPopup()
+        QTimer.singleShot(0, lambda c=self: _animate_combo_list(c))
+
+    def hidePopup(self):
+        self._animate_arrow(False)
+        _stop_combo_list_animation(self)
+        super().hidePopup()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.count() <= 0 and not self.isEditable():
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        color = QColor('#8F96A3')
+        try:
+            if self.palette().color(QPalette.Window).lightness() > 128:
+                color = QColor('#4F6F6F')
+        except Exception:
+            pass
+        pen = QPen(color, 1.8)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(pen)
+        cx = self.width() - 16
+        cy = self.height() // 2 + 1
+        painter.translate(cx, cy)
+        painter.rotate(self._arrow_angle)
+        painter.drawLine(-5, -2, 0, 3)
+        painter.drawLine(0, 3, 5, -2)
+        painter.end()
 
 
 class AvatarLabel(QLabel):
     all_failed = Signal()
+    clicked = Signal()
+    context_menu_requested = Signal(QPoint)
     def __init__(self, parent=None, size=96, radius=12):
         super().__init__(parent)
         self._size = int(size)
@@ -128,6 +322,13 @@ class AvatarLabel(QLabel):
         self._setting_default = False
         self._showing_person = False
         self._setting_person = False
+        self._showing_head = False
+        self._setting_head = False
+        self._head_source = None
+        self._head_normal = None
+        self._head_hover = None
+        self._hovered = False
+        self._skin_interactive = False
         self.setFixedSize(self._size, self._size)
         self.setAlignment(Qt.AlignCenter)
         self._update_placeholder_style()
@@ -144,7 +345,7 @@ class AvatarLabel(QLabel):
         return IMAGE_PLACEHOLDER_LIGHT if self._light else IMAGE_PLACEHOLDER_DARK
 
     def _update_placeholder_style(self):
-        if self._showing_person:
+        if self._showing_person or self._showing_head:
             self.setStyleSheet('border-radius: 0px; background: transparent;')
             return
         self.setStyleSheet(
@@ -159,6 +360,12 @@ class AvatarLabel(QLabel):
         if self._showing_person:
             self._showing_person = False
             self.set_person_icon()
+        elif self._showing_head:
+            source = self._head_source
+            if source is not None:
+                self._set_3d_head(source)
+            else:
+                self._update_placeholder_style()
         elif self._showing_default and changed:
             self._set_default()
 
@@ -166,9 +373,99 @@ class AvatarLabel(QLabel):
         if self._showing_person and not self._setting_person:
             self._showing_person = False
             self._update_placeholder_style()
+        if self._showing_head and not self._setting_head:
+            self._showing_head = False
+            self._head_source = None
+            self._head_normal = None
+            self._head_hover = None
+            self._hovered = False
+            self.setToolTip('')
+            self.setCursor(Qt.ArrowCursor)
+            self._update_placeholder_style()
         if not self._setting_default:
             self._showing_default = False
         super().setPixmap(pixmap)
+
+    def set_skin_interactive(self, enabled: bool):
+        self._skin_interactive = bool(enabled)
+        if self._showing_head and self._skin_interactive:
+            self.setCursor(Qt.PointingHandCursor)
+            self.setToolTip('点击更换皮肤（右键查看更多选项）')
+        elif not self._showing_head:
+            self.setCursor(Qt.ArrowCursor)
+            self.setToolTip('')
+
+    def _apply_head_pixmap(self, pixmap):
+        if pixmap is None or pixmap.isNull():
+            return
+        self._showing_head = True
+        self._showing_person = False
+        self._showing_default = False
+        self._update_placeholder_style()
+        self._setting_head = True
+        try:
+            self.setPixmap(pixmap)
+        finally:
+            self._setting_head = False
+
+    def _set_3d_head(self, pixmap):
+        if pixmap is None or pixmap.isNull():
+            self._set_default()
+            return
+        from ui.widgets.settings_widgets import device_pixel_ratio
+        dpr = device_pixel_ratio()
+        normal = render_head(
+            pixmap, self._size, dpr, light=self._light, strong_shadow=False
+        )
+        hover = render_head(
+            pixmap, self._size, dpr, light=self._light, strong_shadow=True
+        )
+        if normal.isNull():
+            self._set_default()
+            return
+        self._head_source = pixmap
+        self._head_normal = normal
+        self._head_hover = hover
+        self._hovered = bool(self._skin_interactive and self.underMouse())
+        self._apply_head_pixmap(hover if self._hovered else normal)
+        if self._skin_interactive:
+            self.setCursor(Qt.PointingHandCursor)
+            self.setToolTip('点击更换皮肤（右键查看更多选项）')
+        else:
+            self.setCursor(Qt.ArrowCursor)
+            self.setToolTip('')
+
+    def enterEvent(self, event):
+        self._hovered = True
+        if (
+            self._skin_interactive and self._showing_head
+            and self._head_hover is not None
+        ):
+            self._apply_head_pixmap(self._head_hover)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hovered = False
+        if self._showing_head and self._head_normal is not None:
+            self._apply_head_pixmap(self._head_normal)
+        super().leaveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if (
+            self._skin_interactive and self._showing_head
+            and event.button() == Qt.LeftButton
+        ):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def contextMenuEvent(self, event):
+        if self._skin_interactive and self._showing_head:
+            self.context_menu_requested.emit(event.globalPos())
+            event.accept()
+            return
+        super().contextMenuEvent(event)
 
     def set_person_icon(self):
         '''未登录正版账号时使用通用人物图标代替头像。'''
@@ -176,7 +473,14 @@ class AvatarLabel(QLabel):
         if self._showing_person and not self._setting_person:
             return
         self._showing_person = True
+        self._showing_head = False
         self._showing_default = False
+        self._head_source = None
+        self._head_normal = None
+        self._head_hover = None
+        self._hovered = False
+        self.setToolTip('')
+        self.setCursor(Qt.ArrowCursor)
         self._image_urls = []
         self._fallback_head = ''
         self._cache_path = None
@@ -317,11 +621,7 @@ class AvatarLabel(QLabel):
             if not cached.isNull():
                 self._image_urls = []
                 self._fallback_head = ''
-                if self._is_skin_image(cached):
-                    cached = self._head_from_skin(cached, self._size)
-                else:
-                    cached = hidpi_pixmap(cached, self._size, self._size)
-                self.setPixmap(self._rounded(cached, self._radius))
+                self._set_3d_head(cached)
                 return
         self._image_urls = [u for u in urls or [] if u]
         if fallback_head is None:
@@ -370,24 +670,14 @@ class AvatarLabel(QLabel):
             if pix.loadFromData(raw) and not pix.isNull():
                 url = reply.url().toString()
                 is_official = 'textures.minecraft.net' in url and pix.width() >= 64
-                if is_official:
-                    head = self._head_from_skin(pix, self._size)
-                    self.setPixmap(self._rounded(head, self._radius))
-                    if cache_path is not None:
-                        try:
-                            cache_path.parent.mkdir(parents=True, exist_ok=True)
-                            head.toImage().save(str(cache_path), 'PNG')
-                        except Exception:
-                            pass
-                else:
-                    from ui.widgets.settings_widgets import hidpi_pixmap
-                    self.setPixmap(self._rounded(hidpi_pixmap(pix, self._size, self._size), self._radius))
-                    if cache_path is not None and raw:
-                        try:
-                            cache_path.parent.mkdir(parents=True, exist_ok=True)
-                            cache_path.write_bytes(bytes(raw))
-                        except Exception:
-                            pass
+                self._set_3d_head(pix)
+                if cache_path is not None and raw:
+                    try:
+                        # 缓存完整皮肤/原始头像，下一次仍可渲染 3D 头颅。
+                        cache_path.parent.mkdir(parents=True, exist_ok=True)
+                        cache_path.write_bytes(bytes(raw))
+                    except Exception:
+                        pass
                 loaded = True
         reply.deleteLater()
         if not loaded:
@@ -398,18 +688,24 @@ class AvatarLabel(QLabel):
         if pix.isNull():
             self._set_default()
             return
-        self.setPixmap(self._rounded(self._head_from_skin(pix, self._size), self._radius))
+        self._set_3d_head(pix)
 
     def set_head_file(self, path):
-        '''直接显示头像图片（不是完整皮肤文件）。'''
+        '''显示头像文件；默认 Steve/Alex 头像优先用配套完整皮肤渲染 3D。'''
 
-        pix = QPixmap(str(path)) if path else QPixmap()
+        path_obj = Path(str(path)) if path else Path()
+        pix = QPixmap(str(path_obj)) if path else QPixmap()
         if pix.isNull():
             self._set_default()
             return
-        from ui.widgets.settings_widgets import hidpi_pixmap
-        pix = hidpi_pixmap(pix, self._size, self._size, smooth=False)
-        self.setPixmap(self._rounded(pix, self._radius))
+        name = path_obj.name.lower()
+        if name in ('steve_head.png', 'alex_head.png'):
+            skin = path_obj.with_name(name.replace('_head.png', '_skin.png'))
+            if skin.is_file():
+                skin_pix = QPixmap(str(skin))
+                if not skin_pix.isNull():
+                    pix = skin_pix
+        self._set_3d_head(pix)
 
 
 class SavedAccountIconLoader(QObject):
@@ -990,9 +1286,13 @@ class AccountPage(QWidget):
         self._tp_inline_pending_remember = False
         self._tp_inline_api = DEFAULT_LITTLESKIN_API
         self._tp_inline_switching = False
+        self._tp_switch_previous_account = None
+        self._tp_inline_login_token = 0
         self._ms_code_dialog = None
         self._ms_switching = False
         self._ms_login_progress_value = 0
+        self._skin_refresh_token = 0
+        self._skin_refresh_started_at = 0.0
         self._tp_server_anim = None
         self._section_toggles = {}
         self._section_hidden = {}
@@ -1087,10 +1387,14 @@ class AccountPage(QWidget):
         combo.clear()
         for name in names:
             combo.addItem(name)
+        if current:
+            index = combo.findText(current)
+            combo.setCurrentIndex(index if index >= 0 else -1)
+        else:
+            combo.setCurrentIndex(-1)
         combo.setEditText(current)
         combo.blockSignals(False)
-        if current:
-            self.name_input.setText(current)
+        self.name_input.setText(current)
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -1162,6 +1466,9 @@ class AccountPage(QWidget):
         group_layout.setContentsMargins(24, 22, 24, 20)
         group_layout.setSpacing(8)
         self.avatar = AvatarLabel(size=76, radius=10)
+        self.avatar.set_skin_interactive(True)
+        self.avatar.clicked.connect(self._change_skin)
+        self.avatar.context_menu_requested.connect(self._show_avatar_menu)
         group_layout.addWidget(self.avatar, 0, Qt.AlignHCenter)
         self.player_name_label = QLabel('未登录')
         self.player_name_label.setAlignment(Qt.AlignCenter)
@@ -1227,13 +1534,16 @@ class AccountPage(QWidget):
         email_label.setFixedWidth(52)
         email_label.setStyleSheet('color:rgba(255,255,255,0.75); font-size:13px;')
         email_row.addWidget(email_label)
-        self.tp_inline_email = QComboBox()
+        self.tp_inline_email = HistoryComboBox()
         self.tp_inline_email.setEditable(True)
         self.tp_inline_email.setMinimumHeight(34)
         self.tp_inline_email.setStyleSheet(f'QComboBox {{ {inline_input_style} }}QComboBox QAbstractItemView {{ background:#24262c; color:#f0f0f0; selection-background-color:#88DDDD; border:1px solid rgba(255,255,255,0.14); }}')
-        if self.tp_inline_email.lineEdit() is not None:
-            self.tp_inline_email.lineEdit().setStyleSheet('background:transparent; border:none; color:#f0f0f0; padding:1px;')
-            self.tp_inline_email.lineEdit().setPlaceholderText('LittleSkin 邮箱或用户名')
+        tp_email_edit = AutoSelectLineEdit(self.tp_inline_email)
+        tp_email_edit.setStyleSheet(
+            'background:transparent; border:none; color:#f0f0f0; padding:1px;'
+        )
+        tp_email_edit.setPlaceholderText('LittleSkin 邮箱或用户名')
+        self.tp_inline_email.setLineEdit(tp_email_edit)
         self.tp_inline_email.activated.connect(self._on_tp_inline_account_changed)
         self.tp_inline_email.editTextChanged.connect(self._on_tp_inline_email_edited)
         email_row.addWidget(self.tp_inline_email, 1)
@@ -1243,7 +1553,7 @@ class AccountPage(QWidget):
         password_label.setFixedWidth(52)
         password_label.setStyleSheet('color:rgba(255,255,255,0.75); font-size:13px;')
         password_row.addWidget(password_label)
-        self.tp_inline_password = QLineEdit()
+        self.tp_inline_password = AutoSelectLineEdit()
         self.tp_inline_password.setEchoMode(QLineEdit.Password)
         self.tp_inline_password.setMinimumHeight(34)
         self.tp_inline_password.setStyleSheet(f'QLineEdit {{ {inline_input_style} }}')
@@ -1328,10 +1638,11 @@ class AccountPage(QWidget):
         offline_layout = QVBoxLayout(self.offline_inline_widget)
         offline_layout.setContentsMargins(0, 4, 0, 0)
         offline_layout.setSpacing(14)
-        self.offline_name_combo = QComboBox()
+        self.offline_name_combo = HistoryComboBox()
         self.offline_name_combo.setEditable(True)
         self.offline_name_combo.setMinimumHeight(40)
         self.offline_name_combo.setMinimumWidth(360)
+        self.offline_name_combo.setMaxVisibleItems(10)
         self.offline_name_combo.setStyleSheet(
             'QComboBox { background: rgba(255,255,255,0.06);'
             ' border:1px solid rgba(255,255,255,0.16); border-radius:6px;'
@@ -1340,15 +1651,15 @@ class AccountPage(QWidget):
             'QComboBox QAbstractItemView { background:#24262c; color:#f0f0f0;'
             ' border:1px solid rgba(255,255,255,0.16);'
             ' selection-background-color:#88DDDD; }'
+            'QComboBox QAbstractItemView::item { min-height:28px; padding:3px 8px; }'
         )
-        if self.offline_name_combo.lineEdit() is not None:
-            self.offline_name_combo.lineEdit().setStyleSheet(
-                'background:transparent; border:none; color:#f0f0f0; padding:1px;'
-            )
-            self.offline_name_combo.lineEdit().setPlaceholderText('输入玩家名称')
-            self.offline_name_combo.lineEdit().editingFinished.connect(
-                self._remember_offline_name
-            )
+        offline_edit = AutoSelectLineEdit(self.offline_name_combo)
+        offline_edit.setStyleSheet(
+            'background:transparent; border:none; color:#f0f0f0; padding:1px;'
+        )
+        offline_edit.setPlaceholderText('输入玩家名称')
+        offline_edit.editingFinished.connect(self._remember_offline_name)
+        self.offline_name_combo.setLineEdit(offline_edit)
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText('输入玩家名称')
         self.name_input.hide()
@@ -1356,6 +1667,9 @@ class AccountPage(QWidget):
             self.name_input.setText
         )
         self.name_input.editingFinished.connect(self._remember_offline_name)
+        self.offline_name_combo.activated.connect(
+            lambda _index: self._remember_offline_name()
+        )
         offline_layout.addWidget(self.offline_name_combo)
         self.offline_group = self.offline_inline_widget
         self.mode_content_layout.addWidget(self.offline_inline_widget, 0, Qt.AlignHCenter)
@@ -1835,6 +2149,7 @@ class AccountPage(QWidget):
             self._ms_switching = False
         if mode != 'thirdparty':
             self._tp_inline_switching = False
+            self._tp_switch_previous_account = None
 
         ms_account = self.config.get('microsoft_account') or {}
         tp_account = self.config.get('thirdparty_account') or {}
@@ -1865,6 +2180,21 @@ class AccountPage(QWidget):
                 if ms_account.get('email'):
                     self.email_label.show()
         self.tp_inline_wrap.setVisible(show_tp_form)
+        if mode == 'thirdparty':
+            if show_tp_form:
+                # 第三方登录/切号时，输入框直接占用原头像区域。
+                self.avatar.hide()
+                self.player_name_label.hide()
+                self.email_label.hide()
+                self.login_type_label.hide()
+            else:
+                self.avatar.show()
+                self.player_name_label.show()
+                self.login_type_label.show()
+                if tp_account.get('email'):
+                    self.email_label.show()
+                else:
+                    self.email_label.hide()
         self.tp_server_card.setVisible(mode == 'thirdparty')
         self._set_ms_actions_visible(ms_logged and not show_ms_form)
         self.logout_btn.setVisible(ms_logged and not show_ms_form)
@@ -1942,16 +2272,14 @@ class AccountPage(QWidget):
     def _on_account_tab_clicked(self, mode):
         # 再次点击当前 tab 视为取消“切换账号”，回到账户卡本身。
         if mode == self._account_tab_mode:
-            cancelled = False
             if mode == 'microsoft' and self._ms_switching:
                 self._ms_switching = False
-                cancelled = True
-            if mode == 'thirdparty' and self._tp_inline_switching:
-                self._tp_inline_switching = False
-                cancelled = True
-            if cancelled:
                 self._refresh_account_info()
                 self._apply_login_section_order()
+                return
+            if mode == 'thirdparty' and self._tp_inline_switching:
+                # 取消切号：已经退出第三方，按正版/离线/未登录顺序回退。
+                self._fallback_after_tp_logout()
                 return
         self._switch_account_mode(mode)
 
@@ -2001,6 +2329,18 @@ class AccountPage(QWidget):
             account = self.config.get('thirdparty_account', {}) or {}
             return f'thirdparty:{account.get("api")}:{account.get("uuid")}'
         return f'offline:{self.config.get("player_name", "")}'
+
+    def _show_avatar_menu(self, pos):
+        menu = QMenu(self)
+        save_action = menu.addAction(
+            QIcon(painted_icon('save', 16)), '另存为'
+        )
+        save_action.triggered.connect(self._save_current_skin)
+        refresh_action = menu.addAction(
+            QIcon(painted_icon('refresh', 16)), '刷新'
+        )
+        refresh_action.triggered.connect(self._refresh_current_skin)
+        menu.exec(pos)
 
     def _show_skin_menu(self):
         menu = QMenu(self)
@@ -2179,7 +2519,10 @@ class AccountPage(QWidget):
         combo = self.tp_inline_email
         combo.blockSignals(True)
         combo.clear()
-        current = self.config.get('thirdparty_account', {}) or {}
+        current = (
+            getattr(self, '_tp_switch_previous_account', None)
+            or self.config.get('thirdparty_account', {}) or {}
+        )
         current_username = (current.get('email') or current.get('name') or '').strip()
         current_id = f'thirdparty:{current.get("api", "")}:{current.get("uuid", "")}' if current.get('name') else ''
         current_index = -1
@@ -2219,21 +2562,59 @@ class AccountPage(QWidget):
     def _show_tp_inline_login(self):
         if self._tp_inline_worker is not None and self._tp_inline_worker.isRunning():
             return
-        # 切换第三方账号只把当前账户卡的内容换成登录表单，不退出当前账号，
-        # 也不清理已保存的正版/第三方凭据。
+        # 切换第三方账号会退出当前第三方登录；已保存账号仍保留在下拉列表中。
+        previous = self.config.get('thirdparty_account') or {}
+        self._tp_switch_previous_account = previous or None
+        if self.config.get('thirdparty_account'):
+            self.config.set('thirdparty_account', None)
+            self.config.save()
         self._tp_inline_switching = True
         self._refresh_tp_inline_accounts()
-        self.profile_group.setVisible(True)
-        self.tp_inline_wrap.setVisible(True)
-        self.tp_server_card.setVisible(True)
-        self.tp_actions_row.hide()
-        self._set_ms_actions_visible(False)
-        self.logout_btn.hide()
-        # 每次进入账号切换都从折叠状态开始，和 PCL 的服务器设置一致。
         self._set_tp_server_expanded(False, animate=False)
+        # 表单会替换头像/昵称区域；同时刷新侧边栏，避免仍显示已退出的账号。
+        self.account_changed.emit()
         self.tp_inline_wrap.raise_()
         QTimer.singleShot(0, self._scroll_account_to_top)
         QTimer.singleShot(80, self._scroll_account_to_top)
+
+    def _fallback_after_tp_logout(self):
+        '''第三方登录未成功时：正版 > 离线 > 未登录（Steve/Alex）。'''
+
+        self._tp_inline_switching = False
+        self._tp_switch_previous_account = None
+        self._tp_inline_login_token += 1
+        self.tp_inline_login_btn.setEnabled(True)
+        self.tp_inline_login_btn.setText('登录')
+        self.tp_inline_wrap.hide()
+        self._ms_switching = False
+        ms = self.config.get('microsoft_account') or {}
+        if not ms.get('name'):
+            try:
+                ms = self.auth.get_last_microsoft_account_entry() or {}
+            except Exception:
+                ms = {}
+        if ms.get('name'):
+            self.config.set('login_type', 'microsoft')
+            self.config.set('microsoft_account', ms)
+        else:
+            name = ''
+            try:
+                name = self.auth.get_offline_name() or ''
+            except Exception:
+                name = ''
+            if not name:
+                name = str(
+                    self.config.get('offline_last_name', '')
+                    or self.config.get('player_name', '')
+                ).strip()
+            self.config.set('login_type', 'offline')
+            if name:
+                self.config.set('player_name', name)
+        self.config.save()
+        self._refresh_account_info()
+        self._apply_login_section_order()
+        self._refresh_offline_accounts()
+        self.account_changed.emit()
 
     def _toggle_tp_server(self):
         # 用显式隐藏状态判断，父卡片隐藏时 isVisible() 会误判为收起。
@@ -2421,12 +2802,22 @@ class AccountPage(QWidget):
             auto_server = self.tp_auto_server_edit.text().strip()
         worker = ThirdPartyLoginWorker(api, username, password, server_name, register_url, auto_server)
         self._tp_inline_worker = worker
-        worker.success.connect(self._on_tp_inline_success)
-        worker.error.connect(self._on_tp_inline_error)
+        self._tp_inline_login_token += 1
+        token = self._tp_inline_login_token
+        worker.success.connect(
+            lambda account, t=token: self._on_tp_inline_success(account, t)
+        )
+        worker.error.connect(
+            lambda msg, kind='general', t=token:
+            self._on_tp_inline_error(msg, kind, t)
+        )
         worker.finished.connect((lambda w=worker: self._on_tp_inline_worker_done(w)))
         worker.start()
 
-    def _on_tp_inline_success(self, account):
+    def _on_tp_inline_success(self, account, token=None):
+        if token is not None and token != self._tp_inline_login_token:
+            return
+        self._tp_inline_login_token += 1
         self.tp_inline_login_btn.setEnabled(True)
         self.tp_inline_login_btn.setText('登录')
         api = self._tp_inline_api
@@ -2436,6 +2827,7 @@ class AccountPage(QWidget):
         self.auth.set_thirdparty_saved_password(api, username, password, remember)
         self._tp_inline_pending_password = ''
         self._tp_inline_switching = False
+        self._tp_switch_previous_account = None
         self.tp_inline_wrap.hide()
         self._store_tp_server_settings_from_account(account)
         self._load_thirdparty_fields()
@@ -2443,15 +2835,20 @@ class AccountPage(QWidget):
         self.account_changed.emit()
         QMessageBox.information(self, '登录成功', f'已登录第三方账号：{account.get("name", username)}')
 
-    def _on_tp_inline_error(self, message, kind='general'):
+    def _on_tp_inline_error(self, message, kind='general', token=None):
+        if token is not None and token != self._tp_inline_login_token:
+            return
+        self._tp_inline_login_token += 1
         self.tp_inline_login_btn.setEnabled(True)
         self.tp_inline_login_btn.setText('登录')
+        text = str(message or '第三方登录失败')
         self.tp_inline_status.setStyleSheet('color:#ff9c9c; font-size:12px;')
+        self.tp_inline_status.setText(text)
+        self._fallback_after_tp_logout()
         if kind == 'network':
-            self.tp_inline_status.setText('未连接到互联网')
             notify_network_failure(self, '验证登录', '当前网络问题导致无法登录，请使用加速器/VPN后重试！')
             return
-        self.tp_inline_status.setText(str(message or '第三方登录失败'))
+        QMessageBox.critical(self, '第三方登录失败', text)
 
     def _on_tp_inline_worker_done(self, worker):
         if self._tp_inline_worker is worker:
@@ -2518,9 +2915,14 @@ class AccountPage(QWidget):
         if login_type == 'thirdparty':
             self._refresh_thirdparty_skin_async(user_initiated=True)
             return
-        name = self.config.get('player_name', '') or self.name_input.text().strip()
-        if name:
-            self._refresh_offline_avatar(name)
+        token = self._begin_skin_refresh_feedback()
+        self._refresh_offline_avatar()
+        QTimer.singleShot(
+            500,
+            lambda t=token: self._finish_skin_refresh_feedback(
+                True, token=t
+            ),
+        )
 
     def _save_current_skin(self):
         login_type = self.config.get('login_type', 'offline')
@@ -3004,15 +3406,7 @@ class AccountPage(QWidget):
                 self.email_label.hide()
                 self.name_input.setText(player_name)
                 self.logout_btn.hide()
-                try:
-                    from core.skin import SkinManager
-                    preview = SkinManager().preview_path()
-                    if preview and preview.is_file():
-                        self.avatar.set_skin_file(preview)
-                    else:
-                        self.avatar.set_image_url([f'https://mc-heads.net/avatar/{player_name}/96', f'https://minotar.net/helm/{player_name}/96.png'])
-                except Exception:
-                    self.avatar.setText(player_name)
+                self._refresh_offline_avatar()
             else:
                 self.player_name_label.setText('未登录')
                 self.login_type_label.setText('')
@@ -3029,7 +3423,10 @@ class AccountPage(QWidget):
             return
 
     def _remember_offline_name(self):
-        name = self.name_input.text().strip()
+        try:
+            name = self.name_input.text().strip()
+        except RuntimeError:
+            return
         if name:
             self.config.set('offline_last_name', name)
         self._auto_update_offline_name()
@@ -3048,7 +3445,10 @@ class AccountPage(QWidget):
     def _auto_update_offline_name(self):
         '''输入完离线昵称后自动应用，无需再点“使用离线模式”。'''
 
-        name = self.name_input.text().strip()
+        try:
+            name = self.name_input.text().strip()
+        except RuntimeError:
+            return
         if not name:
             return
         if self._offline_name_error(name):
@@ -3072,20 +3472,30 @@ class AccountPage(QWidget):
             combo.addItem(name)
         self.player_name_label.setText(name)
         self.login_type_label.setText('离线登录')
-        self._refresh_offline_avatar(name)
+        # 换昵称只改账号名，不重新计算/覆盖离线皮肤或正版皮肤。
         self.account_changed.emit()
 
-    def _refresh_offline_avatar(self, player_name: str):
+    def _refresh_offline_avatar(self, player_name: str=''):
+        '''离线头像只由离线皮肤设置决定，不随昵称变化。'''
+
         try:
             from core.skin import SkinManager
             preview = SkinManager().preview_path()
             if preview and Path(preview).is_file():
                 self.avatar.set_skin_file(preview)
-            return
+                return
         except Exception:
             pass
-        steve_head = Path(__file__).resolve().parent.parent / 'imgs' / 'steve_head.png'
-        self.avatar.set_image_url([f'https://mc-heads.net/avatar/{player_name}/96', f'https://minotar.net/helm/{player_name}/96.png'], fallback_head=steve_head)
+        head = default_head_path()
+        if head.is_file():
+            self.avatar.set_head_file(str(head))
+        else:
+            steve_head = Path(__file__).resolve().parent.parent / 'imgs' / 'steve_head.png'
+            self.avatar.set_image_url(
+                ['https://mc-heads.net/avatar/MHF_Steve/96',
+                 'https://minotar.net/helm/MHF_Steve/96.png'],
+                fallback_head=steve_head,
+            )
 
     def _on_offline_login(self):
         self._close_ms_code_dialog()
@@ -3265,17 +3675,47 @@ class AccountPage(QWidget):
             return
         _show_microsoft_login_notice(self, message, kind)
 
+    def _begin_skin_refresh_feedback(self):
+        self._skin_refresh_token += 1
+        self._skin_refresh_started_at = time.monotonic()
+        show_toast('正在刷新皮肤...', 'info', self)
+        return self._skin_refresh_token
+
+    def _finish_skin_refresh_feedback(self, success: bool, reason: str='',
+                                       token=None):
+        if token is not None and token != self._skin_refresh_token:
+            return
+        elapsed = max(0.0, time.monotonic() - self._skin_refresh_started_at)
+        delay = max(0, int(round(500 - elapsed * 1000)))
+        text = '刷新皮肤成功！' if success else (
+            f'刷新皮肤失败！原因:{str(reason or "未知错误")}'
+        )
+        kind = 'success' if success else 'error'
+
+        def show_result():
+            if token is not None and token != self._skin_refresh_token:
+                return
+            self._skin_refresh_token += 1
+            show_toast(text, kind, self)
+
+        QTimer.singleShot(delay, show_result)
+
     def _refresh_microsoft_profile_async(self, user_initiated: bool=True):
         if self._ms_profile_worker is not None and self._ms_profile_worker.isRunning():
             return
         if self.config.get('login_type', 'offline') != 'microsoft':
             return
-        if user_initiated:
-            show_toast('正在刷新皮肤。', 'info', self)
+        token = self._begin_skin_refresh_feedback() if user_initiated else None
         worker = MicrosoftProfileSkinWorker()
         self._ms_profile_worker = worker
-        worker.success.connect((lambda result, ui=user_initiated: self._on_ms_profile_skin_ready(result, ui)))
-        worker.error.connect((lambda msg, kind, ui=user_initiated: self._on_ms_profile_skin_error(msg, kind, ui)))
+        worker.success.connect(
+            (lambda result, ui=user_initiated, t=token:
+             self._on_ms_profile_skin_ready(result, ui, t))
+        )
+        worker.error.connect(
+            (lambda msg, kind, ui=user_initiated, t=token:
+             self._on_ms_profile_skin_error(msg, kind, ui, t))
+        )
         worker.finished.connect(worker.deleteLater)
         worker.finished.connect((lambda w=worker: self._on_ms_profile_worker_done(w)))
         worker.start()
@@ -3284,7 +3724,8 @@ class AccountPage(QWidget):
         if self._ms_profile_worker is worker:
             self._ms_profile_worker = None
 
-    def _on_ms_profile_skin_ready(self, result: dict, user_initiated: bool=False):
+    def _on_ms_profile_skin_ready(self, result: dict, user_initiated: bool=False,
+                                  refresh_token=None):
         import time as _time
         profile = result.get('profile') or {}
         skin = result.get('skin') or {}
@@ -3314,17 +3755,25 @@ class AccountPage(QWidget):
         self.account_changed.emit()
         if user_initiated:
             if skin_path:
-                show_toast('正版皮肤刷新成功。', 'success', self)
+                self._finish_skin_refresh_feedback(
+                    True, token=refresh_token
+                )
                 return
-            show_toast('正版皮肤刷新失败（原因：官方皮肤下载失败，请检查网络后重试）。', 'error', self)
+            self._finish_skin_refresh_feedback(
+                False, '官方皮肤下载失败，请检查网络后重试',
+                token=refresh_token,
+            )
             return
         self.ms_status_label.setText('正版账号已登录')
         self.ms_status_label.setStyleSheet('color:rgba(255,255,255,0.6); font-size:13px;')
 
-    def _on_ms_profile_skin_error(self, message: str, kind: str='general', user_initiated: bool=True):
+    def _on_ms_profile_skin_error(self, message: str, kind: str='general',
+                                  user_initiated: bool=True, refresh_token=None):
         message = friendly_auth_error(message, kind)
         if user_initiated:
-            show_toast(f'正版皮肤刷新失败（原因：{message}）', 'error', self)
+            self._finish_skin_refresh_feedback(
+                False, message, token=refresh_token
+            )
             return
         self.ms_status_label.setText(message)
         self.ms_status_label.setStyleSheet('color:#ff7777; font-size:13px;')
@@ -3340,12 +3789,17 @@ class AccountPage(QWidget):
             if now - self._tp_skin_last_attempt < 30:
                 return
         self._tp_skin_last_attempt = now
-        if user_initiated:
-            show_toast('正在刷新第三方皮肤。', 'info', self)
+        token = self._begin_skin_refresh_feedback() if user_initiated else None
         worker = ThirdPartySkinWorker()
         self._tp_skin_worker = worker
-        worker.success.connect((lambda result, ui=user_initiated: self._on_tp_skin_ready(result, ui)))
-        worker.error.connect((lambda msg, kind, ui=user_initiated: self._on_tp_skin_error(msg, kind, ui)))
+        worker.success.connect(
+            (lambda result, ui=user_initiated, t=token:
+             self._on_tp_skin_ready(result, ui, t))
+        )
+        worker.error.connect(
+            (lambda msg, kind, ui=user_initiated, t=token:
+             self._on_tp_skin_error(msg, kind, ui, t))
+        )
         worker.finished.connect(worker.deleteLater)
         worker.finished.connect((lambda w=worker: self._on_tp_skin_worker_done(w)))
         worker.start()
@@ -3354,7 +3808,8 @@ class AccountPage(QWidget):
         if self._tp_skin_worker is worker:
             self._tp_skin_worker = None
 
-    def _on_tp_skin_ready(self, result: dict, user_initiated: bool=False):
+    def _on_tp_skin_ready(self, result: dict, user_initiated: bool=False,
+                          refresh_token=None):
         account = self.config.get('thirdparty_account', {}) or {}
         if result.get('name'):
             account['name'] = result['name']
@@ -3383,14 +3838,22 @@ class AccountPage(QWidget):
         self.account_changed.emit()
         if user_initiated:
             if skin_path:
-                show_toast('第三方皮肤刷新成功。', 'success', self)
+                self._finish_skin_refresh_feedback(
+                    True, token=refresh_token
+                )
                 return
-            show_toast('第三方皮肤刷新失败（原因：皮肤下载失败，请检查网络后重试）。', 'error', self)
+            self._finish_skin_refresh_feedback(
+                False, '皮肤下载失败，请检查网络后重试',
+                token=refresh_token,
+            )
 
-    def _on_tp_skin_error(self, message: str, kind: str='general', user_initiated: bool=False):
+    def _on_tp_skin_error(self, message: str, kind: str='general',
+                          user_initiated: bool=False, refresh_token=None):
         message = friendly_auth_error(message, kind)
         if user_initiated:
-            show_toast(f'第三方皮肤刷新失败（原因：{message}）', 'error', self)
+            self._finish_skin_refresh_feedback(
+                False, message, token=refresh_token
+            )
 
     def _set_microsoft_avatar_urls(self, account: dict):
         from core.skin import avatar_urls_for_account
