@@ -24,6 +24,34 @@ logger = logging.getLogger('LaunchManager')
 _SHARED_JAVA_LIST = None
 _JAVA_LIST_LOCK = threading.Lock()
 
+
+def apply_high_performance_gpu_preference(java_path: str, enabled: bool=True):
+    '''按 exe 路径写入 Windows 显卡首选项，避免 Java 被分到核显。'''
+
+    if platform.system() != 'Windows':
+        return
+    try:
+        exe = str(Path(java_path).resolve())
+    except (OSError, ValueError):
+        return
+    if not exe.lower().endswith('.exe') or not Path(exe).is_file():
+        return
+    try:
+        import winreg
+        key_path = r'Software\Microsoft\DirectX\UserGpuPreferences'
+        with winreg.CreateKeyEx(
+            winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE
+        ) as key:
+            if enabled:
+                winreg.SetValueEx(key, exe, 0, winreg.REG_SZ, 'GpuPreference=2;')
+            else:
+                try:
+                    winreg.DeleteValue(key, exe)
+                except FileNotFoundError:
+                    pass
+    except Exception as exc:
+        logger.debug(f'写入显卡首选项失败（{java_path}）：{exc}')
+
 def _library_applies(lib: dict) -> bool:
     '''按当前系统/架构判断 library 是否可用。
 
@@ -1009,6 +1037,10 @@ class LaunchManager:
         java_ok, java_info = self.validate_java(java_path)
         if not java_ok:
             return None, f'Java 不可用：{java_info}'
+        apply_high_performance_gpu_preference(
+            java_path,
+            enabled=bool(self.config.get('use_high_performance_gpu', True)),
+        )
         login_mode = version_settings.get('login_mode', 'global')
         try:
             login_opts = self.auth.get_login_options(None if login_mode in ('', 'global') else login_mode)
@@ -1023,12 +1055,16 @@ class LaunchManager:
         )
         if auto_memory:
             try:
-                from core.memory import recommended_ram_mb
+                from core.memory import count_mods, recommended_ram_mb
                 from ui.version_meta import detect_installed_loader
                 loader = detect_installed_loader(self.config.get_mc_dir(), final_id)
-                auto_mb = recommended_ram_mb(self.config.get_mc_dir(), final_id, loader)
+                mod_count = count_mods(self.config.get_mc_dir(), final_id)
+                auto_mb = recommended_ram_mb(self.config.get_mc_dir(), final_id, loader, mod_count)
                 mem_max = f'{max(512, int(auto_mb))}M'
-                logger.info(f'PCL 动态内存分配: {mem_max}（版本 {final_id}，加载器 {loader or "原版"}）')
+                logger.info(
+                    f'PCL 动态内存分配: {mem_max}（版本 {final_id}，'
+                    f'加载器 {loader or "原版"}，Mod 数量 {mod_count}）'
+                )
             except Exception as exc:
                 logger.warning(f'动态内存分配失败，回退配置值: {exc}')
                 auto_memory = False

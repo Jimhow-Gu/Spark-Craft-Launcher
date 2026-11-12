@@ -24,14 +24,9 @@ def gc_arguments(key: str, java_major=None) -> List[str]:
     except (TypeError, ValueError):
         major = None
     if key == 'auto':
-        # 与 PCL 的默认策略一致：Java 21+ 使用分代 ZGC，Java 15-
-        # 使用 ZGC，老 Java 回退到稳定的 G1 配置。
-        if major is not None and major >= 21:
-            if major in (21, 22):
-                return ['-XX:+UnlockExperimentalVMOptions', '-XX:+UseZGC', '-XX:+ZGenerational']
-            return ['-XX:+UseZGC']
-        if major is not None and major >= 15:
-            return ['-XX:+UseZGC']
+        # 自动模式优先使用吞吐更稳定的 G1。ZGC 虽然停顿低，但 Minecraft
+        # 分配速率很高，实测同堆下 G1 的分配吞吐明显更高；需要低停顿时
+        # 用户仍可在高级设置里手动选择 ZGC。
         return list(_TUNED_G1)
     if key == 'zgc':
         if major is not None and major < 15:

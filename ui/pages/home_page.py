@@ -1309,6 +1309,8 @@ class HomePage(QWidget):
         info = {'version_id': version_id, 'nickname': nickname, 'log_path': log_path, 'log_handle': log_handle, 'lines': [], 'user_stopped': False, 'started': False, 'pid': None, 'window_seen': False, 'window_missing': False}
         self._instance_info[worker] = info
         self._instances.append(worker)
+        if len(self._instances) == 1:
+            self._set_game_running_media(True)
         self._launch_worker = worker
         self._starting_worker = worker
         worker.launch_success.connect((lambda w=worker: self._on_launch_success(w)))
@@ -1599,6 +1601,14 @@ class HomePage(QWidget):
         if mode == 'minimize':
             window.showMinimized()
 
+    def _set_game_running_media(self, running):
+        try:
+            window = self.window()
+            if window is not None and hasattr(window, 'set_game_running'):
+                window.set_game_running(bool(running))
+        except RuntimeError:
+            pass
+
     def _restore_launcher_after_game(self):
         if self._instances:
             return
@@ -1625,6 +1635,9 @@ class HomePage(QWidget):
                     pass
         if worker in self._instances:
             self._instances.remove(worker)
+        if not self._instances:
+            # 最后一个游戏实例退出后恢复启动器背景视频/音乐。
+            self._set_game_running_media(False)
         if self._launch_worker is worker:
             self._launch_worker = self._instances[-1] if self._instances else None
         self._remove_running_row(worker)

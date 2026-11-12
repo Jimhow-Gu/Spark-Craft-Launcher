@@ -7,7 +7,7 @@ import shutil
 import webbrowser
 from pathlib import Path
 from urllib.parse import urlparse
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QScrollArea, QMessageBox, QComboBox, QFileDialog, QApplication, QMenu, QDialog, QListWidget, QListWidgetItem, QCheckBox, QToolButton, QListView, QSizePolicy, QStylePainter, QStyleOptionComboBox, QStyle, QButtonGroup, QGraphicsDropShadowEffect, QGraphicsOpacityEffect, QGridLayout)
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QScrollArea, QMessageBox, QComboBox, QFileDialog, QApplication, QMenu, QDialog, QListWidget, QListWidgetItem, QCheckBox, QToolButton, QListView, QSizePolicy, QStylePainter, QStyleOptionComboBox, QStyle, QButtonGroup, QGraphicsOpacityEffect, QGridLayout)
 from ui.widgets.themed_checkbox import ThemedCheckBox
 from ui.widgets.login_icons import login_icon
 from PySide6.QtCore import (Qt, Signal, QUrl, QThread, QTimer, QSize, QObject, QEasingCurve, QEvent, QPropertyAnimation, QRectF)
@@ -130,11 +130,6 @@ class AvatarLabel(QLabel):
         self._setting_person = False
         self.setFixedSize(self._size, self._size)
         self.setAlignment(Qt.AlignCenter)
-        self._shadow = QGraphicsDropShadowEffect(self)
-        self._shadow.setBlurRadius(max(8.0, self._size * 0.18))
-        self._shadow.setOffset(0, max(2.0, self._size * 0.045))
-        self._shadow.setColor(QColor(0, 0, 0, 72))
-        self.setGraphicsEffect(self._shadow)
         self._update_placeholder_style()
         self._name = '?'
         self._manager = QNetworkAccessManager(self)
@@ -264,6 +259,12 @@ class AvatarLabel(QLabel):
             pixmap,
             QRectF(0, 0, pixmap.width(), pixmap.height()),
         )
+        # 用一次性绘制的静态暗边代替实时 QGraphicsDropShadowEffect。
+        # 实时阴影会随视频背景每帧重绘，实测会把启动器空闲 CPU 拉高很多。
+        painter.setClipping(False)
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(0, 0, 0, 58), max(1.0, 1.2 * dpr)))
+        painter.drawPath(path)
         painter.end()
         out.setDevicePixelRatio(dpr)
         return out

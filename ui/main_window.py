@@ -77,6 +77,10 @@ class MainWindow(QMainWindow):
         self.download_manager = DownloadManager.instance()
         self.music_player = BackgroundMusicPlayer.instance()
         self._media_backgrounded = False
+        self._game_running = False
+        self._game_media_paused = False
+        self._game_video_was_playing = False
+        self._game_music_was_playing = False
         self._update_checker = None
         self._update_dialog = None
         self._pending_update_info = None
@@ -971,9 +975,66 @@ class MainWindow(QMainWindow):
             self.fireworks_overlay.set_paused(True)
         self._update_media_buttons()
 
+    def set_game_running(self, running: bool):
+        '''游戏运行时强制暂停启动器背景视频/音乐，避免和游戏抢 CPU/GPU。'''
+
+        running = bool(running)
+        if running == getattr(self, '_game_running', False):
+            return
+        self._game_running = running
+        if running:
+            if self._game_media_paused:
+                return
+            self._game_media_paused = True
+            self._game_video_was_playing = self.central.video_playing()
+            if self._game_video_was_playing:
+                self.central.pause_video()
+            try:
+                self._game_music_was_playing = self.music_player.is_playing()
+                if self._game_music_was_playing:
+                    self.music_player.pause(remember=False)
+            except Exception:
+                self._game_music_was_playing = False
+            if hasattr(self, 'snow_overlay'):
+                self.snow_overlay.set_paused(True)
+            if hasattr(self, 'fireworks_overlay'):
+                self.fireworks_overlay.set_paused(True)
+            self._update_media_buttons()
+            return
+        if not self._game_media_paused:
+            return
+        self._game_media_paused = False
+        active = (
+            QApplication.applicationState() == Qt.ApplicationActive
+            and not self.isMinimized()
+        )
+        if active:
+            self._media_backgrounded = False
+            self._video_resume_pending = False
+            self._music_resume_pending = False
+            if self._game_video_was_playing:
+                self.central.play_video()
+            if self._game_music_was_playing:
+                try:
+                    self.music_player.play(remember=False)
+                except Exception:
+                    pass
+            if hasattr(self, 'snow_overlay'):
+                self.snow_overlay.set_paused(False)
+            if hasattr(self, 'fireworks_overlay'):
+                self.fireworks_overlay.set_paused(False)
+            self._update_media_buttons()
+        else:
+            # 启动器仍在后台：等切回前台时再由 _resume_background_media 恢复。
+            self._media_backgrounded = True
+            self._video_resume_pending = self._game_video_was_playing
+            self._music_resume_pending = self._game_music_was_playing
+
     def _resume_background_media(self):
         '''切回前台时恢复之前正在播放的视频和音乐。'''
 
+        if getattr(self, '_game_running', False):
+            return
         if not self._media_backgrounded or self.isMinimized():
             return
         self._media_backgrounded = False

@@ -44,16 +44,49 @@ def count_mods(mc_dir, version_id=''):
     base = Path(mc_dir)
     candidates = []
     if version_id:
-        candidates.append(base / 'versions' / str(version_id) / 'mods')
+        version_dir = base / 'versions' / str(version_id)
+        candidates.append(version_dir / 'mods')
+        # 兼容旧版隔离目录 versions/<id>/game/mods。
+        candidates.append(version_dir / 'game' / 'mods')
     candidates.append(base / 'mods')
+    counts = []
+    seen = set()
     for directory in candidates:
+        try:
+            key = str(directory.resolve()).lower()
+        except OSError:
+            key = str(directory).lower()
+        if key in seen:
+            continue
+        seen.add(key)
         try:
             if not directory.is_dir():
                 continue
-            return sum(1 for path in directory.iterdir() if path.is_file() and path.suffix.lower() in MOD_EXTENSIONS)
+            counts.append(sum(
+                1 for path in directory.iterdir()
+                if path.is_file() and path.suffix.lower() in MOD_EXTENSIONS
+            ))
         except OSError:
             continue
-    return 0
+    # 整合包清单里的 Mod 文件数也参与取最大值，兼容 Mod 不在标准目录的情况。
+    if version_id:
+        manifest = base / 'versions' / str(version_id) / 'pmgl_pack.json'
+        try:
+            import json as _json
+            data = _json.loads(manifest.read_text(encoding='utf-8'))
+            files = data.get('files') if isinstance(data, dict) else None
+            if isinstance(files, list):
+                manifest_count = 0
+                for item in files:
+                    if not isinstance(item, dict):
+                        continue
+                    path = str(item.get('path') or '').replace(chr(92), '/').lower()
+                    if path.startswith('mods/') and Path(path).suffix in MOD_EXTENSIONS:
+                        manifest_count += 1
+                counts.append(manifest_count)
+        except (OSError, ValueError, TypeError):
+            pass
+    return max(counts) if counts else 0
 
 
 
@@ -105,7 +138,17 @@ def recommended_ram_mb(mc_dir, version_id='', loader='', mod_count=None):
     optifine = loader == 'optifine' or (not loader and 'optifine' in str(version_id).lower())
     give_gb = auto_memory_gb(available_gb, mod_count, modable=modable, optifine=optifine)
     safe_limit_mb = safe_memory_limit_mb()
-    give_gb = min(give_gb, safe_limit_mb / 1024.0, max(0.5, total_gb - 0.5), 20.0)
+    safe_limit_gb = safe_limit_mb / 1024.0
+    # 整合包按 Mod 数量给一个基于总内存的下限，避免当前可用内存偏低时
+    # 只分到 5G 左右，游戏加载到一半就 OOM。-Xmx 是上限，不会立刻占满。
+    if modable:
+        mods = max(0, int(mod_count))
+        desired_gb = max(6.0, 5.5 + mods / 40.0)
+        floor_gb = max(0.5, min(desired_gb, max(0.5, total_gb - 4.0)))
+        give_gb = max(give_gb, floor_gb)
+    elif optifine:
+        give_gb = max(give_gb, min(4.0, max(0.5, total_gb - 4.0)))
+    give_gb = min(give_gb, safe_limit_gb, max(0.5, total_gb - 0.5), 20.0)
     mb = min(int(round(give_gb * 1024)), safe_limit_mb)
     return max(512, mb)
 
