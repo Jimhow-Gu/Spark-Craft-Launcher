@@ -507,16 +507,27 @@ class AuthManager:
             raise AuthError('因为网络问题导致验证登录失败！', 'network')
         raise AuthError(f'微软登录超时，请重试。{last_error}')
 
-    def complete_device_login(self, token_data: dict) -> dict:
+    def complete_device_login(self, token_data: dict, progress_cb=None) -> dict:
         from minecraft_launcher_lib import microsoft_account as msa
         access_token = token_data.get('access_token', '')
         refresh_token = token_data.get('refresh_token', '')
         if not access_token:
             raise AuthError('微软登录未返回访问令牌')
+
+        def report(value):
+            if progress_cb is not None:
+                try:
+                    progress_cb(int(value))
+                except Exception:
+                    pass
+
+        # 设备码授权完成后的真实登录阶段：25 → 40 → 55 → 70 → 85 → 成功。
+        report(25)
         xbl = msa.authenticate_with_xbl(access_token)
         xbl_token = xbl.get('Token')
         if not xbl_token:
             raise AuthError('Xbox Live 认证失败，请确认账号状态')
+        report(40)
         xsts = msa.authenticate_with_xsts(xbl_token)
         xsts_token = xsts.get('Token')
         userhash = ''
@@ -526,15 +537,18 @@ class AuthManager:
             pass
         if not xsts_token or not userhash:
             raise AuthError('Xbox Live 安全令牌获取失败，请确认账号已创建 Xbox 档案')
+        report(55)
         mc_auth = msa.authenticate_with_minecraft(userhash, xsts_token)
         mc_token = mc_auth.get('access_token')
         if not mc_token:
             raise AuthError('该正版账号未拥有 Minecraft，或未完成 Xbox 档案创建', 'no_game')
+        report(70)
         profile = msa.get_profile(mc_token)
         if not isinstance(profile, dict) or profile.get('error'):
             if isinstance(profile, dict) and profile.get('error') == 'NOT_FOUND':
                 raise AuthError('该正版账号未拥有 Minecraft', 'no_game')
             raise AuthError('获取 Minecraft 档案失败，请稍后重试', 'general')
+        report(85)
         info = self._microsoft_account_info({'id': profile.get('id', ''), 'name': profile.get('name', 'Steve'), 'access_token': mc_token, 'refresh_token': refresh_token})
         self.config.set('login_type', 'microsoft')
         self.config.set('microsoft_account', info)
@@ -1105,6 +1119,7 @@ class MicrosoftSilentLoginWorker(QThread):
 class MicrosoftDeviceLoginWorker(QThread):
     code_ready = Signal(str, str)
     status_changed = Signal(str)
+    progress = Signal(int)
     success = Signal(dict)
     error = Signal(str, str)
     def __init__(self):
@@ -1130,8 +1145,10 @@ class MicrosoftDeviceLoginWorker(QThread):
             token_data = auth.poll_device_flow(data['device_code'], interval, expires_in, status_cb=self.status_changed.emit, cancel_cb=(lambda: self._cancelled))
             if self._cancelled:
                 return
-            self.status_changed.emit('正在验证 Xbox / Minecraft 账号...')
-            account = auth.complete_device_login(token_data)
+            self.status_changed.emit('账户已授权，正在验证 Xbox / Minecraft 账号...')
+            account = auth.complete_device_login(
+                token_data, progress_cb=self.progress.emit
+            )
             if not self._cancelled:
                 self.success.emit(account)
             return

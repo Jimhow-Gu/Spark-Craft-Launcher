@@ -90,7 +90,7 @@ class AccountCard(QFrame):
 
     def set_account(
         self, name, mode, urls=None, skin_path=None, head_path=None,
-        avatar_cache=None, mode_kind='offline',
+        avatar_cache=None, mode_kind='offline', avatar_source=None,
     ):
         self.name_label.setText(name or '未登录')
         self._mode_text = str(mode or '')
@@ -100,6 +100,10 @@ class AccountCard(QFrame):
         if not self._compact:
             self.mode_label.setVisible(bool(self._mode_text))
             self.mode_icon.setVisible(bool(self._mode_text))
+        if avatar_source is not None and not avatar_source.isNull():
+            # 与账户页使用同一个皮肤源，避免两侧分别走缓存/网络后头像样式不同。
+            self.avatar.set_head_source(avatar_source)
+            return
         if head_path:
             self.avatar.set_head_file(head_path)
             return

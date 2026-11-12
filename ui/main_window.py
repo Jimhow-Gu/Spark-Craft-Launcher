@@ -1237,9 +1237,14 @@ class MainWindow(QMainWindow):
                 avatar_cache = scl_dir() / 'icon_cache' / f'{login_type}_avatar_{key}.png'
         except Exception:
             avatar_cache = None
+        avatar_source = None
+        try:
+            avatar_source = self.account_page.current_avatar_source()
+        except Exception:
+            avatar_source = None
         self.account_card.set_account(
             name or '未登录', mode, urls, skin_path, head_path, avatar_cache,
-            mode_kind=mode_kind,
+            mode_kind=mode_kind, avatar_source=avatar_source,
         )
 
     def _on_version_selected(self, version_id):

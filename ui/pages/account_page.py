@@ -313,6 +313,7 @@ class AvatarLabel(QLabel):
     all_failed = Signal()
     clicked = Signal()
     context_menu_requested = Signal(QPoint)
+    source_changed = Signal()
     def __init__(self, parent=None, size=96, radius=12):
         super().__init__(parent)
         self._size = int(size)
@@ -345,8 +346,17 @@ class AvatarLabel(QLabel):
         return IMAGE_PLACEHOLDER_LIGHT if self._light else IMAGE_PLACEHOLDER_DARK
 
     def _update_placeholder_style(self):
-        if self._showing_person or self._showing_head:
+        if self._showing_person:
             self.setStyleSheet('border-radius: 0px; background: transparent;')
+            return
+        if self._showing_head:
+            # 所有尺寸共用同一层半透明底，侧栏和账户卡不会再一个带边框、
+            # 一个像直接贴在卡片上。
+            tint = '255,255,255' if not self._light else '18,24,24'
+            self.setStyleSheet(
+                f'border-radius: {self._radius}px;'
+                f' background: rgba({tint},0.045);'
+            )
             return
         self.setStyleSheet(
             f'border-radius: {self._radius}px; background: {self._placeholder_color()};'
@@ -395,6 +405,15 @@ class AvatarLabel(QLabel):
             self.setCursor(Qt.ArrowCursor)
             self.setToolTip('')
 
+    def set_head_source(self, pixmap):
+        """用与账户页完全相同的皮肤源渲染，保证侧栏和账户卡头像一致。"""
+        self._set_3d_head(pixmap)
+
+    def head_source(self):
+        if self._showing_head and self._head_source is not None:
+            return self._head_source
+        return None
+
     def _apply_head_pixmap(self, pixmap):
         if pixmap is None or pixmap.isNull():
             return
@@ -434,6 +453,7 @@ class AvatarLabel(QLabel):
         else:
             self.setCursor(Qt.ArrowCursor)
             self.setToolTip('')
+        self.source_changed.emit()
 
     def enterEvent(self, event):
         self._hovered = True
@@ -627,7 +647,12 @@ class AvatarLabel(QLabel):
         if fallback_head is None:
             fallback_head = Path(__file__).resolve().parent.parent / 'imgs' / 'steve_head.png'
         self._fallback_head = str(fallback_head) if fallback_head and Path(fallback_head).is_file() else ''
-        self._set_default()
+        # 网络头像加载期间先显示同一个默认头颅，而不是字母占位；
+        # 侧栏会复用这份 source，加载完成后再一起切换。
+        if self._fallback_head:
+            self.set_head_file(self._fallback_head)
+        else:
+            self._set_default()
         self._try_next_image()
 
     def _try_next_image(self):
@@ -1325,7 +1350,7 @@ class AccountPage(QWidget):
             lambda _text=None: self._update_thirdparty_tab_label()
         )
         self._ms_login_progress_timer = QTimer(self)
-        self._ms_login_progress_timer.setInterval(140)
+        self._ms_login_progress_timer.setInterval(520)
         self._ms_login_progress_timer.timeout.connect(self._tick_ms_login_progress)
         self._offline_name_timer = QTimer(self)
         self._offline_name_timer.setSingleShot(True)
@@ -1469,6 +1494,7 @@ class AccountPage(QWidget):
         self.avatar.set_skin_interactive(True)
         self.avatar.clicked.connect(self._change_skin)
         self.avatar.context_menu_requested.connect(self._show_avatar_menu)
+        self.avatar.source_changed.connect(self.account_changed.emit)
         group_layout.addWidget(self.avatar, 0, Qt.AlignHCenter)
         self.player_name_label = QLabel('未登录')
         self.player_name_label.setAlignment(Qt.AlignCenter)
@@ -2398,34 +2424,41 @@ class AccountPage(QWidget):
         except RuntimeError:
             pass
 
-    def _begin_ms_login_progress(self, value=3):
+    def _begin_ms_login_progress(self, value=5, animate=False):
         self._ms_login_progress_value = max(0, min(99, int(value)))
         try:
             self.ms_saved_login_btn.setEnabled(False)
             self.ms_saved_login_btn.setText(f'{self._ms_login_progress_value}%')
         except RuntimeError:
             pass
-        self._ms_login_progress_timer.start()
+        if animate:
+            self._ms_login_progress_timer.start()
+        else:
+            self._ms_login_progress_timer.stop()
 
     def _tick_ms_login_progress(self):
-        if self._ms_login_progress_value >= 95:
+        # 已保存账号刷新凭据没有细粒度回调，用固定阶段推进到 85% 后等待结果。
+        current = self._ms_login_progress_value
+        step = next((value for value in (25, 40, 55, 70, 85) if value > current), None)
+        if step is None:
+            self._ms_login_progress_timer.stop()
             return
-        if self._ms_login_progress_value < 40:
-            step = 3
-        elif self._ms_login_progress_value < 70:
-            step = 2
-        else:
-            step = 1
-        self._set_ms_login_progress(self._ms_login_progress_value + step)
+        self._set_ms_login_progress(step)
+        if step >= 85:
+            self._ms_login_progress_timer.stop()
 
-    def _finish_ms_login_progress(self, success=False):
+    def _finish_ms_login_progress(self, success=False, failed=False):
         self._ms_login_progress_timer.stop()
         try:
             self.ms_saved_login_btn.setEnabled(True)
             if success:
                 self._ms_login_progress_value = 100
-                self.ms_saved_login_btn.setText('100%')
-                QTimer.singleShot(500, self._reset_ms_login_button_text)
+                self.ms_saved_login_btn.setText('登录成功')
+                QTimer.singleShot(900, self._reset_ms_login_button_text)
+            elif failed:
+                self._ms_login_progress_value = 100
+                self.ms_saved_login_btn.setText('登录失败')
+                QTimer.singleShot(900, self._reset_ms_login_button_text)
             else:
                 self._ms_login_progress_value = 0
                 self.ms_saved_login_btn.setText('登录')
@@ -3475,15 +3508,39 @@ class AccountPage(QWidget):
         # 换昵称只改账号名，不重新计算/覆盖离线皮肤或正版皮肤。
         self.account_changed.emit()
 
+    def current_avatar_source(self):
+        """返回账户页当前展示的完整皮肤/头像源，供侧边栏复用。"""
+        try:
+            if self._tp_inline_switching:
+                return None
+            return self.avatar.head_source()
+        except RuntimeError:
+            return None
+
     def _refresh_offline_avatar(self, player_name: str=''):
         '''离线头像只由离线皮肤设置决定，不随昵称变化。'''
 
         try:
             from core.skin import SkinManager
-            preview = SkinManager().preview_path()
+            manager = SkinManager()
+            settings = manager.get_settings()
+            preview = manager.preview_path()
             if preview and Path(preview).is_file():
                 self.avatar.set_skin_file(preview)
                 return
+            # 正版皮肤名已填写但本地还没有缓存时，先显示同名网络头像，
+            # 同时后台下载完整皮肤；否则主界面会一直退回随机默认头。
+            if settings.get('mode') == 'premium':
+                name = str(settings.get('premium_name') or '').strip()
+                if name:
+                    head = default_head_path()
+                    self.avatar.set_image_url(
+                        [f'https://mc-heads.net/avatar/{name}/96',
+                         f'https://minotar.net/helm/{name}/96.png'],
+                        fallback_head=head if head.is_file() else None,
+                    )
+                    self._start_offline_skin_preview(settings)
+                    return
         except Exception:
             pass
         head = default_head_path()
@@ -3496,6 +3553,30 @@ class AccountPage(QWidget):
                  'https://minotar.net/helm/MHF_Steve/96.png'],
                 fallback_head=steve_head,
             )
+
+    def _start_offline_skin_preview(self, settings):
+        self._preview_generation += 1
+        generation = self._preview_generation
+        worker = SkinPreviewWorker(settings)
+        worker.done.connect(
+            lambda path, gen=generation: self._on_offline_skin_preview(gen, path)
+        )
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(
+            lambda w=worker: self._preview_workers.discard(w)
+        )
+        self._preview_workers.add(worker)
+        self._preview_worker = worker
+        worker.start()
+
+    def _on_offline_skin_preview(self, generation, path):
+        if generation != self._preview_generation:
+            return
+        if self.config.get('login_type', 'offline') != 'offline':
+            return
+        if not path or not Path(path).is_file():
+            return
+        self.avatar.set_skin_file(path)
 
     def _on_offline_login(self):
         self._close_ms_code_dialog()
@@ -3632,7 +3713,7 @@ class AccountPage(QWidget):
         if not entry or entry.get('type') == 'new':
             self._start_ms_device_flow()
             return
-        self._begin_ms_login_progress(3)
+        self._begin_ms_login_progress(5, animate=True)
         self.ms_saved_login_btn.setEnabled(False)
         self.ms_device_login_btn.setEnabled(False)
         self.ms_status_label.show()
@@ -3659,7 +3740,7 @@ class AccountPage(QWidget):
         self._refresh_microsoft_profile_async(user_initiated=True)
 
     def _on_ms_saved_login_error(self, message: str, kind: str='general'):
-        self._finish_ms_login_progress(False)
+        self._finish_ms_login_progress(False, failed=True)
         message = friendly_auth_error(message, kind)
         self.ms_status_label.show()
         self.ms_status_label.setText(message)
@@ -3879,7 +3960,7 @@ class AccountPage(QWidget):
     def _start_ms_device_flow(self):
         if self._ms_device_worker and self._ms_device_worker.isRunning():
             return
-        self._begin_ms_login_progress(5)
+        self._begin_ms_login_progress(5, animate=False)
         self.ms_device_login_btn.setEnabled(False)
         self.ms_device_code_label.hide()
         self.ms_status_label.show()
@@ -3888,6 +3969,7 @@ class AccountPage(QWidget):
         worker = MicrosoftDeviceLoginWorker()
         worker.code_ready.connect(self._on_ms_code_ready)
         worker.status_changed.connect(self._on_ms_device_status)
+        worker.progress.connect(self._on_ms_device_progress)
         worker.success.connect(self._on_ms_device_success)
         worker.error.connect(self._on_ms_device_error)
         worker.finished.connect((lambda w=worker: self._on_ms_device_worker_done(w)))
@@ -3923,7 +4005,7 @@ class AccountPage(QWidget):
         self._ms_device_uri = uri
         self.ms_device_code_label.setText(user_code)
         self.ms_device_code_label.show()
-        self._set_ms_login_progress(25)
+        self._set_ms_login_progress(5)
         QApplication.clipboard().setText(user_code)
         self.ms_status_label.setText('登录代码已复制，请在弹窗中点击「确定」或「复制」打开网页')
         if self._ms_code_dialog is not None:
@@ -3946,13 +4028,25 @@ class AccountPage(QWidget):
                 pass
 
     def _on_ms_device_status(self, text):
+        # 网页授权阶段始终停在 5%；授权完成后由真实登录阶段推进进度。
         self.ms_status_label.setText(text)
-        if '获取' in text:
-            self._set_ms_login_progress(8)
-        elif '浏览器' in text or '代码' in text:
-            self._set_ms_login_progress(25)
-        elif '验证' in text or 'Xbox' in text:
-            self._set_ms_login_progress(82)
+
+    def _on_ms_device_progress(self, value):
+        self._ms_login_progress_timer.stop()
+        self._set_ms_login_progress(value)
+        messages = {
+            25: '账户已授权，正在验证 Xbox Live 账号...',
+            40: '正在获取 Xbox 安全令牌...',
+            55: '正在验证 Minecraft 账号...',
+            70: '正在获取玩家档案...',
+            85: '正在加载皮肤与账号信息...',
+        }
+        text = messages.get(int(value))
+        if text:
+            self.ms_status_label.setText(text)
+            self.ms_status_label.setStyleSheet(
+                'color: rgba(255,255,255,0.6); font-size:13px;'
+            )
 
     def _on_ms_device_success(self, account):
         self.ms_device_login_btn.setEnabled(True)
@@ -3963,7 +4057,7 @@ class AccountPage(QWidget):
         self._refresh_microsoft_profile_async(user_initiated=False)
 
     def _on_ms_device_error(self, message, kind='general'):
-        self._finish_ms_login_progress(False)
+        self._finish_ms_login_progress(False, failed=True)
         message = friendly_auth_error(message, kind)
         self.ms_device_login_btn.setEnabled(True)
         self.ms_saved_login_btn.setEnabled(True)

@@ -1,5 +1,6 @@
 '''高级启动选项面板（全局设置 / 版本设置共用）'''
 
+import re
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
@@ -49,6 +50,21 @@ class AdvancedOptionsPanel(QWidget):
         self.pre_edit.setStyleSheet(self._line_style())
         self.pre_edit.editingFinished.connect(self._save_pre)
         layout.addWidget(self.pre_edit)
+        if self._show_java:
+            ms_row = QHBoxLayout()
+            ms_row.addWidget(self._label('微软登录应用 ID'))
+            self.ms_client_edit = QLineEdit()
+            self.ms_client_edit.setPlaceholderText('留空使用内置应用 ID')
+            self.ms_client_edit.setToolTip(
+                '微软网页授权页显示的应用名称和 Logo 由 Microsoft Entra '
+                '应用注册决定；要显示 Spark Craft Launcher，需要填写该应用的客户端 ID。'
+            )
+            self.ms_client_edit.setStyleSheet(self._line_style())
+            self.ms_client_edit.editingFinished.connect(self._save_ms_client)
+            ms_row.addWidget(self.ms_client_edit, 1)
+            layout.addLayout(ms_row)
+        else:
+            self.ms_client_edit = None
         if self._show_java:
             java_row = QHBoxLayout()
             java_row.addWidget(self._label('Java 列表'))
@@ -102,6 +118,10 @@ class AdvancedOptionsPanel(QWidget):
         self.jvm_edit.setPlainText(str(self._getter('jvm_args', DEFAULT_JVM_ARGS) or DEFAULT_JVM_ARGS))
         self.game_edit.setText(str(self._getter('game_args', '') or ''))
         self.pre_edit.setText(str(self._getter('pre_launch_command', '') or ''))
+        if self.ms_client_edit is not None:
+            self.ms_client_edit.setText(
+                str(self._getter('microsoft_client_id', '') or '')
+            )
         gc = str(self._getter('memory_gc', 'auto') or 'auto')
         idx = self.gc_combo.findData(gc)
         self.gc_combo.setCurrentIndex(idx if idx >= 0 else self.gc_combo.findData('auto'))
@@ -166,6 +186,18 @@ class AdvancedOptionsPanel(QWidget):
 
     def _save_pre(self):
         self._set('pre_launch_command', self.pre_edit.text().strip())
+
+    def _save_ms_client(self):
+        if self.ms_client_edit is None:
+            return
+        value = self.ms_client_edit.text().strip()
+        if value and not re.fullmatch(
+            r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
+            r'[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', value
+        ):
+            self.ms_client_edit.setText(str(self._getter('microsoft_client_id', '') or ''))
+            return
+        self._set('microsoft_client_id', value)
 
     def _save_gc(self):
         self._set('memory_gc', self.gc_combo.currentData() or 'auto')

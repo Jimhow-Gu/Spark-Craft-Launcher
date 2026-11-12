@@ -30,6 +30,30 @@ def _has_pixels(pixmap: QPixmap) -> bool:
     return False
 
 
+def _hat_overlay(pixmap: QPixmap, scale: int) -> QPixmap:
+    """返回有实际细节的帽子层；全透明或与脸完全相同的覆盖层不参与渲染。"""
+
+    base = _face(pixmap, 8, 8, scale)
+    hat = _face(pixmap, 40, 8, scale)
+    if not _has_pixels(hat):
+        return None
+    base_image = base.toImage()
+    hat_image = hat.toImage()
+    transparent = 0
+    differs = 0
+    for y in range(8):
+        for x in range(8):
+            hat_px = hat_image.pixelColor(x, y)
+            if hat_px.alpha() <= 8:
+                transparent += 1
+                continue
+            if hat_px.rgba() != base_image.pixelColor(x, y).rgba():
+                differs += 1
+    if not transparent and not differs:
+        return None
+    return hat
+
+
 def _shadow(source: QPixmap, size: int, pad: int, light: bool,
             strong: bool=False) -> QImage:
     '''把 alpha 缩小再放大，生成一次性的柔和阴影。'''
@@ -76,9 +100,7 @@ def render_head(pixmap: QPixmap, logical_size: int, dpr: float = 1.0,
         scale = max(1, int(round(pixmap.width() / 64.0)))
         base = _face(pixmap, 8, 8, scale)
         if pixmap.height() >= 16 * scale:
-            hat = _face(pixmap, 40, 8, scale)
-            if _has_pixels(hat):
-                overlay = hat
+            overlay = _hat_overlay(pixmap, scale)
     else:
         overlay = pixmap
 
@@ -88,7 +110,9 @@ def render_head(pixmap: QPixmap, logical_size: int, dpr: float = 1.0,
     elif overlay is not None:
         base_ratio, over_ratio = 0.0, 0.875
     else:
-        base_ratio, over_ratio = 0.875, 0.0
+        # PCL 的 ImgBack 固定为 48/64；没有帽子层时保留完整脸和边距，
+        # 不再放大到 87.5%，否则会变成贴边的平面大方块。
+        base_ratio, over_ratio = 0.75, 0.0
 
     def scaled(pix, ratio):
         px = max(4, int(round(physical * ratio)))
@@ -107,7 +131,7 @@ def render_head(pixmap: QPixmap, logical_size: int, dpr: float = 1.0,
     if shadow_source is not None:
         shadow_size = over_px if over_pix is not None else base_px
         max_pad = max(1, (physical - shadow_size) // 2 - 1)
-        desired = 0.09 if strong_shadow else 0.065
+        desired = 0.13 if strong_shadow else 0.10
         pad = min(max_pad, max(1, int(round(shadow_size * desired))))
         soft = _shadow(shadow_source, shadow_size, pad, light, strong_shadow)
         painter.drawImage(
