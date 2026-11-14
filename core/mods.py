@@ -1,7 +1,7 @@
 '''
 模组/整合包/资源包/光影包/数据包数据源
 - Modrinth（默认，无需 API Key）
-- CurseForge（官方构建已内置 API Key）
+- CurseForge（需要用户自填 API Key，避免共享 Key 被提取）
 所有网络请求都在调用线程内同步执行，由 QThread Worker 调用；每个 Worker 使用独立 HttpClient。
 '''
 
@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import (Any, Dict, List, Optional, Tuple)
 from urllib.parse import quote
 from core.config import ConfigManager
-from core.curseforge_builtin import builtin_curseforge_key
 from core.net import DownloadError, HttpClient
 from core.paths import scl_dir
 MODRINTH_API = 'https://api.modrinth.com/v2'
@@ -419,8 +418,11 @@ class CurseForgeSource(BaseSource):
     name = 'CurseForge'
     def __init__(self):
         cfg = ConfigManager()
-        # 官方构建使用固定内置 Key；不再接受环境变量或配置文件覆盖。
-        self.api_key = builtin_curseforge_key()
+        # CurseForge 的共享 Key 无法在客户端隐藏，改为用户自填/环境变量。
+        self.api_key = (
+            os.environ.get('CURSEFORGE_API_KEY', '').strip()
+            or str(cfg.get('curseforge_api_key', '') or '').strip()
+        )
         base = (os.environ.get('CURSEFORGE_API_BASE', '').strip() or str(cfg.get('curseforge_api_base', '') or '').strip() or CURSEFORGE_API).rstrip('/')
         self.api_base = base
         self.mirror_base = 'https://mod.mcimirror.top/curseforge/v1'
@@ -435,7 +437,7 @@ class CurseForgeSource(BaseSource):
 
     def _check(self):
         if self.api_base == CURSEFORGE_API and not self.api_key:
-            raise SourceUnavailable('CurseForge 需要 API Key。请到 https://console.curseforge.com/ 申请后，在“全局设置 → 模组下载源”中填写。')
+            raise SourceUnavailable('CurseForge 需要 API Key。请到 https://console.curseforge.com/ 申请后，在“设置 → 高级选项 → CurseForge API Key”中填写。')
 
     def search(self, query, project_type, mc_version='', loader='', category='', sort='relevance', offset=0, limit=20):
         self._check()

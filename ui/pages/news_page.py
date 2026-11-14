@@ -805,7 +805,7 @@ class NewsPage(QWidget):
             pass
         reply = self._image_manager.get(request)
         try:
-            if not bool(ConfigManager().get('verify_ssl', False)):
+            if not bool(ConfigManager().get('verify_ssl', True)):
                 reply.sslErrors.connect(lambda _errors, r=reply: r.ignoreSslErrors())
         except Exception:
             pass
@@ -1057,7 +1057,7 @@ class NewsPage(QWidget):
             pass
         reply = self._image_manager.get(request)
         try:
-            if not bool(ConfigManager().get('verify_ssl', False)):
+            if not bool(ConfigManager().get('verify_ssl', True)):
                 reply.sslErrors.connect(lambda _errors, r=reply: r.ignoreSslErrors())
         except Exception:
             pass

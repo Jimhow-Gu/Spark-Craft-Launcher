@@ -1397,6 +1397,23 @@ class MainWindow(QMainWindow):
             return
         QTimer.singleShot(0, lambda w=widget: manager.style_widget_tree(w))
 
+    def _ensure_page_fade_overlay(self):
+        if self._page_fade_overlay is not None:
+            return
+        overlay = QWidget(self.page_stack)
+        overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        overlay.setAttribute(Qt.WA_StyledBackground, True)
+        overlay.setStyleSheet('background: rgba(18,23,23,225);')
+        overlay.hide()
+        effect = QGraphicsOpacityEffect(overlay)
+        overlay.setGraphicsEffect(effect)
+        anim = QPropertyAnimation(effect, b'opacity', self)
+        anim.setDuration(180)
+        anim.setEasingCurve(QEasingCurve.OutCubic)
+        anim.finished.connect(overlay.hide)
+        self._page_fade_overlay = overlay
+        self._page_animation = anim
+
     def _animate_page_change(self, index: int):
         '''页面切换时用暗色遮罩淡出，避免页面半透明时透出背景视频。'''
 
@@ -1404,42 +1421,20 @@ class MainWindow(QMainWindow):
             return
         if self.page_stack.widget(index) is None:
             return
-        if self._page_animation is not None:
-            try:
-                self._page_animation.stop()
-            except RuntimeError:
-                pass
-        if self._page_fade_overlay is not None:
-            try:
-                self._page_fade_overlay.deleteLater()
-            except RuntimeError:
-                pass
-            self._page_fade_overlay = None
-        overlay = QWidget(self.page_stack)
-        overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        overlay.setAttribute(Qt.WA_StyledBackground, True)
-        overlay.setStyleSheet('background: rgba(18,23,23,225);')
+        self._ensure_page_fade_overlay()
+        overlay = self._page_fade_overlay
+        anim = self._page_animation
+        if overlay is None or anim is None:
+            return
         overlay.setGeometry(self.page_stack.rect())
         overlay.show()
         overlay.raise_()
-        effect = QGraphicsOpacityEffect(overlay)
-        overlay.setGraphicsEffect(effect)
-        anim = QPropertyAnimation(effect, b'opacity', overlay)
-        anim.setDuration(180)
+        effect = overlay.graphicsEffect()
+        if effect is not None:
+            effect.setOpacity(1.0)
+        anim.stop()
         anim.setStartValue(1.0)
         anim.setEndValue(0.0)
-        anim.setEasingCurve(QEasingCurve.OutCubic)
-        def finish():
-            if self._page_fade_overlay is overlay:
-                self._page_fade_overlay = None
-            try:
-                overlay.deleteLater()
-            except RuntimeError:
-                pass
-
-        anim.finished.connect(finish)
-        self._page_animation = anim
-        self._page_fade_overlay = overlay
         anim.start()
 
     def _switch_page(self, index):
@@ -1814,6 +1809,22 @@ class MainWindow(QMainWindow):
             pass
         self._quit_for_update(asset_path, version)
 
+    def _flush_exit_state(self):
+        try:
+            from core.config import ConfigManager
+            ConfigManager().save()
+        except Exception:
+            pass
+        try:
+            import logging
+            for handler in logging.getLogger().handlers:
+                try:
+                    handler.flush()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def _quit_for_update(self, asset_path='', version=''):
         '''优先在当前进程内替换 exe 并启动新版本，失败时回退到外部更新脚本。'''
 
@@ -1828,6 +1839,7 @@ class MainWindow(QMainWindow):
                 from core.update import apply_update_inplace
                 if apply_update_inplace(asset_path, version):
                     # 新进程已经创建；立即退出，避免旧进程继续占用 exe / 单实例锁。
+                    self._flush_exit_state()
                     os._exit(0)
             except Exception as exc:
                 self._update_prepare_error = str(exc)
@@ -1853,8 +1865,9 @@ class MainWindow(QMainWindow):
                     pass
                 QMessageBox.critical(self, '更新失败', f'无法启动更新程序：{exc}')
                 return False
-        # 外部更新脚本正在等待本进程退出；直接结束进程，
-        # 避免 Qt 事件循环退出后仍有线程让窗口残留、看似“没有重启”。
+        # 外部更新脚本正在等待本进程退出；先落盘再结束进程，
+        # 避免配置/日志缓冲被 os._exit 截断。
+        self._flush_exit_state()
         os._exit(0)
 
     def closeEvent(self, event):
@@ -1889,8 +1902,28 @@ class MainWindow(QMainWindow):
                 pass
             from core.single_instance import release_single_instance
             release_single_instance()
+            try:
+                from core.java_scan import JavaScanService
+                JavaScanService.instance().shutdown()
+            except Exception:
+                pass
+            checker = self._update_checker
+            if checker is not None:
+                try:
+                    if checker.isRunning():
+                        if not checker.wait(2500):
+                            checker.terminate()
+                            checker.wait(300)
+                except RuntimeError:
+                    pass
+                self._update_checker = None
             import threading
-            timer = threading.Timer(1.0, lambda: os._exit(0))
+            # 给各页面 worker 留出 quit/wait 的时间；1 秒会抢在
+            # account_page 的 5 秒等待之前 os._exit，导致线程被销毁告警。
+            def _force_exit():
+                self._flush_exit_state()
+                os._exit(0)
+            timer = threading.Timer(15.0, _force_exit)
             timer.daemon = True
             timer.start()
             if self.version_page:

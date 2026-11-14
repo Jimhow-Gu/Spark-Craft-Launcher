@@ -671,7 +671,7 @@ class AvatarLabel(QLabel):
         except Exception:
             pass
         reply = self._manager.get(req)
-        if not bool(self.config().get('verify_ssl', False)):
+        if not bool(self.config().get('verify_ssl', True)):
             reply.sslErrors.connect(
                 lambda _errors, r=reply: r.ignoreSslErrors()
             )
@@ -752,7 +752,7 @@ class SavedAccountIconLoader(QObject):
         except Exception:
             pass
         reply = self._manager.get(req)
-        if not bool(ConfigManager().get('verify_ssl', False)):
+        if not bool(ConfigManager().get('verify_ssl', True)):
             reply.sslErrors.connect(
                 lambda _errors, r=reply: r.ignoreSslErrors()
             )

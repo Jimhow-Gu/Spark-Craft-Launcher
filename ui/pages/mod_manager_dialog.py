@@ -284,7 +284,7 @@ class ModUpdateDownloadWorker(QThread):
 
     def run(self):
         # 单个文件超时过长会让用户误以为卡死；30 秒无数据就切换下一个源。
-        http = HttpClient(timeout=30, retries=1, verify=False)
+        http = HttpClient(timeout=30, retries=1)
         updated = 0
         errors = []
         total_items = max(1, len(self.items))

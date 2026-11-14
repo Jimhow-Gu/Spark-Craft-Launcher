@@ -263,6 +263,8 @@ class VersionManager:
                 except (OSError, ValueError):
                     continue
                 else:
+                    if not isinstance(data, dict):
+                        continue
                     parent = str(data.get('inheritsFrom') or '')
                     if parent:
                         if parent in seen:
@@ -302,6 +304,8 @@ class VersionManager:
                     try:
                         with open(expected_json, encoding='utf-8') as f:
                             data = json.load(f)
+                        if not isinstance(data, dict):
+                            continue
                         loader = detect_version_loader(ver_dir.name, data, ver_dir)
                         if not loader:
                             hint = f"{data.get('inheritsFrom') or ''} {data.get('jar') or ''}".lower()
@@ -720,7 +724,7 @@ class VersionManager:
             candidates = download_candidates(download_url)
         except Exception:
             candidates = [download_url]
-        http = HttpClient(timeout=30, retries=1, verify=False)
+        http = HttpClient(timeout=30, retries=1)
         try:
             for url in dict.fromkeys(candidates):
                 if cancel():
@@ -1321,6 +1325,8 @@ class FullInstallWorker(QThread):
         try:
             with open(json_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
+            if not isinstance(data, dict):
+                return False
             changed = False
             if data.get('id') != expected_id:
                 data['id'] = expected_id

@@ -821,21 +821,31 @@ class LaunchManager:
         self.config.save()
 
     def _format_mem(self, mem_str):
-        mem_str = mem_str.strip().upper()
-        match = re.match('^([\\d.]+)([GMK]?)$', mem_str)
+        text = str(mem_str or '').strip().upper()
+        match = re.match('^([\d.]+)([GMK]?)$', text)
         if not match:
             return '2G'
         value, unit = match.groups()
         try:
-            if '.' in value:
-                int_val = int(float(value))
-            else:
-                int_val = int(value)
-        except:
-            int_val = 2
-        if not unit:
-            unit = 'G'
-        return f'{int_val}{unit}'
+            amount = float(value)
+        except (TypeError, ValueError):
+            amount = 2.0
+        if amount <= 0:
+            return '2G'
+        if unit == 'G':
+            mb = amount * 1024
+        elif unit == 'K':
+            mb = amount / 1024
+        elif unit == 'M':
+            mb = amount
+        else:
+            mb = amount * 1024
+        if mb < 512:
+            return '512M'
+        gb = mb / 1024
+        if gb == int(gb):
+            return f'{int(gb)}G'
+        return f'{int(round(mb))}M'
 
     def _resolve_version_id(self, version_id, mc_dir):
         versions_path = Path(mc_dir) / 'versions'

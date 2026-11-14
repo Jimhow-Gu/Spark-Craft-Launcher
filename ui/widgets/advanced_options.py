@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPlainTextEdit, QLineEdit, QComboBox, QCheckBox, QPushButton)
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPlainTextEdit, QLineEdit, QComboBox, QCheckBox, QPushButton, QMessageBox)
 from ui.widgets.themed_checkbox import ThemedCheckBox
 from core.jvm import DEFAULT_JVM_ARGS, MEMORY_GC_OPTIONS
 from core.launch import (
@@ -63,8 +63,22 @@ class AdvancedOptionsPanel(QWidget):
             self.ms_client_edit.editingFinished.connect(self._save_ms_client)
             ms_row.addWidget(self.ms_client_edit, 1)
             layout.addLayout(ms_row)
+            cf_row = QHBoxLayout()
+            cf_row.addWidget(self._label('CurseForge API Key'))
+            self.cf_key_edit = QLineEdit()
+            self.cf_key_edit.setEchoMode(QLineEdit.Password)
+            self.cf_key_edit.setPlaceholderText('可选；从 CurseForge 控制台申请')
+            self.cf_key_edit.setToolTip(
+                '共享 Key 会随 exe 被提取，因此不再内置。填写自己的 Key 后'
+                ' CurseForge 搜索与下载才可用。'
+            )
+            self.cf_key_edit.setStyleSheet(self._line_style())
+            self.cf_key_edit.editingFinished.connect(self._save_cf_key)
+            cf_row.addWidget(self.cf_key_edit, 1)
+            layout.addLayout(cf_row)
         else:
             self.ms_client_edit = None
+            self.cf_key_edit = None
         if self._show_java:
             java_row = QHBoxLayout()
             java_row.addWidget(self._label('Java 列表'))
@@ -93,7 +107,8 @@ class AdvancedOptionsPanel(QWidget):
         self.wrapper_check = ThemedCheckBox('禁用 Java Launch Wrapper')
         self.lwjgl_check = ThemedCheckBox('禁用 LWJGL Unsafe Agent')
         self.gpu_check = ThemedCheckBox('使用高性能显卡')
-        self.ssl_check = ThemedCheckBox('在正版登录时验证 SSL 证书')
+        self.ssl_check = ThemedCheckBox('验证 HTTPS 证书（推荐）')
+        self.ssl_check.setToolTip('关闭后允许自签/伪造证书，下载的文件可能被中间人替换，强烈不建议关闭。')
         for box in self.mod_update_check, self.file_verify_check, self.wrapper_check, self.lwjgl_check, self.gpu_check, self.ssl_check:
             layout.addWidget(box)
         self.mod_update_check.toggled.connect((lambda v: self._set('disable_mod_update', v)))
@@ -101,7 +116,7 @@ class AdvancedOptionsPanel(QWidget):
         self.wrapper_check.toggled.connect((lambda v: self._set('disable_java_launch_wrapper', v)))
         self.lwjgl_check.toggled.connect((lambda v: self._set('disable_lwjgl_unsafe_agent', v)))
         self.gpu_check.toggled.connect((lambda v: self._set('use_high_performance_gpu', v)))
-        self.ssl_check.toggled.connect((lambda v: self._set('verify_ssl', v)))
+        self.ssl_check.toggled.connect(self._on_ssl_toggled)
 
     @staticmethod
     def _label(text):
@@ -122,6 +137,10 @@ class AdvancedOptionsPanel(QWidget):
             self.ms_client_edit.setText(
                 str(self._getter('microsoft_client_id', '') or '')
             )
+        if self.cf_key_edit is not None:
+            self.cf_key_edit.setText(
+                str(self._getter('curseforge_api_key', '') or '')
+            )
         gc = str(self._getter('memory_gc', 'auto') or 'auto')
         idx = self.gc_combo.findData(gc)
         self.gc_combo.setCurrentIndex(idx if idx >= 0 else self.gc_combo.findData('auto'))
@@ -130,7 +149,7 @@ class AdvancedOptionsPanel(QWidget):
         self.wrapper_check.setChecked(bool(self._getter('disable_java_launch_wrapper', False)))
         self.lwjgl_check.setChecked(bool(self._getter('disable_lwjgl_unsafe_agent', False)))
         self.gpu_check.setChecked(bool(self._getter('use_high_performance_gpu', True)))
-        self.ssl_check.setChecked(bool(self._getter('verify_ssl', False)))
+        self.ssl_check.setChecked(bool(self._getter('verify_ssl', True)))
         self._loading = False
         if self._show_java and self.java_combo is not None:
             self._reload_java()
@@ -178,6 +197,25 @@ class AdvancedOptionsPanel(QWidget):
             return
         self._setter(key, value)
 
+    def _on_ssl_toggled(self, checked):
+        if self._loading:
+            return
+        if not checked:
+            answer = QMessageBox.warning(
+                self,
+                '关闭 HTTPS 证书校验',
+                '关闭后启动器将接受自签或伪造证书，下载的 Mod、整合包和游戏文件'
+                '可能被中间人替换并执行。\n\n确定要关闭吗？',
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                self._loading = True
+                self.ssl_check.setChecked(True)
+                self._loading = False
+                return
+        self._set('verify_ssl', checked)
+
     def _save_jvm(self):
         self._set('jvm_args', self.jvm_edit.toPlainText().strip())
 
@@ -186,6 +224,11 @@ class AdvancedOptionsPanel(QWidget):
 
     def _save_pre(self):
         self._set('pre_launch_command', self.pre_edit.text().strip())
+
+    def _save_cf_key(self):
+        if self.cf_key_edit is None:
+            return
+        self._set('curseforge_api_key', self.cf_key_edit.text().strip())
 
     def _save_ms_client(self):
         if self.ms_client_edit is None:

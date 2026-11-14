@@ -421,7 +421,7 @@ class AboutPage(QWidget):
         reply = self._net.get(request)
         try:
             from core.config import ConfigManager
-            if not bool(ConfigManager().get('verify_ssl', False)):
+            if not bool(ConfigManager().get('verify_ssl', True)):
                 reply.sslErrors.connect(
                     lambda _errors, r=reply: r.ignoreSslErrors()
                 )

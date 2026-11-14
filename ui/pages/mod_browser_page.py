@@ -300,7 +300,7 @@ class DownloadWorker(QThread):
         self._cancelled = True
 
     def run(self):
-        http = HttpClient(timeout=15, retries=1, verify=False)
+        http = HttpClient(timeout=15, retries=1)
         last_error = None
         try:
             for url in self.urls:
@@ -447,7 +447,7 @@ class IconLoader(QObject):
                 pass
             reply = self._manager.get(req)
             try:
-                if not bool(ConfigManager().get('verify_ssl', False)):
+                if not bool(ConfigManager().get('verify_ssl', True)):
                     reply.sslErrors.connect(
                         lambda _errors, r=reply: r.ignoreSslErrors()
                     )
@@ -494,7 +494,7 @@ class IconLoader(QObject):
     def _fetch_fallback(self, url):
         data = b''
         try:
-            http = HttpClient(timeout=8, retries=1, verify=False)
+            http = HttpClient(timeout=8, retries=1)
             try:
                 response = http.get(url)
                 if response.status_code < 400:
@@ -2097,14 +2097,12 @@ class ModBrowserPage(QWidget):
             reason = str(message or '').strip() or '获取搜索结果失败'
         self._render_token += 1
         self.results_list.setUpdatesEnabled(True)
-        self.results_list.clear()
-        self._cards.clear()
+        self._clear_results()
         self.status_label.setText('')
         self.loading_overlay.fail(reason)
 
     def _show_offline_placeholder(self):
-        self.results_list.clear()
-        self._cards.clear()
+        self._clear_results()
         item = QListWidgetItem()
         item.setFlags(Qt.NoItemFlags)
         item.setSizeHint(QSize(100, 120))
@@ -2115,6 +2113,21 @@ class ModBrowserPage(QWidget):
         self.results_list.setItemWidget(item, label)
         self.status_label.setText('未连接到互联网')
         self.status_label.setStyleSheet('color:rgba(255,255,255,0.5); font-size:12px;')
+
+    def _clear_results(self):
+        """显式销毁 QListWidgetItem 的 itemWidget，避免切页/刷新时卡片漂在 viewport 上。"""
+        for index in range(self.results_list.count() - 1, -1, -1):
+            item = self.results_list.item(index)
+            if item is None:
+                continue
+            widget = self.results_list.itemWidget(item)
+            if widget is not None:
+                self.results_list.removeItemWidget(item)
+                widget.setParent(None)
+                widget.deleteLater()
+            self.results_list.takeItem(index)
+        self.results_list.clear()
+        self._cards.clear()
 
     def _render_current(self):
         if not self._cards:
@@ -2143,8 +2156,7 @@ class ModBrowserPage(QWidget):
     def _render_projects(self, projects):
         self._render_token += 1
         token = self._render_token
-        self.results_list.clear()
-        self._cards.clear()
+        self._clear_results()
         # 数据已经返回，立即撤掉居中加载卡片。列表卡片会分帧插入，
         # 不能等全部插完再隐藏遮罩，否则会出现“列表已经显示，加载卡片
         # 还盖在中间”的情况。
@@ -2297,8 +2309,7 @@ class ModBrowserPage(QWidget):
     def _show_loading(self, text='正在加载...'):
         self._render_token += 1
         self.results_list.setUpdatesEnabled(True)
-        self.results_list.clear()
-        self._cards.clear()
+        self._clear_results()
         self.status_label.setText('')
         self.loading_overlay.start_auto('正在加载搜索结果')
 

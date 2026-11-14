@@ -22,7 +22,7 @@ from core.paths import safe_rmtree, scl_dir
 CURRENT_VERSION = '1.11.4'
 VERSION_DISPLAY = 'V1.11.4（正式版）'
 # DLL 构建号在同一版本内递增；每次发布新大版本时重置为 1。
-EXECUTABLE_BUILD = '25'
+EXECUTABLE_BUILD = '26'
 REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
 API_KGGITHUB = f'https://api.kkgithub.com/repos/{REPO}/releases/latest'
@@ -135,7 +135,7 @@ def update_kind(info, current=CURRENT_VERSION, current_dll=EXECUTABLE_BUILD):
 def _fetch_release_api(api_url, timeout, results):
     http = None
     try:
-        http = HttpClient(timeout=timeout, retries=1, verify=False)
+        http = HttpClient(timeout=timeout, retries=1)
         data = http.get_json(
             api_url,
             headers={
@@ -282,7 +282,7 @@ class UpdateDownloadWorker(QThread):
         digest = str(self.info.get('asset_digest') or '')
         sha256 = digest[7:].strip() if digest.lower().startswith('sha256:') else None
         last_error = None
-        http = HttpClient(timeout=18, retries=1, verify=False)
+        http = HttpClient(timeout=18, retries=1)
         try:
             for index, (candidate, headers) in enumerate(candidates):
                 if self._cancelled:

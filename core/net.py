@@ -224,7 +224,7 @@ class HttpClient:
     def __init__(self, timeout=20, retries=3, user_agent=USER_AGENT, verify=True):
         self.timeout = timeout
         self.retries = retries
-        # 设置页的“验证 SSL 证书”是全局开关；默认关闭以兼容机房代理。
+        # 设置页的“验证 HTTPS 证书”是全局开关；默认开启，显式关闭才绕过校验。
         if verify is True:
             try:
                 from core.config import ConfigManager
@@ -371,6 +371,9 @@ class HttpClient:
                                     raise SlowDownloadError('官方源下载速度过慢，已切换到镜像源')
                                 check_time = now
                                 check_done = done
+                if done <= 0 or (total == 0 and tmp.stat().st_size == 0):
+                    tmp.unlink(missing_ok=True)
+                    raise DownloadError('下载结果为空')
                 if not self._verify(tmp, sha1=sha1, sha256=sha256, sha512=sha512, size=size):
                     tmp.unlink(missing_ok=True)
                     raise DownloadError('文件校验失败（哈希或大小不匹配）')
@@ -406,7 +409,8 @@ class HttpClient:
                 return _hash_file(path, 'sha256') == sha256.lower()
             if sha512:
                 return _hash_file(path, 'sha512') == sha512.lower()
-            return True
+            # 没有任何期望哈希/大小时，0 字节文件不可能是有效下载结果。
+            return path.stat().st_size > 0
         except OSError:
             return False
 

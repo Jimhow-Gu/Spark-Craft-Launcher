@@ -128,7 +128,7 @@ def _clean_entry(zh, en):
 
 
 def _fetch_csv(url, timeout=20):
-    http = HttpClient(timeout=timeout, retries=1, verify=False)
+    http = HttpClient(timeout=timeout, retries=1)
     try:
         for base in ACCELERATORS + ('',):
             try:

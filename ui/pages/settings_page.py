@@ -942,16 +942,31 @@ class SettingsPage(QWidget):
         return group
 
     def _parse_mem(self, mem_str):
-        mem_str = mem_str.strip().upper()
-        if mem_str.endswith('G'):
-            return int(float(mem_str[:-1]) * 1024)
-        if mem_str.endswith('M'):
-            return int(float(mem_str[:-1]))
         try:
-            return int(float(mem_str) * 1024)
-        except:
-            pass
-        return 2048
+            text = str(mem_str or '').strip().upper()
+        except Exception:
+            return 2048
+        match = re.fullmatch(r'([0-9]+(?:\.[0-9]+)?)\s*([GMK]?)', text)
+        if not match:
+            return 2048
+        try:
+            amount = float(match.group(1))
+        except (TypeError, ValueError):
+            return 2048
+        if amount <= 0:
+            return 2048
+        unit = match.group(2)
+        if unit == 'G':
+            mb = amount * 1024
+        elif unit == 'K':
+            mb = amount / 1024
+        elif unit == 'M':
+            mb = amount
+        else:
+            mb = amount * 1024
+        if mb < 512:
+            return 512
+        return int(round(mb))
 
     def _format_mem(self, mb):
         if mb >= 1024:
