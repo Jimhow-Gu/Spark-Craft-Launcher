@@ -1658,6 +1658,8 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(2500, (lambda: self._check_updates(manual=False)))
 
     def _check_updates(self, manual=False):
+        if getattr(self, '_closing', False):
+            return
         from core.update import CheckUpdateWorker
         if self._update_checker is not None and self._update_checker.isRunning():
             return

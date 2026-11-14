@@ -7,6 +7,26 @@ import logging
 import sys
 from pathlib import Path
 
+def _prepare_qt_runtime():
+    """固定 Qt 插件和 DLL 搜索到 PyInstaller 解包目录，避免外部同名插件劫持。"""
+
+    if not getattr(sys, "frozen", False):
+        return
+    base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    plugins = base / "PySide6" / "plugins"
+    platforms = plugins / "platforms"
+    if platforms.is_dir():
+        os.environ["QT_PLUGIN_PATH"] = str(plugins)
+        os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = str(platforms)
+    if sys.platform == "win32":
+        try:
+            ctypes.windll.kernel32.SetDllDirectoryW(str(base))
+        except Exception:
+            pass
+
+
+_prepare_qt_runtime()
+
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 from PySide6.QtCore import Qt, QObject, QEvent, QTimer
 from PySide6.QtGui import QFont, QIcon
