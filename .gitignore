@@ -100,3 +100,6 @@ dist40/
 Spark Craft Launcher.exe*.old
 # 构建时注入的 CurseForge API Key，禁止提交
 core/_curseforge_key.py
+
+# Local slim FFmpeg build dependency; see slim_ffmpeg/README.md
+slim_ffmpeg/*.dll
