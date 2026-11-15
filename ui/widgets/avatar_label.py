@@ -390,9 +390,17 @@ class AvatarLabel(QLabel):
         if fallback_head is None:
             fallback_head = Path(__file__).resolve().parent.parent / 'imgs' / 'steve_head.png'
         self._fallback_head = str(fallback_head) if fallback_head and Path(fallback_head).is_file() else ''
-        # 网络头像加载期间先显示同一个默认头颅，而不是字母占位；
-        # 侧栏会复用这份 source，加载完成后再一起切换。
-        if self._fallback_head:
+        # 上一次已经加载过的头图作为即时占位，避免每次启动先闪默认史蒂夫。
+        head_placeholder = None
+        if self._cache_path is not None:
+            head_cache = self._cache_path.with_name(self._cache_path.stem + '_head.png')
+            if head_cache.is_file():
+                cached_head = QPixmap(str(head_cache))
+                if not cached_head.isNull():
+                    head_placeholder = cached_head
+        if head_placeholder is not None:
+            self._set_3d_head(head_placeholder)
+        elif self._fallback_head:
             self.set_head_file(self._fallback_head, cancel_network=False)
         else:
             self._set_default()

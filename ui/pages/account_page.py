@@ -431,7 +431,7 @@ class MicrosoftProfileSkinWorker(QThread):
                         dest.unlink()
                     except OSError:
                         pass
-                http = HttpClient(timeout=15, retries=1)
+                http = HttpClient(timeout=5, retries=1)
                 for url in candidates:
                     try:
                         http.download(url, dest, allow_slow_fallback=False)
@@ -904,11 +904,15 @@ class AccountPage(QWidget):
         self._ms_profile_retry_pending = False
         self._ms_profile_generation = 0
         self._ms_profile_account_key = ''
+        self._avatar_account_key = ''
+        self._avatar_pixmap_cache = {}
+        self._avatar_fallback_cache = {}
         self._ms_saved_login_worker = None
         self._tp_skin_worker = None
         self._tp_skin_last_attempt = 0.0
         self._tp_skin_generation = 0
         self._tp_skin_account_key = ''
+        self._tp_force_refresh = False
         self._ms_icon_loader = SavedAccountIconLoader(self)
         self._ms_icon_loader.ready.connect(self._on_ms_account_icon_ready)
         self._init_ui()
@@ -1076,6 +1080,7 @@ class AccountPage(QWidget):
         self.avatar.clicked.connect(self._change_skin)
         self.avatar.context_menu_requested.connect(self._show_avatar_menu)
         self.avatar.source_changed.connect(self.account_changed.emit)
+        self.avatar.source_changed.connect(self._remember_avatar_source)
         self.avatar.all_failed.connect(self._on_avatar_load_failed)
         group_layout.addWidget(self.avatar, 0, Qt.AlignHCenter)
         self.player_name_label = QLabel('未登录')
@@ -1924,7 +1929,11 @@ class AccountPage(QWidget):
             if name:
                 self.config.set('player_name', name)
         self.config.save()
+        if mode == 'thirdparty':
+            self._tp_force_refresh = True
         self._refresh_account_info()
+        if mode == 'microsoft':
+            self._refresh_microsoft_profile_async(user_initiated=False)
         self._apply_login_section_order()
         self.account_changed.emit()
 
@@ -2446,6 +2455,7 @@ class AccountPage(QWidget):
         self.tp_inline_wrap.hide()
         self._store_tp_server_settings_from_account(account)
         self._load_thirdparty_fields()
+        self._tp_force_refresh = True
         self._refresh_account_info()
         self.account_changed.emit()
         QMessageBox.information(self, '登录成功', f'已登录第三方账号：{account.get("name", username)}')
@@ -2829,6 +2839,7 @@ class AccountPage(QWidget):
         self._tp_inline_switching = False
         self.tp_inline_wrap.hide()
         self._store_tp_server_settings_from_account(account)
+        self._tp_force_refresh = True
         self._refresh_account_info()
         self.account_changed.emit()
         QMessageBox.information(self, '登录成功', f'已登录第三方账号：{account.get("name")}')
@@ -2935,11 +2946,75 @@ class AccountPage(QWidget):
         else:
             self.avatar.set_image_url([])
 
+    def _account_avatar_key(self):
+        login_type = str(self.config.get('login_type', 'offline') or 'offline')
+        if login_type == 'microsoft':
+            account = self.config.get('microsoft_account', {}) or {}
+            ident = str(account.get('uuid') or account.get('name') or '')
+            return f'microsoft:{ident}'
+        if login_type == 'thirdparty':
+            account = self.config.get('thirdparty_account', {}) or {}
+            api = str(account.get('api') or '')
+            ident = str(account.get('uuid') or account.get('name') or '')
+            return f'thirdparty:{api}:{ident}'
+        name = str(
+            self.config.get('player_name', '')
+            or self.auth.get_offline_name() or ''
+        ).strip()
+        return f'offline:{name}'
+
+    def _remember_avatar_source(self, key=None):
+        try:
+            source = self.avatar.head_source()
+            if source is None or source.isNull():
+                return
+            key = key or self._account_avatar_key()
+            if not key:
+                return
+            if self.avatar._is_skin_image(source):
+                self._avatar_pixmap_cache[key] = QPixmap(source)
+                while len(self._avatar_pixmap_cache) > 12:
+                    self._avatar_pixmap_cache.pop(next(iter(self._avatar_pixmap_cache)))
+            else:
+                # 96x96 头图只作为占位记住，切 tab 时不再先闪史蒂夫。
+                self._avatar_fallback_cache[key] = QPixmap(source)
+                while len(self._avatar_fallback_cache) > 12:
+                    self._avatar_fallback_cache.pop(next(iter(self._avatar_fallback_cache)))
+        except Exception:
+            pass
+
+    def _cached_avatar_source(self, key):
+        try:
+            source = self._avatar_pixmap_cache.get(key)
+            return source if source is not None and not source.isNull() else None
+        except Exception:
+            return None
+
     def _refresh_account_info(self):
         if getattr(self, '_tp_inline_switching', False):
             return
         try:
             login_type = self.config.get('login_type', 'offline')
+            account_key = self._account_avatar_key()
+            cached_avatar = self._cached_avatar_source(account_key)
+            fallback_avatar = None
+            if cached_avatar is None:
+                try:
+                    fallback_avatar = self._avatar_fallback_cache.get(account_key)
+                except Exception:
+                    fallback_avatar = None
+            preserve_avatar = False
+            if cached_avatar is not None:
+                current = self.avatar.head_source()
+                if current is None or current.cacheKey() != cached_avatar.cacheKey():
+                    self.avatar.set_head_source(cached_avatar)
+                preserve_avatar = True
+            elif fallback_avatar is not None and not fallback_avatar.isNull():
+                current = self.avatar.head_source()
+                if current is None or current.cacheKey() != fallback_avatar.cacheKey():
+                    self.avatar.set_head_source(fallback_avatar)
+                preserve_avatar = True
+            self._avatar_account_key = account_key
             self.avatar.show()
             self.player_name_label.show()
             self.login_type_label.show()
@@ -2969,15 +3044,17 @@ class AccountPage(QWidget):
                         cached = microsoft_skin_cache_path(account.get('uuid', ''), name)
                     except Exception:
                         cached = Path()
-                    if cached.is_file() and valid_skin_file(cached):
-                        self.avatar.set_skin_file(str(cached))
-                    else:
-                        if cached.is_file():
-                            try:
-                                cached.unlink()
-                            except OSError:
-                                pass
-                        self._set_microsoft_avatar_urls(account)
+                    if not preserve_avatar:
+                        if cached.is_file() and valid_skin_file(cached):
+                            self.avatar.set_skin_file(str(cached))
+                            self._remember_avatar_source(account_key)
+                        else:
+                            if cached.is_file():
+                                try:
+                                    cached.unlink()
+                                except OSError:
+                                    pass
+                            self._set_microsoft_avatar_urls(account)
                     self.ms_status_label.setText('正版账号已登录')
                     return
             if login_type == 'thirdparty':
@@ -3003,23 +3080,36 @@ class AccountPage(QWidget):
                         cached_skin = thirdparty_skin_cache_path(account.get('uuid', ''), name)
                     except Exception:
                         cached_skin = None
-                    if cached_skin is not None and cached_skin.is_file():
-                        self.avatar.set_skin_file(str(cached_skin))
-                    else:
-                        from core.skin import avatar_urls_for_account
-                        try:
-                            from core.paths import scl_dir
-                            key = str(account.get('uuid') or account.get('name') or 'unknown')
-                            cache_path = scl_dir() / 'icon_cache' / f'thirdparty_avatar_{key}.png'
-                        except Exception:
-                            cache_path = None
-                        steve = Path(__file__).resolve().parent.parent / 'imgs' / 'steve_head.png'
-                        self.avatar.set_image_url(
-                            avatar_urls_for_account(account),
-                            fallback_head=steve,
-                            cache_path=cache_path,
-                        )
-                        self._refresh_thirdparty_skin_async(user_initiated=False)
+                    if not preserve_avatar:
+                        if cached_skin is not None and cached_skin.is_file():
+                            from core.skin import valid_skin_file
+                            if valid_skin_file(cached_skin):
+                                self.avatar.set_skin_file(str(cached_skin))
+                                self._remember_avatar_source(account_key)
+                            else:
+                                try:
+                                    cached_skin.unlink()
+                                except OSError:
+                                    pass
+                                cached_skin = None
+                        if cached_skin is None or not Path(cached_skin).is_file():
+                            from core.skin import avatar_urls_for_account
+                            try:
+                                from core.paths import scl_dir
+                                key = str(account.get('uuid') or account.get('name') or 'unknown')
+                                cache_path = scl_dir() / 'icon_cache' / f'thirdparty_avatar_{key}.png'
+                            except Exception:
+                                cache_path = None
+                            steve = Path(__file__).resolve().parent.parent / 'imgs' / 'steve_head.png'
+                            self.avatar.set_image_url(
+                                avatar_urls_for_account(account),
+                                fallback_head=steve,
+                                cache_path=cache_path,
+                            )
+                    # 缓存命中也要后台校验/更新，避免旧账号或污染缓存卡住。
+                    force_tp = bool(getattr(self, '_tp_force_refresh', False))
+                    self._tp_force_refresh = False
+                    self._refresh_thirdparty_skin_async(user_initiated=force_tp)
                     self.tp_status_label.setText(f'已登录：{name}（{account.get("api", "")}）')
                     return
             player_name = self.auth.get_offline_name()
@@ -3029,7 +3119,9 @@ class AccountPage(QWidget):
                 self.email_label.hide()
                 self.name_input.setText(player_name)
                 self.logout_btn.hide()
-                self._refresh_offline_avatar()
+                if not preserve_avatar:
+                    self._refresh_offline_avatar()
+                    self._remember_avatar_source(account_key)
             else:
                 self.player_name_label.setText('未登录')
                 self.login_type_label.setText('')
@@ -3439,7 +3531,9 @@ class AccountPage(QWidget):
 
     def _refresh_microsoft_profile_async(self, user_initiated: bool=True):
         if self._ms_profile_worker is not None and self._ms_profile_worker.isRunning():
-            return
+            if not user_initiated:
+                return
+            # 手动刷新不再被旧 worker 挡住；旧结果由 generation 校验丢弃。
         if self.config.get('login_type', 'offline') != 'microsoft':
             return
         if self._ms_profile_retry_pending and not user_initiated:
@@ -3537,6 +3631,7 @@ class AccountPage(QWidget):
             self._ms_profile_retry_count = 0
             self._ms_profile_retry_pending = False
             self.avatar.set_skin_file(skin_path)
+            self._remember_avatar_source()
         else:
             self._set_microsoft_avatar_urls(account)
             if not user_initiated:
@@ -3585,7 +3680,9 @@ class AccountPage(QWidget):
         if self.config.get('login_type', 'offline') != 'thirdparty':
             return
         if self._tp_skin_worker is not None and self._tp_skin_worker.isRunning():
-            return
+            if not user_initiated:
+                return
+            # 手动刷新/切号不被旧 worker 挡住；旧结果由 generation 丢弃。
         import time as _time
         now = _time.time()
         if not user_initiated:
@@ -3646,6 +3743,7 @@ class AccountPage(QWidget):
         skin_path = result.get('skin_path') or ''
         if skin_path:
             self.avatar.set_skin_file(skin_path)
+            self._remember_avatar_source()
         else:
             avatar_url = account.get('avatar_url') or ''
             steve = Path(__file__).resolve().parent.parent / 'imgs' / 'steve_head.png'

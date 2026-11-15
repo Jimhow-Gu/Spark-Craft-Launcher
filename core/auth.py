@@ -198,7 +198,8 @@ class AuthManager:
             self.save_microsoft_account(info)
             return info
 
-    def _minecraft_authorized_request(self, method: str, url: str, payload: Optional[dict]=None) -> requests.Response:
+    def _minecraft_authorized_request(self, method: str, url: str, payload: Optional[dict]=None,
+                                      timeout: float=30) -> requests.Response:
         '''请求 Minecraft 服务 API，遇到 401 自动刷新一次登录令牌。'''
 
         account = self.config.get('microsoft_account') or {}
@@ -210,7 +211,7 @@ class AuthManager:
         last_exc = None
         for attempt in range(2):
             try:
-                resp = requests.request(method, url, headers=headers, json=payload, timeout=30, verify=verify_ssl)
+                resp = requests.request(method, url, headers=headers, json=payload, timeout=timeout, verify=verify_ssl)
             except Exception as exc:
                 last_exc = exc
                 if attempt == 0:
@@ -249,7 +250,7 @@ class AuthManager:
     def get_minecraft_profile(self) -> dict:
         '''获取当前正版账号的官方资料（皮肤、披风、UUID）。'''
 
-        resp = self._minecraft_authorized_request('get', MINECRAFT_PROFILE_URL)
+        resp = self._minecraft_authorized_request('get', MINECRAFT_PROFILE_URL, timeout=12)
         if resp.status_code == 401:
             raise AuthError('正版账号登录已过期，请重新登录。', 'expired')
         if resp.status_code != 200:

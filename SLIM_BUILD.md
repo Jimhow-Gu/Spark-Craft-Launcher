@@ -7,11 +7,11 @@ V1.11.7 改为 **PyInstaller onedir + Inno Setup 安装包** 作为主发布形�
 
 | 产物 | 大小 | SHA256 |
 |---|---:|---|
-| onedir 启动器 exe | 3,038,622 字节 | `2fc048446ad700784bfc96f4d5bc98dfb194a14e017997f1097a99bae834fe60` |
-| onedir 更新 zip | 36,596,820 字节 | `1bc66a70718f78f7fa04375c6480cc5e68d09608436f7c05a43c29736995f2e0` |
-| Inno Setup 安装包 | 29,125,529 字节 | `9fd8fc8f99a1d641eb44444b26cf46221423d00137b9393fb3ae2ad50d0c71f3` |
-| onefile 便携 exe | 36,643,900 字节 | `748c0a89e1972cff82d50d41e3e291d333bea0ac718ed6f376772c3086a66faf` |
-| onefile zip | 36,321,100 字节 | `5c19447dcc416d006b8d7098b0458a1a787ac114987cdddf8549972b490a6062` |
+| onedir 启动器 exe | 3,039,746 字节 | `0d1e89922e01b866d913775348b80d80136bf5dc5d2d387c18dbe0adbb666fa5` |
+| onedir 更新 zip | 36,597,763 字节 | `6ae2a55e5dd95999a87e094fe1807a53f27d3b85424a021dbf32de74668bd353` |
+| Inno Setup 安装包 | 29,135,551 字节 | `1adf8f9f9ebb56bf793bf2f71dedc0e2003aa1a3d2ea74e820eb5b86d827a8ca` |
+| onefile 便携 exe | 36,645,429 字节 | `de6f547d50dcf29c37c49e973666396518c52801dd716bb4b81f3128db0ece12` |
+| onefile zip | 36,322,898 字节 | `db31f509d4d74fddb542d64d8e618bc400a912328e73d3d8d5396ba8fb3c0a46` |
 
 - 构建号：`SCLREL1.11.7.R20261115.RP1.DLL32`
 - 构建入口：`python build_onedir.py`（主安装包）、`python build_slim.py`（旧版 onefile 兼容包）
@@ -55,6 +55,10 @@ V1.11.7 改为 **PyInstaller onedir + Inno Setup 安装包** 作为主发布形�
   2D 头图不会再把已显示的 3D 皮肤覆盖回平面。
 - 正版/第三方皮肤 worker 增加 generation、账号 key 和 refresh token 校验；
   切号或重复刷新后旧结果直接丢弃。
+- 账户页按账号保留最近一次 3D/2D 头像源；切回同一账号不再重新走
+  “史蒂夫 → 2D”，只更新文字并在后台静默刷新。
+- 第三方浏览页缓存命中也会后台校验更新；切号/登录会绕过 30 秒冷却。
+- 正版档案超时降至 12 秒，纹理下载单独 5 秒；手动刷新不再被旧 worker 挡住。
 - 正版/第三方完整皮肤刷新成功后优先覆盖旧缓存，侧栏和账户页统一使用 3D 源。
 - 正版皮肤资料刷新失败会做 2 次退避重试；切换登录方式后旧线程结果不会再覆盖
   当前账号头像。
@@ -92,7 +96,7 @@ onedir 更新流程：
 ## 体积构成与 FFmpeg
 
 未使用 UPX 的 DLL27 onefile 基线为 39,449,405 字节。V1.11.7 onefile 为
-36,643,900 字节，减少 2,805,505 字节（7.11%）。
+36,645,429 字节，减少 2,803,976 字节（7.11%）。
 
 主要占用：
 
