@@ -345,14 +345,15 @@ class SavedAccountIconLoader(QObject):
 
 class SkinPreviewWorker(QThread):
     done = Signal(str)
-    def __init__(self, settings):
+    def __init__(self, settings, player_name=''):
         super().__init__()
         self.settings = dict(settings)
+        self.player_name = str(player_name or '')
 
     def run(self):
         try:
             from core.skin import SkinManager
-            path = SkinManager().preview_skin(self.settings)
+            path = SkinManager().preview_skin(self.settings, self.player_name)
             self.done.emit(str(path) if path else '')
         except Exception:
             self.done.emit('')
@@ -386,7 +387,7 @@ class MicrosoftProfileSkinWorker(QThread):
     def run(self):
         try:
             from core.net import HttpClient
-            from core.skin import microsoft_skin_cache_path
+            from core.skin import microsoft_skin_cache_path, valid_skin_file
             auth = AuthManager()
             try:
                 profile = auth.get_minecraft_profile()
@@ -422,15 +423,28 @@ class MicrosoftProfileSkinWorker(QThread):
                     f'https://mc-heads.net/skin/{name}',
                     f'https://mineskin.eu/skin/{name}',
                 ])
-            http = HttpClient(timeout=15, retries=1)
-            for url in candidates:
-                try:
-                    http.download(url, dest, allow_slow_fallback=False)
-                except Exception:
-                    continue
-                if dest.is_file() and dest.stat().st_size > 64:
-                    skin_path = str(dest)
-                    break
+            if dest.is_file() and valid_skin_file(dest):
+                skin_path = str(dest)
+            else:
+                if dest.is_file():
+                    try:
+                        dest.unlink()
+                    except OSError:
+                        pass
+                http = HttpClient(timeout=15, retries=1)
+                for url in candidates:
+                    try:
+                        http.download(url, dest, allow_slow_fallback=False)
+                    except Exception:
+                        continue
+                    if dest.is_file() and valid_skin_file(dest):
+                        skin_path = str(dest)
+                        break
+                    if dest.is_file():
+                        try:
+                            dest.unlink()
+                        except OSError:
+                            pass
             self.success.emit({'profile': profile, 'skin': skin, 'skin_path': skin_path})
         except Exception as exc:
             kind = str(getattr(exc, 'kind', '') or 'general')
@@ -860,6 +874,7 @@ class AccountPage(QWidget):
         self._preview_worker = None
         self._preview_generation = 0
         self._preview_workers = set()
+        self._offline_preview_retry_count = 0
         self._action_workers = set()
         self._cape_worker = None
         self._cape_apply_worker = None
@@ -885,6 +900,8 @@ class AccountPage(QWidget):
         self._section_metrics = {}
         self._login_groups = []
         self._ms_profile_worker = None
+        self._ms_profile_retry_count = 0
+        self._ms_profile_retry_pending = False
         self._ms_saved_login_worker = None
         self._tp_skin_worker = None
         self._tp_skin_last_attempt = 0.0
@@ -1055,6 +1072,7 @@ class AccountPage(QWidget):
         self.avatar.clicked.connect(self._change_skin)
         self.avatar.context_menu_requested.connect(self._show_avatar_menu)
         self.avatar.source_changed.connect(self.account_changed.emit)
+        self.avatar.all_failed.connect(self._on_avatar_load_failed)
         group_layout.addWidget(self.avatar, 0, Qt.AlignHCenter)
         self.player_name_label = QLabel('未登录')
         self.player_name_label.setAlignment(Qt.AlignCenter)
@@ -2523,7 +2541,10 @@ class AccountPage(QWidget):
         if login_type == 'offline':
             try:
                 from core.skin import SkinManager
-                local = SkinManager().preview_path()
+                name = str(
+                    self.player_name_label.text() or self.config.get('player_name', '') or ''
+                ).strip()
+                local = SkinManager().preview_path(name)
             except Exception:
                 local = None
         path, _ = QFileDialog.getSaveFileName(self, '保存皮肤文件', 'skin.png', 'PNG 皮肤 (*.png)')
@@ -2940,13 +2961,18 @@ class AccountPage(QWidget):
                     self.email_label.hide()
                     self.logout_btn.show()
                     try:
-                        from core.skin import microsoft_skin_cache_path
+                        from core.skin import microsoft_skin_cache_path, valid_skin_file
                         cached = microsoft_skin_cache_path(account.get('uuid', ''), name)
                     except Exception:
                         cached = Path()
-                    if cached.is_file():
+                    if cached.is_file() and valid_skin_file(cached):
                         self.avatar.set_skin_file(str(cached))
                     else:
+                        if cached.is_file():
+                            try:
+                                cached.unlink()
+                            except OSError:
+                                pass
                         self._set_microsoft_avatar_urls(account)
                     self.ms_status_label.setText('正版账号已登录')
                     return
@@ -3068,6 +3094,19 @@ class AccountPage(QWidget):
         # 换昵称只改账号名，不重新计算/覆盖离线皮肤或正版皮肤。
         self.account_changed.emit()
 
+    def _on_avatar_load_failed(self):
+        """所有网络头像都失败时显示通用占位，不再用史蒂夫冒充加载成功。"""
+
+        try:
+            # 离线模式保留本地随机默认皮肤的 3D 渲染；正版/第三方网络头像
+            # 全部失败时用通用占位，避免把失败伪装成默认皮肤。
+            if self.config.get('login_type', 'offline') in (
+                'microsoft', 'thirdparty'
+            ):
+                self.avatar.set_person_icon()
+        except Exception:
+            pass
+
     def current_avatar_source(self):
         """返回账户页当前展示的完整皮肤/头像源，供侧边栏复用。"""
         try:
@@ -3084,22 +3123,33 @@ class AccountPage(QWidget):
             from core.skin import SkinManager
             manager = SkinManager()
             settings = manager.get_settings()
-            preview = manager.preview_path()
+            offline_name = str(
+                player_name or self.auth.get_offline_name()
+                or self.config.get('player_name', '') or ''
+            ).strip()
+            preview = manager.preview_path(offline_name)
             if preview and Path(preview).is_file():
-                self.avatar.set_skin_file(preview)
-                return
+                from core.skin import valid_skin_file
+                if valid_skin_file(preview):
+                    self.avatar.set_skin_file(preview)
+                    return
+                try:
+                    Path(preview).unlink()
+                except OSError:
+                    pass
             # 正版皮肤名已填写但本地还没有缓存时，先显示同名网络头像，
             # 同时后台下载完整皮肤；否则主界面会一直退回随机默认头。
             if settings.get('mode') == 'premium':
                 name = str(settings.get('premium_name') or '').strip()
                 if name:
+                    self._offline_preview_retry_count = 0
                     head = default_head_path()
                     self.avatar.set_image_url(
                         [f'https://mc-heads.net/avatar/{name}/96',
                          f'https://minotar.net/helm/{name}/96.png'],
                         fallback_head=head if head.is_file() else None,
                     )
-                    self._start_offline_skin_preview(settings)
+                    self._start_offline_skin_preview(settings, offline_name)
                     return
         except Exception:
             pass
@@ -3114,10 +3164,10 @@ class AccountPage(QWidget):
                 fallback_head=steve_head,
             )
 
-    def _start_offline_skin_preview(self, settings):
+    def _start_offline_skin_preview(self, settings, player_name=''):
         self._preview_generation += 1
         generation = self._preview_generation
-        worker = SkinPreviewWorker(settings)
+        worker = SkinPreviewWorker(settings, player_name)
         worker.done.connect(
             lambda path, gen=generation: self._on_offline_skin_preview(gen, path)
         )
@@ -3134,9 +3184,51 @@ class AccountPage(QWidget):
             return
         if self.config.get('login_type', 'offline') != 'offline':
             return
+        try:
+            from core.skin import SkinManager
+            if SkinManager().get_settings().get('mode') != 'premium':
+                return
+        except Exception:
+            pass
         if not path or not Path(path).is_file():
+            # 网络皮肤下载失败时不要停在平面头图：回退到本地默认皮肤
+            # 的 3D 渲染，并在后台做一次延迟重试。
+            head = default_head_path()
+            if head.is_file():
+                self.avatar.set_head_file(str(head))
+            try:
+                from core.skin import SkinManager
+                settings = SkinManager().get_settings()
+            except Exception:
+                settings = {}
+            if (
+                settings.get('mode') == 'premium'
+                and self._offline_preview_retry_count < 1
+            ):
+                self._offline_preview_retry_count += 1
+                QTimer.singleShot(
+                    2500,
+                    lambda gen=generation: self._retry_offline_preview(gen),
+                )
             return
+        self._offline_preview_retry_count = 0
         self.avatar.set_skin_file(path)
+
+    def _retry_offline_preview(self, generation):
+        if generation != self._preview_generation:
+            return
+        if self.config.get('login_type', 'offline') != 'offline':
+            return
+        try:
+            from core.skin import SkinManager
+            settings = SkinManager().get_settings()
+        except Exception:
+            return
+        if settings.get('mode') == 'premium' and settings.get('premium_name'):
+            name = str(
+                self.auth.get_offline_name() or self.config.get('player_name', '') or ''
+            ).strip()
+            self._start_offline_skin_preview(settings, name)
 
     def _on_offline_login(self):
         self._close_ms_code_dialog()
@@ -3346,6 +3438,11 @@ class AccountPage(QWidget):
             return
         if self.config.get('login_type', 'offline') != 'microsoft':
             return
+        if self._ms_profile_retry_pending and not user_initiated:
+            return
+        if user_initiated:
+            self._ms_profile_retry_count = 0
+            self._ms_profile_retry_pending = False
         token = self._begin_skin_refresh_feedback() if user_initiated else None
         worker = MicrosoftProfileSkinWorker()
         self._ms_profile_worker = worker
@@ -3361,12 +3458,42 @@ class AccountPage(QWidget):
         worker.finished.connect((lambda w=worker: self._on_ms_profile_worker_done(w)))
         worker.start()
 
+    def _retry_ms_profile(self):
+        self._ms_profile_retry_pending = False
+        if self.config.get('login_type', 'offline') != 'microsoft':
+            return
+        if self._ms_profile_worker is not None and self._ms_profile_worker.isRunning():
+            return
+        self._refresh_microsoft_profile_async(user_initiated=False)
+
+    def _schedule_ms_profile_retry(self, reason=''):
+        if self._ms_profile_retry_count >= 2:
+            return False
+        self._ms_profile_retry_count += 1
+        if self._ms_profile_retry_pending:
+            return True
+        self._ms_profile_retry_pending = True
+        delay = 1200 * self._ms_profile_retry_count
+        try:
+            self.ms_status_label.setText(
+                f'皮肤资料获取失败，{max(1, delay // 1000)} 秒后重试...'
+            )
+            self.ms_status_label.setStyleSheet(
+                'color:rgba(255,180,90,0.9); font-size:13px;'
+            )
+        except RuntimeError:
+            pass
+        QTimer.singleShot(delay, self._retry_ms_profile)
+        return True
+
     def _on_ms_profile_worker_done(self, worker):
         if self._ms_profile_worker is worker:
             self._ms_profile_worker = None
 
     def _on_ms_profile_skin_ready(self, result: dict, user_initiated: bool=False,
                                   refresh_token=None):
+        if self.config.get('login_type', 'offline') != 'microsoft':
+            return
         import time as _time
         profile = result.get('profile') or {}
         skin = result.get('skin') or {}
@@ -3389,9 +3516,13 @@ class AccountPage(QWidget):
         self.player_name_label.setText(name)
         self.login_type_label.setText('正版账号')
         if skin_path:
+            self._ms_profile_retry_count = 0
+            self._ms_profile_retry_pending = False
             self.avatar.set_skin_file(skin_path)
         else:
             self._set_microsoft_avatar_urls(account)
+            if not user_initiated:
+                self._schedule_ms_profile_retry('皮肤下载失败')
         self._refresh_ms_accounts_list()
         self.account_changed.emit()
         if user_initiated:
@@ -3410,6 +3541,8 @@ class AccountPage(QWidget):
 
     def _on_ms_profile_skin_error(self, message: str, kind: str='general',
                                   user_initiated: bool=True, refresh_token=None):
+        if self.config.get('login_type', 'offline') != 'microsoft':
+            return
         message = friendly_auth_error(message, kind)
         if user_initiated:
             self._finish_skin_refresh_feedback(
@@ -3418,6 +3551,8 @@ class AccountPage(QWidget):
             return
         self.ms_status_label.setText(message)
         self.ms_status_label.setStyleSheet('color:#ff7777; font-size:13px;')
+        if kind != 'expired' and self._schedule_ms_profile_retry(message):
+            return
 
     def _refresh_thirdparty_skin_async(self, user_initiated: bool=False):
         if self.config.get('login_type', 'offline') != 'thirdparty':
@@ -3451,6 +3586,8 @@ class AccountPage(QWidget):
 
     def _on_tp_skin_ready(self, result: dict, user_initiated: bool=False,
                           refresh_token=None):
+        if self.config.get('login_type', 'offline') != 'thirdparty':
+            return
         account = self.config.get('thirdparty_account', {}) or {}
         if result.get('name'):
             account['name'] = result['name']
@@ -3490,6 +3627,8 @@ class AccountPage(QWidget):
 
     def _on_tp_skin_error(self, message: str, kind: str='general',
                           user_initiated: bool=False, refresh_token=None):
+        if self.config.get('login_type', 'offline') != 'thirdparty':
+            return
         message = friendly_auth_error(message, kind)
         if user_initiated:
             self._finish_skin_refresh_feedback(

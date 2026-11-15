@@ -252,6 +252,10 @@ class AvatarLabel(QLabel):
             self.setPixmap(pixmap)
         finally:
             self._setting_person = False
+        self.source_changed.emit()
+
+    def is_person_placeholder(self):
+        return bool(self._showing_person)
 
     @staticmethod
     def config():
@@ -348,14 +352,19 @@ class AvatarLabel(QLabel):
             urls = [urls]
         from ui.widgets.settings_widgets import hidpi_pixmap
         self._cache_path = Path(cache_path) if cache_path else None
-        # 有缓存时直接使用，不再等待网络（断网/机房封锁环境秒开）
+        # 有缓存时直接使用；但旧版本可能把头图写进皮肤缓存，必须先按
+        # 64 基准尺寸校验，否则 96x96 头图会被当成皮肤永久平铺。
         if self._cache_path is not None and self._cache_path.is_file():
             cached = QPixmap(str(self._cache_path))
-            if not cached.isNull():
+            if not cached.isNull() and self._is_skin_image(cached):
                 self._image_urls = []
                 self._fallback_head = ''
                 self._set_3d_head(cached)
                 return
+            try:
+                self._cache_path.unlink()
+            except OSError:
+                pass
         self._image_urls = [u for u in urls or [] if u]
         if fallback_head is None:
             fallback_head = Path(__file__).resolve().parent.parent / 'imgs' / 'steve_head.png'
@@ -406,14 +415,20 @@ class AvatarLabel(QLabel):
             raw = reply.readAll()
             cache_path = getattr(self, '_cache_path', None)
             if pix.loadFromData(raw) and not pix.isNull():
-                url = reply.url().toString()
-                is_official = 'textures.minecraft.net' in url and pix.width() >= 64
+                is_skin = self._is_skin_image(pix)
                 self._set_3d_head(pix)
                 if cache_path is not None and raw:
                     try:
-                        # 缓存完整皮肤/原始头像，下一次仍可渲染 3D 头颅。
                         cache_path.parent.mkdir(parents=True, exist_ok=True)
-                        cache_path.write_bytes(bytes(raw))
+                        if is_skin:
+                            # 只有完整皮肤才进入 3D 皮肤缓存。
+                            cache_path.write_bytes(bytes(raw))
+                        else:
+                            # 96x96 等头图另存，绝不能污染 microsoft_avatar_*.png。
+                            head_cache = cache_path.with_name(
+                                cache_path.stem + '_head.png'
+                            )
+                            head_cache.write_bytes(bytes(raw))
                     except Exception:
                         pass
                 loaded = True

@@ -69,6 +69,24 @@ def detect_skin_model(path: str | Path) -> str:
             return 'slim'
         return 'classic'
 
+def valid_skin_file(path: str | Path) -> bool:
+    '''确认缓存文件确实是可渲染的 64 基准皮肤，避免损坏缓存挡住网络刷新。'''
+
+    try:
+        from PySide6.QtGui import QImage
+        image = QImage(str(path or ''))
+        if image.isNull():
+            return False
+        width, height = image.width(), image.height()
+        return (
+            width >= 64
+            and width % 64 == 0
+            and (height in (32, 64) or (height >= 64 and height % 64 == 0))
+        )
+    except Exception:
+        return False
+
+
 def skin_size_error(path: str | Path) -> str:
     '''校验皮肤尺寸，返回错误提示；空字符串表示可用。'''
 
@@ -383,14 +401,24 @@ class SkinManager:
     def _download_skin_candidates(self, urls: list, filename: str) -> Optional[Path]:
         dest = self.dir / filename
         if dest.exists() and dest.stat().st_size > 64:
-            return dest
+            if valid_skin_file(dest):
+                return dest
+            try:
+                dest.unlink()
+            except OSError:
+                pass
         for url in urls:
             if not url:
                 continue
             try:
                 HttpClient(timeout=30).download(url, dest)
                 if dest.exists() and dest.stat().st_size > 64:
-                    return dest
+                    if valid_skin_file(dest):
+                        return dest
+                    try:
+                        dest.unlink()
+                    except OSError:
+                        pass
             except Exception as exc:
                 logger.warning(f'下载皮肤失败 {url}: {exc}')
                 continue
@@ -408,6 +436,31 @@ class SkinManager:
         except Exception:
             dest.write_bytes(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=='))
             return dest
+
+    @staticmethod
+    def _default_choice_key(player_name: str = '') -> str:
+        name = str(player_name or '').strip().lower()
+        return name or '__default__'
+
+    def default_choice(self, player_name: str = '') -> str:
+        """返回并持久化某离线账号的随机默认皮肤（steve/alex）。
+
+        随机只发生一次；之后同一玩家名始终复用同一结果，避免每次进入
+        账号页重新抽取造成“怎么老是史蒂夫/又变了”的观感。
+        """
+
+        key = self._default_choice_key(player_name)
+        mapping = self.config.get('offline_default_skins', {}) or {}
+        if not isinstance(mapping, dict):
+            mapping = {}
+        choice = str(mapping.get(key) or '').lower()
+        if choice in ('steve', 'alex'):
+            return choice
+        choice = random.choice(('steve', 'alex'))
+        mapping[key] = choice
+        self.config.set('offline_default_skins', mapping, auto_save=False)
+        self.config.save()
+        return choice
 
     def _default_skin(self, model: str) -> Path:
         is_alex = str(model).lower() == 'slim'
@@ -434,7 +487,7 @@ class SkinManager:
         skin_path = None
         if mode in ('random', 'steve', 'alex'):
             if mode == 'random':
-                chosen = random.choice(['steve', 'alex'])
+                chosen = self.default_choice(player_name)
             else:
                 chosen = mode
             model = 'slim' if chosen == 'alex' else 'classic'
@@ -474,12 +527,12 @@ class SkinManager:
             'cape': str(cape_path) if cape_path else '',
         }
 
-    def preview_skin(self, settings: dict) -> Optional[Path]:
+    def preview_skin(self, settings: dict, player_name: str = '') -> Optional[Path]:
         '''获取用于界面预览的皮肤文件（必要时下载）。'''
 
         mode = settings.get('mode', 'random')
         if mode in ('random', 'steve', 'alex'):
-            chosen = random.choice(['steve', 'alex']) if mode == 'random' else mode
+            chosen = self.default_choice(player_name) if mode == 'random' else mode
             if chosen == 'alex':
                 return self._default_skin('slim')
             return self._default_skin('classic')
@@ -494,17 +547,25 @@ class SkinManager:
             safe = re.sub('[^A-Za-z0-9_\\-]', '_', name)[:32]
             cached = self.dir / f'premium_{safe}.png'
             if cached.exists() and cached.stat().st_size > 64:
-                return cached
+                if valid_skin_file(cached):
+                    return cached
+                try:
+                    cached.unlink()
+                except OSError:
+                    pass
             return self._download_skin_candidates([PREMIUM_URL.format(name=name), MINOTAR_SKIN_URL.format(name=name)], f'premium_{safe}.png')
         if mode == 'custom':
             path = self._resolve_custom_path(settings.get('custom_path', ''))
             if path.is_file():
                 return path
 
-    def preview_path(self) -> Optional[Path]:
+    def preview_path(self, player_name: str = '') -> Optional[Path]:
         settings = self.get_settings()
         mode = settings['mode']
-        if mode == 'random' or mode == 'steve':
+        if mode == 'random':
+            chosen = self.default_choice(player_name)
+            return self._default_skin('slim' if chosen == 'alex' else 'classic')
+        if mode == 'steve':
             return self._default_skin('classic')
         if mode == 'alex':
             return self._default_skin('slim')
@@ -523,7 +584,12 @@ class SkinManager:
             safe = re.sub('[^A-Za-z0-9_\\-]', '_', name)[:32]
             path = self.dir / f'premium_{safe}.png'
             if path.is_file():
-                return path
+                if valid_skin_file(path):
+                    return path
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
 
 
 # WARNING: Decompyle incomplete

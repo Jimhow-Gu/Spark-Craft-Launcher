@@ -185,6 +185,7 @@ class ConfigManager:
         for key in (
             'version_settings', 'thirdparty_server_settings',
             'thirdparty_saved_passwords', 'version_nicknames', 'offline_skin',
+            'offline_default_skins',
         ):
             if isinstance(primary.get(key), dict) and isinstance(secondary.get(key), dict):
                 merged[key] = {**secondary[key], **primary[key]}
@@ -367,6 +368,7 @@ class ConfigManager:
             'thirdparty_saved_password': str,
             'thirdparty_remember': bool,
             'offline_skin': dict,
+            'offline_default_skins': dict,
             'curseforge_api_key': str,
         }
         result = copy.deepcopy(raw)

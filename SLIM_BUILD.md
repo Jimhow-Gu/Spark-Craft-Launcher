@@ -1,19 +1,19 @@
-# Spark Craft Launcher V1.11.6 构建与安装
+# Spark Craft Launcher V1.11.7 构建与安装
 
 ## 结论
 
-V1.11.6 改为 **PyInstaller onedir + Inno Setup 安装包** 作为主发布形式，
+V1.11.7 改为 **PyInstaller onedir + Inno Setup 安装包** 作为主发布形式，
 同时保留 onefile 便携版，方便旧版 onefile 客户端自动更新。
 
 | 产物 | 大小 | SHA256 |
 |---|---:|---|
-| onedir 启动器 exe | 3,035,887 字节 | `63edbffadc687264a631cdaee48f6f72df22940f9a80735a6d6c5af8d9965326` |
-| onedir 更新 zip | 36,593,152 字节 | `39cd24ffc102a72d9f610c96bccca5420478b8df2b16920585ec0aaea3ce2d43` |
-| Inno Setup 安装包 | 29,116,550 字节 | `f3eac3b24a13c3ad83288e38d71dc7166fab949b5d6e43b59fcd628956538848` |
-| onefile 便携 exe | 36,640,887 字节 | `39d86b5c53732527d60dab2c2048bc565372e1ac2f73550dd9859f3de8a8b9b8` |
-| onefile zip | 36,317,940 字节 | `5bbe56dc1600e3c81ef4c6e31cf6d774e8389875cf543602fd8a0e5a60d82f3f` |
+| onedir 启动器 exe | 3,037,927 字节 | `682da36130284bb8482fc83ba3cf0c1e7e465e1407d2a1463a05bfcaceaa7973` |
+| onedir 更新 zip | 36,596,224 字节 | `e734e6c2d732532b2968809b26df63cf17b5ace7aacad5f4875da598d05bb635` |
+| Inno Setup 安装包 | 29,124,316 字节 | `7850dac6292bcf55b49c8b7c469b968a1f0b22ce7d429ecc2b59928afde7a544` |
+| onefile 便携 exe | 36,643,605 字节 | `312ac9955b82411d11e06010e4cdba4a95cb079dd44df58523729f72b0926f99` |
+| onefile zip | 36,321,096 字节 | `a6e7c5e4561a23986e86f9b712419c2d23ddb3f476cdde3de15ae8b259897784` |
 
-- 构建号：`SCLREL1.11.6.R20261115.RP1.DLL31`
+- 构建号：`SCLREL1.11.7.R20261115.RP1.DLL32`
 - 构建入口：`python build_onedir.py`（主安装包）、`python build_slim.py`（旧版 onefile 兼容包）
 - 安装包默认目录：`%LOCALAPPDATA%\Programs\SparkCraftLauncher`
 - 不使用 UPX，不删除静态图片解码插件，不改变 UI 布局与业务功能。
@@ -24,8 +24,8 @@ V1.11.6 改为 **PyInstaller onedir + Inno Setup 安装包** 作为主发布形�
 
 | 场景 | 窗口可见 | 外部消息可响应 |
 |---|---:|---:|
-| 安装后首次启动（安装器已预热） | 1.11s | 1.34s |
-| 后续启动 | 1.02–1.05s | 1.02–1.06s |
+| 安装后首次启动（安装器已预热） | 1.10s | 1.29s |
+| 后续启动 | 1.03–1.06s | 1.03–1.24s |
 | onefile 便携版（旧兼容包） | 1.69–1.95s | - |
 
 启动优化做法：
@@ -36,7 +36,7 @@ V1.11.6 改为 **PyInstaller onedir + Inno Setup 安装包** 作为主发布形�
 4. 无边框窗口的原生图标在 `show()` 后设置，避免提前调用 `winId()` 创建两次原生窗口；
 5. 保留启动淡入、页面切换动画、SCL 数据结构、所有页面和下载/启动逻辑。
 
-## V1.11.6 稳定性修复
+## V1.11.7 稳定性与头像修复
 
 - 修复模组/整合包等浏览页反复切换时 `SearchWorker` 被 `QThread.terminate()` 强制终止、
   `finished` 不触发导致线程对象和请求上下文线性累积的问题；现在只协作取消，
@@ -46,6 +46,16 @@ V1.11.6 改为 **PyInstaller onedir + Inno Setup 安装包** 作为主发布形�
 - `.old` 清理改为后台多轮重试（0/5/15/30/60/120 秒），并在日志中记录仍被占用的
   文件；杀软/旧进程释放句柄后会自动删除。
 - 这项修复同时解决了 Windows 资源耗尽事件中启动器进程占用约 38GB 提交内存的问题。
+- 离线随机默认皮肤现在按玩家名固化：同一账号首次抽到 Steve/Alex 后写入
+  `offline_default_skins`，之后每次进入账号页/启动游戏保持一致。
+- 皮肤缓存加入 PNG 尺寸校验；损坏缓存会被删除并重新拉取。
+- 修复 96x96 网络头图被写进 `microsoft_avatar_*.png` 后长期平铺的问题：只有
+  64 基准完整皮肤才进入 3D 缓存，头图另存 `*_head.png`；命中缓存也会先校验尺寸。
+- 正版/第三方完整皮肤刷新成功后优先覆盖旧缓存，侧栏和账户页统一使用 3D 源。
+- 正版皮肤资料刷新失败会做 2 次退避重试；切换登录方式后旧线程结果不会再覆盖
+  当前账号头像。
+- 正版/第三方网络头像都失败时显示通用人物占位，不再用史蒂夫冒充“加载成功”；
+  离线 premium 下载失败则回退本地默认皮肤的 3D 渲染，并自动重试一次。
 
 ## 安装/升级/卸载与 SCL
 
@@ -77,8 +87,8 @@ onedir 更新流程：
 
 ## 体积构成与 FFmpeg
 
-未使用 UPX 的 DLL27 onefile 基线为 39,449,405 字节。V1.11.6 onefile 为
-36,640,887 字节，减少 2,808,518 字节（7.12%）。
+未使用 UPX 的 DLL27 onefile 基线为 39,449,405 字节。V1.11.7 onefile 为
+36,643,605 字节，减少 2,805,800 字节（7.11%）。
 
 主要占用：
 
@@ -118,8 +128,8 @@ python build_slim.py                    # onefile 便携版 + zip
 1. 校验 `slim_ffmpeg/` 哈希；
 2. 用 `SparkCraftLauncher.slim_onedir.spec` 构建；
 3. 校验 exe、`_internal/`、静态图片插件、无 UPX、无旧 CurseForge Key；
-4. 生成 `dist_installer/SparkCraftLauncher-V1.11.6-onedir.zip`；
-5. 调用 Inno Setup 生成 `dist_installer/V1.11.6-Setup-SparkCraftLauncher.exe`；
+4. 生成 `dist_installer/SparkCraftLauncher-V1.11.7-onedir.zip`；
+5. 调用 Inno Setup 生成 `dist_installer/V1.11.7-Setup-SparkCraftLauncher.exe`；
 6. 输出体积和 SHA256。
 
 `INNO_SETUP_ISCC` 可指定 `ISCC.exe` 路径；找不到时只跳过安装包生成。

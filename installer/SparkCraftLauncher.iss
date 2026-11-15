@@ -2,7 +2,7 @@
 ; Build: "D:\Inno Setup 6\ISCC.exe" installer\SparkCraftLauncher.iss
 
 #define MyAppName "Spark Craft Launcher"
-#define MyAppVersion "1.11.6"
+#define MyAppVersion "1.11.7"
 #define MyAppExeName "Spark Craft Launcher.exe"
 #define MyAppPublisher "Spark Craft"
 #define MyAppURL "https://github.com/Jimhow-Gu/Spark-Craft-Launcher"
@@ -35,7 +35,7 @@ CloseApplications=yes
 RestartApplications=no
 AppMutex=Local\SparkCraftLauncher.SingleInstance.v1
 SetupLogging=yes
-VersionInfoVersion=1.11.6.31
+VersionInfoVersion=1.11.7.32
 VersionInfoProductName={#MyAppName}
 VersionInfoProductVersion={#MyAppVersion}
 VersionInfoDescription=Spark Craft Launcher Installer

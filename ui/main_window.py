@@ -1374,7 +1374,7 @@ class MainWindow(QMainWindow):
             if name:
                 try:
                     from core.skin import SkinManager
-                    preview = SkinManager().preview_path()
+                    preview = SkinManager().preview_path(name)
                     if preview and preview.is_file():
                         skin_path = str(preview)
                 except Exception:
@@ -1396,14 +1396,18 @@ class MainWindow(QMainWindow):
         except Exception:
             avatar_cache = None
         avatar_source = None
+        avatar_unavailable = False
         if 'account_page' in self.__dict__:
             try:
                 avatar_source = self.account_page.current_avatar_source()
+                avatar_unavailable = self.account_page.avatar.is_person_placeholder()
             except Exception:
                 avatar_source = None
+                avatar_unavailable = False
         self.account_card.set_account(
             name or '未登录', mode, urls, skin_path, head_path, avatar_cache,
             mode_kind=mode_kind, avatar_source=avatar_source,
+            unavailable=avatar_unavailable,
         )
 
     def _on_version_selected(self, version_id):

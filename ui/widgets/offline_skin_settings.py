@@ -17,7 +17,7 @@ class OfflineSkinSettings(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        desc = QLabel('离线登录可通过 authlib-injector 使用皮肤；默认每次启动随机选择 Steve 或 Alex。')
+        desc = QLabel('离线登录可通过 authlib-injector 使用皮肤；每个离线账号首次会随机固定 Steve 或 Alex，之后保持不变。')
         desc.setWordWrap(True)
         desc.setStyleSheet('color:rgba(255,255,255,0.5); font-size:12px;')
         layout.addWidget(desc)
