@@ -108,7 +108,7 @@ python build_slim.py                    # onefile 便携版 + zip
 2. 用 `SparkCraftLauncher.slim_onedir.spec` 构建；
 3. 校验 exe、`_internal/`、静态图片插件、无 UPX、无旧 CurseForge Key；
 4. 生成 `dist_installer/SparkCraftLauncher-V1.11.5-onedir.zip`；
-5. 调用 Inno Setup 生成 `dist_installer/SparkCraftLauncher-Setup-V1.11.5.exe`；
+5. 调用 Inno Setup 生成 `dist_installer/V1.11.5-Setup-SparkCraftLauncher.exe`；
 6. 输出体积和 SHA256。
 
 `INNO_SETUP_ISCC` 可指定 `ISCC.exe` 路径；找不到时只跳过安装包生成。

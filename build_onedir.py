@@ -8,7 +8,7 @@ Usage:
 The output layout is:
     dist_onedir/SparkCraftLauncher/                 runnable directory
     dist_installer/SparkCraftLauncher-V*-onedir.zip update asset
-    dist_installer/SparkCraftLauncher-Setup-V*.exe  first-install setup
+    dist_installer/V*-Setup-SparkCraftLauncher.exe  first-install setup
 """
 
 from __future__ import annotations
@@ -154,7 +154,7 @@ def build_installer():
         return None
     print("running:", iscc, ISS, flush=True)
     subprocess.run([str(iscc), str(ISS)], cwd=str(ROOT), check=True)
-    out = INSTALLER_DIR / f"SparkCraftLauncher-Setup-V{version()}.exe"
+    out = INSTALLER_DIR / f"V{version()}-Setup-SparkCraftLauncher.exe"
     if not out.is_file():
         fail("installer was not generated")
     return out
