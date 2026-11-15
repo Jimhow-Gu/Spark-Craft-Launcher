@@ -364,7 +364,11 @@ def main():
     try:
         import threading
         from core.update import cleanup_old_executable
-        threading.Thread(target=cleanup_old_executable, daemon=True).start()
+        threading.Thread(
+            target=cleanup_old_executable,
+            kwargs={'retry_rounds': 6},
+            daemon=True,
+        ).start()
     except Exception:
         pass
 

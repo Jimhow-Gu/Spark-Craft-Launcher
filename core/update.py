@@ -19,10 +19,10 @@ from PySide6.QtCore import QThread, Signal
 from core.net import DownloadCancelled, DownloadError, HttpClient
 from core.paths import safe_rmtree, scl_dir
 
-CURRENT_VERSION = '1.11.5'
-VERSION_DISPLAY = 'V1.11.5（正式版）'
+CURRENT_VERSION = '1.11.6'
+VERSION_DISPLAY = 'V1.11.6（正式版）'
 # DLL 构建号在同一版本内递增；每次发布新大版本时重置为 1。
-EXECUTABLE_BUILD = '30'
+EXECUTABLE_BUILD = '31'
 REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
 API_KGGITHUB = f'https://api.kkgithub.com/repos/{REPO}/releases/latest'
@@ -898,31 +898,50 @@ def apply_update_inplace(asset_path, version):
         raise
 
 
-def cleanup_old_executable(retries=20):
-    '''启动成功后清理上一版重命名留下的 .old 文件。'''
+def cleanup_old_executable(retries=20, retry_rounds=1):
+    '''启动后清理上一版重命名留下的 .old 文件。
+
+    安全软件/旧进程可能在启动瞬间仍持有 exe 句柄；单轮 5 秒失败就留下
+    .old 是之前“更新后无法删除”的原因之一。这里在后台按 0/5/15/30/
+    60/120 秒多轮重试，每次启动也会重新尝试，文件释放后自动清掉。
+    '''
 
     if not getattr(sys, 'frozen', False):
         return
     try:
         target = Path(sys.executable).resolve()
-        candidates = list(target.parent.glob(target.name + '*.old'))
-        for old_exe in candidates:
-            for _ in range(max(1, int(retries))):
-                try:
-                    old_exe.unlink()
-                    write_update_log(f'cleaned old executable {old_exe.name}')
-                    break
-                except OSError:
-                    time.sleep(0.25)
         old_internal = target.parent / '_internal.old'
-        for _ in range(max(1, int(retries))):
-            if not old_internal.exists():
-                break
-            safe_rmtree(old_internal)
-            if not old_internal.exists():
-                write_update_log('cleaned old _internal backup')
-                break
-            time.sleep(0.25)
+        # 一次清理尝试最多等待约 5 秒；多轮之间给杀软/旧进程留出释放时间。
+        for round_index in range(max(1, int(retry_rounds))):
+            if round_index:
+                time.sleep((5, 15, 30, 60, 120)[min(round_index - 1, 4)])
+            candidates = list(target.parent.glob(target.name + '*.old'))
+            for old_exe in candidates:
+                for _ in range(max(1, int(retries))):
+                    try:
+                        try:
+                            os.chmod(old_exe, 0o666)
+                        except OSError:
+                            pass
+                        old_exe.unlink()
+                        write_update_log(f'cleaned old executable {old_exe.name}')
+                        break
+                    except OSError:
+                        time.sleep(0.25)
+                else:
+                    write_update_log(
+                        f'old executable still locked: {old_exe.name}'
+                    )
+            for _ in range(max(1, int(retries))):
+                if not old_internal.exists():
+                    break
+                safe_rmtree(old_internal)
+                if not old_internal.exists():
+                    write_update_log('cleaned old _internal backup')
+                    break
+                time.sleep(0.25)
+            if not list(target.parent.glob(target.name + '*.old')) and not old_internal.exists():
+                return
     except OSError:
         pass
 

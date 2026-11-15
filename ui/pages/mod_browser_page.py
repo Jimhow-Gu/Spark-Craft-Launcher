@@ -2085,6 +2085,7 @@ class ModBrowserPage(QWidget):
             except RuntimeError:
                 pass
         self._generation += 1
+        self._loaded_once = False
         self.status_label.setText('加载超时')
         self.loading_overlay.fail('加载超时，请检查网络后重试')
 
@@ -2099,6 +2100,13 @@ class ModBrowserPage(QWidget):
             self.search()
             return
         self.pagination.set_pages(self._page, pages)
+        if not self.isVisible():
+            # 离页时不要为不可见页面创建 20 个卡片；结果留到回来时再渲染。
+            self._last_projects = list(result.projects or [])
+            self.loading_overlay.stop()
+            if not self._last_projects:
+                self._loaded_once = False
+            return
         self._render_projects(result.projects)
 
     def _on_search_error(self, generation, message):
@@ -2116,6 +2124,7 @@ class ModBrowserPage(QWidget):
         self.results_list.setUpdatesEnabled(True)
         self._clear_results()
         self._last_projects = []
+        self._loaded_once = False
         self.status_label.setText('')
         self.loading_overlay.fail(reason)
 
@@ -2719,15 +2728,17 @@ class ModBrowserPage(QWidget):
         super().hideEvent(event)
 
     def _cancel_loading_workers(self):
-        """离页时取消加载线程，下载任务保持运行；回来时重建缓存卡片。"""
+        """离页时只取消可中断的辅助请求，搜索线程让它自然收尾。
+
+        QThread.terminate() 会绕过 Python 清理和 finished 信号，线程对象
+        以及其请求上下文会一直留在内存中；快速切页时会出现线性增长。
+        搜索请求最多一个在跑，让它按 HTTP 超时结束即可。
+        """
 
         workers = [
             worker for worker in list(self._workers)
-            if not isinstance(worker, DownloadWorker)
+            if not isinstance(worker, DownloadWorker) and worker is not self._search_worker
         ]
-        if self._search_worker is not None and self._search_worker.isRunning():
-            self._loaded_once = False
-            self._last_projects = []
         for worker in workers:
             cancel = getattr(worker, 'cancel', None)
             if callable(cancel):
@@ -2735,15 +2746,6 @@ class ModBrowserPage(QWidget):
                     cancel()
                 except Exception:
                     pass
-        for worker in workers:
-            try:
-                if worker.isRunning():
-                    worker.wait(180)
-                    if worker.isRunning():
-                        worker.terminate()
-                        worker.wait(80)
-            except RuntimeError:
-                continue
 
     def shutdown(self):
         self._render_token += 1

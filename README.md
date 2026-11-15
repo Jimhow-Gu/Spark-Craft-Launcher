@@ -49,7 +49,7 @@ mc_launcher/
 
 ### 安装版（推荐）
 
-下载 `V1.11.5-Setup-SparkCraftLauncher.exe` 运行安装程序。默认安装到
+下载 `V1.11.6-Setup-SparkCraftLauncher.exe` 运行安装程序。默认安装到
 `%LOCALAPPDATA%\Programs\SparkCraftLauncher`，支持开始菜单/桌面快捷方式。
 安装、覆盖升级和卸载都会保留同级 `SCL/` 用户数据。
 
