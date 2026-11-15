@@ -6,13 +6,13 @@
 |---|---:|
 | 原 DLL27 exe | 39,449,405 字节 |
 | 报告中的 v2 修复版 | 39,449,787 字节 |
-| slim exe | **36,631,668 字节** |
-| 相对 DLL27 节省 | **2,817,737 字节（7.14%）** |
-| slim zip | 36,310,002 字节 |
+| slim exe | **36,632,658 字节** |
+| 相对 DLL27 节省 | **2,816,747 字节（7.14%）** |
+| slim zip | 36,310,528 字节 |
 
-- exe SHA256：`4e3b4ed5185c4185b34e06f11b03655f45e4d28ee77a1d7e5c379f340481a536`
-- zip SHA256：`117202a2a92880ef48faf22f3e24ecb1710b65384bea38f3a1b65e54467b7ec6`
-- 构建号：`SCLREL1.11.4.R20261112.RP1.DLL28`
+- exe SHA256：`852cc228d06ec64ce40603dcd7cb8a6415182b2af527fa9b4cdf59193bbe763d`
+- zip SHA256：`f02ad13bf78452d70e5281efc8ae229eb0a084cd1394323bdcdbbf66d6427be7`
+- 构建号：`SCLREL1.11.4.R20261112.RP1.DLL29`
 - 可替换文件：`dist_slim/Spark Craft Launcher.exe`
 - 构建入口：`python build_slim.py`
 

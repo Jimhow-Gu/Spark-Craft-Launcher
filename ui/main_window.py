@@ -1842,6 +1842,11 @@ class MainWindow(QMainWindow):
                 if apply_update_inplace(asset_path, version):
                     # 新进程已经创建；立即退出，避免旧进程继续占用 exe / 单实例锁。
                     self._flush_exit_state()
+                    try:
+                        from core.thread_guard import shutdown_threads
+                        shutdown_threads()
+                    except Exception:
+                        pass
                     os._exit(0)
             except Exception as exc:
                 self._update_prepare_error = str(exc)
@@ -1870,6 +1875,11 @@ class MainWindow(QMainWindow):
         # 外部更新脚本正在等待本进程退出；先落盘再结束进程，
         # 避免配置/日志缓冲被 os._exit 截断。
         self._flush_exit_state()
+        try:
+            from core.thread_guard import shutdown_threads
+            shutdown_threads()
+        except Exception:
+            pass
         os._exit(0)
 
     def closeEvent(self, event):
@@ -1923,6 +1933,11 @@ class MainWindow(QMainWindow):
             # 给各页面 worker 留出 quit/wait 的时间；1 秒会抢在
             # account_page 的 5 秒等待之前 os._exit，导致线程被销毁告警。
             def _force_exit():
+                try:
+                    from core.thread_guard import shutdown_threads
+                    shutdown_threads()
+                except Exception:
+                    pass
                 self._flush_exit_state()
                 os._exit(0)
             timer = threading.Timer(15.0, _force_exit)

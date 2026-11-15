@@ -43,6 +43,8 @@ from core.version import VersionManager
 PROJECT_TEMP = scl_dir() / 'temp_install'
 PROJECT_TEMP.mkdir(parents=True, exist_ok=True)
 _ACTIVE_WORKERS: 'set' = set()
+_CATEGORY_CACHE: 'dict' = {}
+_CATEGORY_LOADING: 'set' = set()
 
 def _track_worker(worker):
     _ACTIVE_WORKERS.add(worker)
@@ -1970,21 +1972,32 @@ class ModBrowserPage(QWidget):
     def _load_categories(self):
         source_name = self.source_combo.currentText()
         key = source_name, self.project_type
+        if key in _CATEGORY_CACHE:
+            self._categories[key] = list(_CATEGORY_CACHE[key])
+            self._categories_loaded.add(key)
+            self._populate_categories()
+            return
         if key in self._categories_loaded:
             self._populate_categories()
             return
-        if key in self._categories_loading:
+        if key in self._categories_loading or key in _CATEGORY_LOADING:
             return
         self._categories_loading.add(key)
+        _CATEGORY_LOADING.add(key)
         worker = CategoriesWorker(source_name, self.project_type)
         worker.done.connect(self._on_categories)
+        worker.finished.connect(
+            (lambda k=key: _CATEGORY_LOADING.discard(k))
+        )
         _track_worker(worker)
 
     def _on_categories(self, source_name, project_type, categories):
         key = source_name, project_type
         self._categories[key] = categories or []
+        _CATEGORY_CACHE[key] = list(categories or [])
         self._categories_loaded.add(key)
         self._categories_loading.discard(key)
+        _CATEGORY_LOADING.discard(key)
         if source_name == self.source_combo.currentText() and project_type == self.project_type:
             self._populate_categories()
 

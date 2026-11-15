@@ -274,16 +274,26 @@ class ConfigManager:
     def _valid_memory_text(value):
         if not isinstance(value, str):
             return None
-        match = re.fullmatch(r'\s*(\d+(?:\.\d+)?)\s*([GgMm])\s*', value)
+        # 无单位按 MB 解释，避免 "2048"/"4096" 被静默丢弃。
+        match = re.fullmatch(r'\s*(\d+(?:\.\d+)?)\s*([GgMm]?)\s*', value)
         if not match:
             return None
         amount = float(match.group(1))
         if amount <= 0:
             return None
         unit = match.group(2).upper()
-        mb = amount * 1024 if unit == 'G' else amount
+        if unit == 'G':
+            mb = amount * 1024
+        elif unit == 'M' or not unit:
+            mb = amount
+            unit = 'M'
+        else:
+            mb = amount
         if mb < 512:
             return None
+        # 启动器的安全堆上限为 20GB；超过则收敛而不是生成超大 -Xmx。
+        if mb > 20 * 1024:
+            return '20G'
         return f'{amount:g}{unit}'
 
     @staticmethod
@@ -713,6 +723,12 @@ class ConfigManager:
         if not isinstance(path, str) or not path.strip():
             return False, '请输入游戏目录'
         path = path.strip()
+        if len(path) > 240:
+            return False, '路径过长，请使用更短的目录'
+        if not os.path.isabs(path):
+            return False, '请使用绝对路径'
+        if '..' in Path(path).parts:
+            return False, '路径不能包含 ..'
         if sys.platform == 'win32':
             # 允许中文等 Unicode；只拒绝 Windows 路径真正不允许的字符。
             check = path[2:] if re.match(r'^[A-Za-z]:[\\/]', path) else path

@@ -34,7 +34,6 @@ from core.launch import LaunchManager
 from core.installers import (InstallCancelled, create_alias, install_fabric, install_forge, install_neoforge, install_vanilla, retarget_launcher_profile)
 from core.net import DownloadCancelled, HttpClient
 from core.paths import scl_dir
-logging.basicConfig(level=logging.DEBUG, format='[%(asctime)s] [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 logger = logging.getLogger('VersionManager')
 PROJECT_TEMP = scl_dir() / 'temp_install'
 PROJECT_TEMP.mkdir(parents=True, exist_ok=True)

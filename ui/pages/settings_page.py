@@ -960,13 +960,13 @@ class SettingsPage(QWidget):
             mb = amount * 1024
         elif unit == 'K':
             mb = amount / 1024
-        elif unit == 'M':
+        elif unit == 'M' or not unit:
             mb = amount
         else:
-            mb = amount * 1024
+            mb = amount
         if mb < 512:
             return 512
-        return int(round(mb))
+        return min(20 * 1024, int(round(mb)))
 
     def _format_mem(self, mb):
         if mb >= 1024:

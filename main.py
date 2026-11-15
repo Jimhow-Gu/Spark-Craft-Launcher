@@ -252,6 +252,11 @@ def main():
         pass
     from core.error_guard import install_error_guard
     install_error_guard(app)
+    try:
+        from core.thread_guard import install_thread_guard
+        install_thread_guard(app)
+    except Exception:
+        pass
     from ui.widgets.checkbox_style import CheckBoxProxyStyle
     app.setStyle(CheckBoxProxyStyle())
     from ui.widgets.smooth_scroll import SmoothScroller

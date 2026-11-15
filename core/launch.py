@@ -19,7 +19,6 @@ from PySide6.QtCore import QThread, Signal
 import minecraft_launcher_lib
 from core.config import ConfigManager
 from core.auth import AuthManager
-logging.basicConfig(level=logging.DEBUG, format='[%(asctime)s] [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 logger = logging.getLogger('LaunchManager')
 _SHARED_JAVA_LIST = None
 _JAVA_LIST_LOCK = threading.Lock()
@@ -836,12 +835,13 @@ class LaunchManager:
             mb = amount * 1024
         elif unit == 'K':
             mb = amount / 1024
-        elif unit == 'M':
+        elif unit == 'M' or not unit:
             mb = amount
         else:
-            mb = amount * 1024
+            mb = amount
         if mb < 512:
             return '512M'
+        mb = min(mb, 20 * 1024)
         gb = mb / 1024
         if gb == int(gb):
             return f'{int(gb)}G'
