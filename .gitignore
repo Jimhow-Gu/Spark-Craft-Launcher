@@ -103,3 +103,16 @@ core/_curseforge_key.py
 
 # Local slim FFmpeg build dependency; see slim_ffmpeg/README.md
 slim_ffmpeg/*.dll
+
+# Onedir installer build artifacts and local test workspaces
+build_onedir/
+dist_onedir/
+dist_installer/
+build_slim_v1115/
+build_slim_pyi/
+dist_slim_v1115/
+build_lazy/
+dist_lazy/
+dist_slim/
+_slim_tools/
+_backup_main_window.py

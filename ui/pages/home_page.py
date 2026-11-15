@@ -371,6 +371,7 @@ class HomePage(QWidget):
         QTimer.singleShot(100, self._refresh_all)
 
     def _init_ui(self):
+        self._selector_ui_ready = False
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         self.stacked = QStackedWidget()
@@ -472,6 +473,11 @@ class HomePage(QWidget):
         scroll.setWidget(content)
         home_layout.addWidget(scroll)
         self.stacked.addWidget(home_widget)
+        main_layout.addWidget(self.stacked)
+
+    def _ensure_selector_ui(self):
+        if getattr(self, '_selector_ui_ready', False):
+            return
         selector_widget = QWidget()
         selector_layout = QVBoxLayout(selector_widget)
         selector_layout.setContentsMargins(0, 0, 0, 0)
@@ -590,7 +596,7 @@ class HomePage(QWidget):
         scroll_sel.setWidget(content_sel)
         selector_layout.addWidget(scroll_sel)
         self.stacked.addWidget(selector_widget)
-        main_layout.addWidget(self.stacked)
+        self._selector_ui_ready = True
 
     def _group_style(self):
         return '\n            QGroupBox {\n                background: rgba(30,41,41,0.84);\n                border: 1px solid rgba(255,255,255,0.22);\n                border-radius: 12px;\n                margin-top: 0px;\n                padding-top: 8px;\n            }\n        '
@@ -789,6 +795,8 @@ class HomePage(QWidget):
         self._update_selector_list(versions)
 
     def _update_selector_list(self, versions):
+        if not getattr(self, '_selector_ui_ready', False):
+            return
         self.fav_list.setUpdatesEnabled(False)
         self.mod_list.setUpdatesEnabled(False)
         self.vanilla_list.setUpdatesEnabled(False)
@@ -998,6 +1006,7 @@ class HomePage(QWidget):
         self._refresh_selector_dir_combo()
 
     def _show_version_selector(self):
+        self._ensure_selector_ui()
         self.stacked.setCurrentIndex(1)
         self._refresh_selector_dir_combo()
         versions = self.version_mgr.get_installed_versions()

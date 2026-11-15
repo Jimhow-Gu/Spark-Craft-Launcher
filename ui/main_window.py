@@ -6,11 +6,6 @@ import time
 from pathlib import Path
 from core.app_font import ui_font
 from core.background import get_settings
-from core.music import BackgroundMusicPlayer
-from ui.pages import (HomePage, VersionPage, AccountPage, SettingsPage, GameSettingsPage)
-from ui.pages.about_page import AboutPage
-from ui.pages.download_manager_page import DownloadManagerPage
-from ui.pages.news_page import NewsPage
 from ui.widgets.account_card import AccountCard
 from ui.widgets.download_status_bar import DownloadStatusBar
 from ui.widgets.painted_icons import set_button_icon
@@ -40,6 +35,11 @@ _WINDOW_FILTER_EVENTS = frozenset((
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        try:
+            from core.thread_guard import install_thread_guard
+            install_thread_guard(QApplication.instance())
+        except Exception:
+            pass
         self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
@@ -75,7 +75,10 @@ class MainWindow(QMainWindow):
         if app is not None and not app.windowIcon().isNull():
             self.setWindowIcon(app.windowIcon())
         self.download_manager = DownloadManager.instance()
-        self.music_player = BackgroundMusicPlayer.instance()
+        self._music_player = None
+        self._music_initial_pause = False
+        self._music_started = False
+        self._account_card_started = False
         self._media_backgrounded = False
         self._game_running = False
         self._game_media_paused = False
@@ -241,7 +244,6 @@ class MainWindow(QMainWindow):
         )
         left_layout.addWidget(self.status_label)
         self.central.video_state_changed.connect((lambda _playing: self._update_media_buttons()))
-        self.music_player.state_changed.connect(self._update_media_buttons)
         QTimer.singleShot(0, self._update_media_buttons)
         self.page_stack = QStackedWidget()
         self.page_stack.setFrameShape(QFrame.NoFrame)
@@ -297,6 +299,35 @@ class MainWindow(QMainWindow):
         self._fade_anim = None
         self.start_fade_anim()
         QTimer.singleShot(800, self._apply_window_mask)
+
+    def _refresh_account_card_startup(self):
+        if getattr(self, '_closing', False):
+            return
+        try:
+            self.refresh_account_card()
+        except Exception:
+            pass
+
+    def _init_music_player(self):
+        if getattr(self, '_closing', False):
+            return
+        try:
+            self.music_player
+        except Exception:
+            pass
+        self._update_media_buttons()
+
+    @property
+    def music_player(self):
+        player = self._music_player
+        if player is None:
+            from core.music import BackgroundMusicPlayer
+            player = BackgroundMusicPlayer.instance()
+            self._music_player = player
+            player.state_changed.connect(self._update_media_buttons)
+            if getattr(self, '_music_initial_pause', False):
+                player.pause(remember=False)
+        return player
 
     def _add_nav_header(self, text):
         item = QListWidgetItem(text)
@@ -644,25 +675,34 @@ class MainWindow(QMainWindow):
                     break
 
     def show_download_section(self, section):
+        self._ensure_page_index(1)
         self._select_nav(1, section)
         self.page_stack.setCurrentIndex(1)
         self.version_page.show_section(section)
 
     def _apply_title(self, title=None):
+        try:
+            from core.config import ConfigManager
+            config = ConfigManager()
+        except Exception:
+            config = None
         if title is None:
             try:
-                title = self.settings_page.config.get('global_window_title', 'Spark Craft Launcher')
+                title = config.get('global_window_title', 'Spark Craft Launcher') if config else 'Spark Craft Launcher'
             except Exception:
                 title = 'Spark Craft Launcher'
         title = str(title or 'Spark Craft Launcher').strip() or 'Spark Craft Launcher'
         try:
-            color = self.settings_page.config.get('global_title_color', '#88DDDD') or '#88DDDD'
+            color = config.get('global_title_color', '#88DDDD') if config else '#88DDDD'
+            color = color or '#88DDDD'
         except Exception:
             color = '#88DDDD'
         self.setWindowTitle('Spark Craft Launcher')
         try:
-            mode = self.settings_page.config.get('title_bar_mode', 'text') or 'text'
-            image = self.settings_page.config.get('global_title_image', '') or ''
+            mode = config.get('title_bar_mode', 'text') if config else 'text'
+            image = config.get('global_title_image', '') if config else ''
+            mode = mode or 'text'
+            image = image or ''
         except Exception:
             mode = 'text'
             image = ''
@@ -704,75 +744,184 @@ class MainWindow(QMainWindow):
             pass
 
     def init_all_pages(self):
-        self.home_page = HomePage(self)
-        self.version_page = VersionPage(self)
-        self.account_page = AccountPage(self)
-        self.settings_page = SettingsPage(self)
-        self.version_page.version_installed.connect(self.home_page.refresh_versions)
-        self.version_page.version_selected.connect(self._on_version_selected)
-        self.version_page.game_dir_changed.connect(self._on_game_dir_changed)
-        self.home_page.request_switch_page.connect(self._switch_page)
-        self.home_page.request_offline_login.connect((lambda: self._switch_page(2)))
-        self.home_page.open_game_settings.connect(self.open_game_settings)
-        self.home_page.game_dir_changed.connect(self._on_home_game_dir_changed)
-        self.page_stack.addWidget(self.home_page)
-        self.page_stack.addWidget(self.version_page)
-        self.page_stack.addWidget(self.account_page)
-        self.page_stack.addWidget(self.settings_page)
-        self.about_page = AboutPage()
-        self.about_page.check_update.connect((lambda: self._check_updates(manual=True)))
-        self.page_stack.addWidget(self.about_page)
-        self.download_manager_page = DownloadManagerPage(self)
-        self.download_manager_page.back_requested.connect(self.close_download_manager_page)
-        self.page_stack.addWidget(self.download_manager_page)
-        self.news_page = NewsPage(self)
-        self.page_stack.addWidget(self.news_page)
+        # 首帧只搭导航壳；主页在窗口显示后首轮事件循环创建，由开场淡入遮罩。
+        self._home_page_placeholder = QWidget()
+        self._home_page_placeholder.setStyleSheet('background:transparent;')
+        self.page_stack.addWidget(self._home_page_placeholder)
+        self._building_home_page = False
+        self._page_attrs = {
+            1: 'version_page',
+            2: 'account_page',
+            3: 'settings_page',
+            4: 'about_page',
+            5: 'download_manager_page',
+            6: 'news_page',
+        }
+        self._page_placeholders = {}
+        for index in range(1, 7):
+            placeholder = QWidget()
+            placeholder.setStyleSheet('background:transparent;')
+            self.page_stack.addWidget(placeholder)
+            self._page_placeholders[index] = placeholder
+        self._deferred_started = False
+        self._deferred_queue = [1, 2, 3, 4, 5, 6]
         self._page_animation = None
         self._page_fade_overlay = None
         self.page_stack.currentChanged.connect(self._animate_page_change)
         self.page_stack.currentChanged.connect(self._style_current_page)
-        try:
-            self.settings_page.background_changed.connect(self._refresh_background)
-            self.settings_page.background_refresh.connect((lambda: self._refresh_background(force=True)))
-            self.settings_page.title_changed.connect(self._apply_title)
-            self.settings_page.settings_changed.connect(self._on_settings_changed)
-            self.settings_page.homepage_mode_changed.connect(self._on_homepage_mode_changed)
-            self.settings_page.video_music_changed.connect(self._on_video_music_changed)
-            self.settings_page.video_volume_changed.connect(self.central.set_video_volume)
-            try:
-                self.central.set_video_volume(
-                    int(self.settings_page.config.get('background_video_volume', 70) or 70)
-                )
-            except Exception:
-                pass
-        except Exception:
-            pass
-        try:
-            self.account_page.account_changed.connect(self.refresh_account_card)
-            self.account_page.account_changed.connect(
-                (lambda: self.home_page.refresh_versions())
-            )
-        except Exception:
-            pass
-        self.refresh_account_card()
+        QTimer.singleShot(0, self._build_home_page)
         self.central.reload()
         self._apply_ui_depth()
         self._apply_title()
-        self._apply_default_nav_page()
+        # 默认导航页延后到首帧之后，避免启动阶段同步创建新闻页。
+        QTimer.singleShot(150, self._apply_default_nav_page)
         try:
-            self.settings_page.theme_changed.connect(self._on_theme_changed)
-        except Exception:
-            pass
-        try:
+            from core.config import ConfigManager
             video_music = bool(
-                self.settings_page.config.get('background_video_audio', False)
+                ConfigManager().get('background_video_audio', False)
             )
             self.central.set_video_audio_enabled(video_music)
             if video_music:
-                self.music_player.pause(remember=False)
+                self._music_initial_pause = True
+                if self._music_player is not None:
+                    self._music_player.pause(remember=False)
+            self.central.set_video_volume(
+                int(ConfigManager().get('background_video_volume', 70) or 70)
+            )
         except Exception:
             pass
         QTimer.singleShot(0, self._update_media_buttons)
+
+    def __getattr__(self, name):
+        if name == 'home_page' and '_home_page_placeholder' in self.__dict__:
+            return self._ensure_home_page()
+        attrs = self.__dict__.get('_page_attrs')
+        if attrs and name in attrs.values():
+            return self._ensure_page(name)
+        raise AttributeError(name)
+
+    def _build_home_page(self):
+        if getattr(self, '_closing', False):
+            return
+        try:
+            self._ensure_home_page()
+        except Exception:
+            import logging
+            logging.getLogger('Startup').exception('主页延迟初始化失败')
+
+    def _ensure_home_page(self):
+        page = self.__dict__.get('home_page')
+        if page is not None:
+            return page
+        if getattr(self, '_building_home_page', False):
+            raise RuntimeError('主页正在初始化')
+        self._building_home_page = True
+        try:
+            from ui.pages.home_page import HomePage
+            page = HomePage(self)
+            page.request_switch_page.connect(self._switch_page)
+            page.request_offline_login.connect((lambda: self._switch_page(2)))
+            page.open_game_settings.connect(self.open_game_settings)
+            page.game_dir_changed.connect(self._on_home_game_dir_changed)
+            placeholder = self.__dict__.get('_home_page_placeholder')
+            self.page_stack.blockSignals(True)
+            try:
+                self.page_stack.insertWidget(0, page)
+                if placeholder is not None:
+                    self.page_stack.removeWidget(placeholder)
+                    placeholder.deleteLater()
+                self.page_stack.setCurrentIndex(0)
+            finally:
+                self.page_stack.blockSignals(False)
+            self.__dict__['home_page'] = page
+            self.__dict__.pop('_home_page_placeholder', None)
+            return page
+        finally:
+            self._building_home_page = False
+
+    def _ensure_page_index(self, index):
+        attr = self._page_attrs.get(index) if hasattr(self, '_page_attrs') else None
+        if attr:
+            self._ensure_page(attr)
+        return self.page_stack.widget(index)
+
+    def _ensure_page(self, name):
+        page = self.__dict__.get(name)
+        if page is not None:
+            return page
+        index = next(
+            (idx for idx, attr in self._page_attrs.items() if attr == name),
+            None,
+        )
+        if index is None:
+            raise AttributeError(name)
+        factory = getattr(self, '_create_' + name)
+        page = factory()
+        placeholder = self._page_placeholders.pop(index, None)
+        if placeholder is not None:
+            self.page_stack.removeWidget(placeholder)
+            placeholder.deleteLater()
+        self.page_stack.insertWidget(index, page)
+        self.__dict__[name] = page
+        if name == 'account_page':
+            page.account_changed.connect(self.refresh_account_card)
+            page.account_changed.connect(
+                (lambda: self.home_page.refresh_versions())
+            )
+            self.refresh_account_card()
+        return page
+
+    def _create_version_page(self):
+        from ui.pages.version_page import VersionPage
+        page = VersionPage(self)
+        page.version_installed.connect(self.home_page.refresh_versions)
+        page.version_selected.connect(self._on_version_selected)
+        page.game_dir_changed.connect(self._on_game_dir_changed)
+        return page
+
+    def _create_account_page(self):
+        from ui.pages.account_page import AccountPage
+        return AccountPage(self)
+
+    def _create_settings_page(self):
+        from ui.pages.settings_page import SettingsPage
+        page = SettingsPage(self)
+        page.background_changed.connect(self._refresh_background)
+        page.background_refresh.connect((lambda: self._refresh_background(force=True)))
+        page.title_changed.connect(self._apply_title)
+        page.settings_changed.connect(self._on_settings_changed)
+        page.homepage_mode_changed.connect(self._on_homepage_mode_changed)
+        page.video_music_changed.connect(self._on_video_music_changed)
+        page.video_volume_changed.connect(self.central.set_video_volume)
+        page.theme_changed.connect(self._on_theme_changed)
+        return page
+
+    def _create_about_page(self):
+        from ui.pages.about_page import AboutPage
+        page = AboutPage()
+        page.check_update.connect((lambda: self._check_updates(manual=True)))
+        return page
+
+    def _create_download_manager_page(self):
+        from ui.pages.download_manager_page import DownloadManagerPage
+        page = DownloadManagerPage(self)
+        page.back_requested.connect(self.close_download_manager_page)
+        return page
+
+    def _create_news_page(self):
+        from ui.pages.news_page import NewsPage
+        return NewsPage(self)
+
+    def _build_deferred_pages(self):
+        if getattr(self, '_closing', False):
+            return
+        if not getattr(self, '_deferred_queue', None):
+            return
+        index = self._deferred_queue.pop(0)
+        if index in self._page_placeholders:
+            self._ensure_page_index(index)
+        if self._deferred_queue:
+            QTimer.singleShot(35, self._build_deferred_pages)
 
     def _on_theme_changed(self, theme):
         try:
@@ -801,13 +950,17 @@ class MainWindow(QMainWindow):
         self.video_toggle_btn.setEnabled(video_available)
         set_button_icon(self.video_toggle_btn, 'pause' if video_playing else 'play', 16, '#e6edf3')
         self.video_toggle_btn.setToolTip('暂停背景视频' if video_playing else '播放背景视频')
+        player = self._music_player
         try:
-            music_playing = self.music_player.is_playing()
-            music_muted = self.music_player.is_muted()
-            try:
-                has_music = bool(self.music_player.has_tracks())
-            except AttributeError:
-                has_music = bool(self.music_player.current_name())
+            if player is None:
+                music_playing, music_muted, has_music = False, False, False
+            else:
+                music_playing = player.is_playing()
+                music_muted = player.is_muted()
+                try:
+                    has_music = bool(player.has_tracks())
+                except AttributeError:
+                    has_music = bool(player.current_name())
         except Exception:
             music_playing, music_muted, has_music = False, False, False
         audible = music_playing and not music_muted
@@ -1152,9 +1305,14 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(3000, notify)
 
     def refresh_account_card(self):
-        if not hasattr(self, 'account_page'):
-            return
-        config = self.account_page.config
+        if 'account_page' in self.__dict__:
+            config = self.account_page.config
+        else:
+            try:
+                from core.config import ConfigManager
+                config = ConfigManager()
+            except Exception:
+                return
         login_type = config.get('login_type', 'offline')
         name = ''
         mode = ''
@@ -1238,10 +1396,11 @@ class MainWindow(QMainWindow):
         except Exception:
             avatar_cache = None
         avatar_source = None
-        try:
-            avatar_source = self.account_page.current_avatar_source()
-        except Exception:
-            avatar_source = None
+        if 'account_page' in self.__dict__:
+            try:
+                avatar_source = self.account_page.current_avatar_source()
+            except Exception:
+                avatar_source = None
         self.account_card.set_account(
             name or '未登录', mode, urls, skin_path, head_path, avatar_cache,
             mode_kind=mode_kind, avatar_source=avatar_source,
@@ -1259,14 +1418,18 @@ class MainWindow(QMainWindow):
             pass
 
     def _apply_default_nav_page(self):
+        if getattr(self, '_closing', False):
+            return
         try:
-            page = str(self.settings_page.config.get('default_nav_page', 'home') or 'home')
+            from core.config import ConfigManager
+            page = str(ConfigManager().get('default_nav_page', 'home') or 'home')
         except Exception:
             page = 'home'
         if page == 'launch':
             self._select_nav(0)
             self.page_stack.setCurrentIndex(0)
         else:
+            self._ensure_page_index(6)
             self._select_nav(6)
             self.page_stack.setCurrentIndex(6)
 
@@ -1378,6 +1541,7 @@ class MainWindow(QMainWindow):
         if not data:
             return
         page_index, section = data
+        self._ensure_page_index(page_index)
         self.page_stack.setCurrentIndex(page_index)
         if page_index == 6:
             self.news_page.show_news_home()
@@ -1438,6 +1602,7 @@ class MainWindow(QMainWindow):
         anim.start()
 
     def _switch_page(self, index):
+        self._ensure_page_index(index)
         if index == 1:
             self.show_download_section('available')
             return
@@ -1594,6 +1759,15 @@ class MainWindow(QMainWindow):
                 self._ui_scale_initialized = True
             except Exception:
                 pass
+        if not getattr(self, '_deferred_started', False):
+            self._deferred_started = True
+            QTimer.singleShot(40, self._build_deferred_pages)
+        if not getattr(self, '_music_started', False):
+            self._music_started = True
+            QTimer.singleShot(0, self._init_music_player)
+        if not getattr(self, '_account_card_started', False):
+            self._account_card_started = True
+            QTimer.singleShot(0, self._refresh_account_card_startup)
         if getattr(self, '_fade_in_done', False):
             return
         self._fade_in_done = True
@@ -1828,7 +2002,7 @@ class MainWindow(QMainWindow):
             pass
 
     def _quit_for_update(self, asset_path='', version=''):
-        '''优先在当前进程内替换 exe 并启动新版本，失败时回退到外部更新脚本。'''
+        '''onefile 在当前进程内替换 exe，onedir 交给目录更新器；最后退出。'''
 
         self._closing = True
         try:
@@ -1838,8 +2012,8 @@ class MainWindow(QMainWindow):
             pass
         if asset_path:
             try:
-                from core.update import apply_update_inplace
-                if apply_update_inplace(asset_path, version):
+                from core.update import apply_update_inplace, is_onedir_install
+                if not is_onedir_install() and apply_update_inplace(asset_path, version):
                     # 新进程已经创建；立即退出，避免旧进程继续占用 exe / 单实例锁。
                     self._flush_exit_state()
                     try:
@@ -1888,7 +2062,8 @@ class MainWindow(QMainWindow):
             return
         try:
             active = []
-            if self.version_page and self.version_page.has_active_tasks():
+            version_page = self.__dict__.get('version_page')
+            if version_page is not None and version_page.has_active_tasks():
                 active.append('资源/版本下载或整合包导入')
             repair_active = False
             if self.game_settings_page:
@@ -1943,16 +2118,18 @@ class MainWindow(QMainWindow):
             timer = threading.Timer(15.0, _force_exit)
             timer.daemon = True
             timer.start()
-            if self.version_page:
-                self.version_page.shutdown()
-            if self.home_page:
-                self.home_page.shutdown()
-            if self.account_page:
-                self.account_page.shutdown()
-            if self.settings_page:
-                self.settings_page.shutdown()
-            if self.news_page:
-                self.news_page.shutdown()
+            for name in (
+                'version_page', 'account_page', 'settings_page', 'news_page'
+            ):
+                page = self.__dict__.get(name)
+                if page is not None:
+                    try:
+                        page.shutdown()
+                    except Exception:
+                        pass
+            home_page = self.__dict__.get('home_page')
+            if home_page is not None:
+                home_page.shutdown()
             if self.game_settings_page:
                 self.game_settings_page.close()
             app = QApplication.instance()

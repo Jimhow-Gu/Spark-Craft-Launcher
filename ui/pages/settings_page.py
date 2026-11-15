@@ -74,7 +74,6 @@ class SettingsPage(QWidget):
         self._mem_live_timer = QTimer(self)
         self._mem_live_timer.setInterval(2000)
         self._mem_live_timer.timeout.connect(self._update_live_memory)
-        self._mem_live_timer.start()
         self._manual_java_detect = False
         self._last_iso_value = 'off'
         self.java_scan = JavaScanService.instance()
@@ -919,8 +918,15 @@ class SettingsPage(QWidget):
                 self.java_scan.start()
         except Exception:
             pass
+        self._mem_live_timer.start()
+        self._update_live_memory()
+
+    def hideEvent(self, event):
+        self._mem_live_timer.stop()
+        super().hideEvent(event)
 
     def shutdown(self):
+        self._mem_live_timer.stop()
         self._stop_settings_tab_animation()
         try:
             self.offline_skin.shutdown()
@@ -1026,6 +1032,8 @@ class SettingsPage(QWidget):
             return 2048, 0
 
     def _update_live_memory(self):
+        if not self.isVisible():
+            return
         if not hasattr(self, 'mem_slider'):
             return
         try:

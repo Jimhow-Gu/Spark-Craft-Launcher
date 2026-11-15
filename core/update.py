@@ -19,10 +19,10 @@ from PySide6.QtCore import QThread, Signal
 from core.net import DownloadCancelled, DownloadError, HttpClient
 from core.paths import safe_rmtree, scl_dir
 
-CURRENT_VERSION = '1.11.4'
-VERSION_DISPLAY = 'V1.11.4（正式版）'
+CURRENT_VERSION = '1.11.5'
+VERSION_DISPLAY = 'V1.11.5（正式版）'
 # DLL 构建号在同一版本内递增；每次发布新大版本时重置为 1。
-EXECUTABLE_BUILD = '29'
+EXECUTABLE_BUILD = '30'
 REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
 API_KGGITHUB = f'https://api.kkgithub.com/repos/{REPO}/releases/latest'
@@ -154,7 +154,48 @@ def _fetch_release_api(api_url, timeout, results):
             http.close()
 
 
-def fetch_latest_release(timeout=12):
+def is_onedir_install():
+    """当前进程是否为 PyInstaller onedir 安装（用于选择目录更新包）。"""
+
+    if not getattr(sys, 'frozen', False):
+        return False
+    try:
+        return (Path(sys.executable).resolve().parent / '_internal').is_dir()
+    except OSError:
+        return False
+
+
+def _asset_priority(assets, prefer_onedir):
+    usable = [
+        asset for asset in assets
+        if isinstance(asset, dict) and str(asset.get('name') or '').strip()
+    ]
+    if prefer_onedir:
+        for asset in usable:
+            name = str(asset.get('name') or '').lower()
+            if name.endswith('.zip') and 'onedir' in name:
+                return asset
+        for asset in usable:
+            name = str(asset.get('name') or '').lower()
+            if name.endswith('.zip') and 'setup' not in name and 'installer' not in name:
+                return asset
+    else:
+        # 旧版 onefile 只能替换单个 exe。安装器 exe 不能作为自动更新附件，
+        # 否则旧客户端会把启动器本体换成安装程序。
+        for asset in usable:
+            name = str(asset.get('name') or '').lower()
+            if name.endswith('.exe') and not any(
+                marker in name for marker in ('setup', 'installer', '安装')
+            ):
+                return asset
+        for asset in usable:
+            name = str(asset.get('name') or '').lower()
+            if name.endswith('.zip') and 'onedir' not in name:
+                return asset
+    return None
+
+
+def fetch_latest_release(timeout=12, prefer_onedir=None):
     '''并发读取最新 Release；哪个官方接口或镜像先返回就用哪个。'''
 
     sources = list(dict.fromkeys(API_SOURCES))
@@ -191,19 +232,9 @@ def fetch_latest_release(timeout=12):
         return None
 
     assets = data.get('assets') or []
-    chosen = None
-    for asset in assets:
-        if not isinstance(asset, dict):
-            continue
-        name = str(asset.get('name') or '').lower()
-        if name.endswith('.exe'):
-            chosen = asset
-            break
-    if chosen is None:
-        for asset in assets:
-            if isinstance(asset, dict) and str(asset.get('name') or '').lower().endswith('.zip'):
-                chosen = asset
-                break
+    if prefer_onedir is None:
+        prefer_onedir = is_onedir_install()
+    chosen = _asset_priority(assets, bool(prefer_onedir))
     tag = str(data.get('tag_name') or '').strip()
     body = str(data.get('body') or '')
     return {
@@ -368,6 +399,210 @@ def _extract_exe(asset_path):
     return target
 
 
+def _safe_extract_zip(archive, destination):
+    '''只按安全相对路径解压，拒绝 zip slip、SCL 用户数据和异常体积。'''
+
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    root = destination.resolve()
+    total_size = 0
+    with zipfile.ZipFile(archive) as zf:
+        infos = zf.infolist()
+        if len(infos) > 20000:
+            raise DownloadError('更新 zip 文件数量异常')
+        for info in infos:
+            raw_name = info.filename.replace('\\', '/').lstrip('/')
+            parts = [part for part in raw_name.split('/') if part not in ('', '.')]
+            if not parts or '..' in parts:
+                raise DownloadError('更新 zip 包含非法路径')
+            if parts[0].lower() == '__macosx':
+                continue
+            # 任何层级的 SCL 都是用户数据，更新包不得覆盖或搬移。
+            if any(part.lower() == 'scl' for part in parts):
+                continue
+            total_size += int(info.file_size or 0)
+            if total_size > 2 * 1024 * 1024 * 1024:
+                raise DownloadError('更新 zip 解压后体积异常')
+            target = (root.joinpath(*parts)).resolve()
+            if target != root and root not in target.parents:
+                raise DownloadError('更新 zip 路径越界')
+            if info.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(info) as source, target.open('wb') as output:
+                shutil.copyfileobj(source, output, 1024 * 1024)
+
+
+def _extract_onedir(asset_path):
+    '''解压 onedir 更新包，返回 (启动器 exe, 包根目录)。'''
+
+    path = Path(asset_path)
+    if not path.is_file():
+        raise DownloadError('更新安装包不存在，请重新下载更新。')
+    if path.suffix.lower() != '.zip':
+        raise DownloadError('onedir 更新需要 zip 安装包')
+    destination = scl_dir() / 'update' / 'onedir_new'
+    safe_rmtree(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    _safe_extract_zip(path, destination)
+
+    candidates = []
+    for candidate in destination.rglob('*'):
+        try:
+            if not candidate.is_file() or candidate.suffix.lower() != '.exe':
+                continue
+            if not (candidate.parent / '_internal').is_dir():
+                continue
+            candidates.append(candidate)
+        except OSError:
+            continue
+    preferred = [
+        candidate for candidate in candidates
+        if candidate.name.lower() in ('sparkcraftlauncher.exe', 'spark craft launcher.exe')
+    ]
+    chosen = preferred[0] if preferred else (candidates[0] if len(candidates) == 1 else None)
+    if chosen is None:
+        safe_rmtree(destination)
+        raise DownloadError('更新 zip 中没有有效的 onedir 启动器')
+    chosen = chosen.resolve()
+    try:
+        with chosen.open('rb') as handle:
+            if handle.read(2) != b'MZ':
+                safe_rmtree(destination)
+                raise DownloadError('更新包中的启动器不是有效的 exe')
+        if not any((chosen.parent / '_internal').iterdir()):
+            safe_rmtree(destination)
+            raise DownloadError('更新包中的 _internal 为空')
+    except OSError as exc:
+        raise DownloadError(f'无法读取更新包：{exc}')
+    root = chosen.parent
+    try:
+        if destination.resolve() not in root.parents and root != destination.resolve():
+            raise DownloadError('更新包目录越界')
+    except OSError as exc:
+        raise DownloadError(f'无法读取更新包目录：{exc}')
+    return chosen, root
+
+
+def _prepare_onedir_update(asset_path, version):
+    '''解压后由 PowerShell 等待旧进程退出，再整体替换 exe 与 _internal。'''
+
+    if not getattr(sys, 'frozen', False):
+        raise DownloadError('源码运行模式不支持自动更新。')
+    target = Path(sys.executable).resolve()
+    if not target.is_file():
+        raise DownloadError('找不到当前启动器 exe，无法自动更新。')
+    new_exe, new_root = _extract_onedir(asset_path)
+    if new_exe.name.lower() != target.name.lower():
+        raise DownloadError('更新包中的启动器名称与当前程序不一致')
+    update_dir = scl_dir() / 'update'
+    update_dir.mkdir(parents=True, exist_ok=True)
+    marker = _pending_update_marker(version)
+    script = update_dir / 'apply_onedir_update.ps1'
+    script_text = chr(10).join([
+        'param([int]$WaitPid,[string]$NewRoot,[string]$TargetExe,[string]$WorkDir)',
+        '$TargetDir = Split-Path -Parent $TargetExe',
+        '$ExeName = Split-Path -Leaf $TargetExe',
+        '$TargetInternal = Join-Path $TargetDir "_internal"',
+        '$NewInternal = Join-Path $NewRoot "_internal"',
+        '$BackupInternal = $TargetInternal + ".old"',
+        '$BackupExe = $TargetExe + ".old"',
+        '$LogDir = Join-Path $TargetDir "SCL\\update"',
+        'New-Item -ItemType Directory -Force -Path $LogDir | Out-Null',
+        '$Log = Join-Path $LogDir "apply_update.log"',
+        'function Write-UpdaterLog([string]$Text) {',
+        '    Add-Content -LiteralPath $Log -Value ("[" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "] " + $Text) -Encoding UTF8',
+        '}',
+        'function Invoke-Retry([string]$Label,[scriptblock]$Action) {',
+        '    for ($i = 0; $i -lt 120; $i++) {',
+        '        try { & $Action; return $true } catch {',
+        '            if (($i % 10) -eq 0) { Write-UpdaterLog ($Label + " retry: " + $_.Exception.Message) }',
+        '            Start-Sleep -Milliseconds 500',
+        '        }',
+        '    }',
+        '    Write-UpdaterLog ($Label + " failed after retries")',
+        '    return $false',
+        '}',
+        'Write-UpdaterLog "onedir: waiting for pid $WaitPid"',
+        'Wait-Process -Id $WaitPid -ErrorAction SilentlyContinue',
+        'Start-Sleep -Milliseconds 1000',
+        'if (!(Test-Path -LiteralPath $NewInternal) -or !(Test-Path -LiteralPath (Join-Path $NewRoot $ExeName))) {',
+        '    Write-UpdaterLog "onedir: new package incomplete"',
+        '    exit 1',
+        '}',
+        'if (Test-Path -LiteralPath $BackupInternal) {',
+        '    if (!(Invoke-Retry "remove old internal backup" { Remove-Item -LiteralPath $BackupInternal -Recurse -Force -ErrorAction Stop })) { exit 1 }',
+        '}',
+        'if (Test-Path -LiteralPath $BackupExe) {',
+        '    if (!(Invoke-Retry "remove old exe backup" { Remove-Item -LiteralPath $BackupExe -Force -ErrorAction Stop })) { exit 1 }',
+        '}',
+        '$movedExe = $false',
+        '$movedInternal = $false',
+        'if (Test-Path -LiteralPath $TargetExe) {',
+        '    $movedExe = Invoke-Retry "backup exe" { Move-Item -LiteralPath $TargetExe -Destination $BackupExe -Force -ErrorAction Stop }',
+        '    if (!$movedExe) { Write-UpdaterLog "onedir: cannot move current exe"; exit 1 }',
+        '}',
+        'if (Test-Path -LiteralPath $TargetInternal) {',
+        '    $movedInternal = Invoke-Retry "backup internal" { Move-Item -LiteralPath $TargetInternal -Destination $BackupInternal -Force -ErrorAction Stop }',
+        '    if (!$movedInternal) {',
+        '        if ($movedExe) { Invoke-Retry "restore exe" { Move-Item -LiteralPath $BackupExe -Destination $TargetExe -Force -ErrorAction Stop } | Out-Null }',
+        '        Write-UpdaterLog "onedir: cannot move current _internal"',
+        '        exit 1',
+        '    }',
+        '}',
+        '$copiedInternal = Invoke-Retry "copy internal" {',
+        '    New-Item -ItemType Directory -Force -Path $TargetInternal -ErrorAction Stop | Out-Null',
+        '    Copy-Item -Path (Join-Path $NewInternal "*") -Destination $TargetInternal -Recurse -Force -ErrorAction Stop',
+        '}',
+        '$copiedExe = $false',
+        'if ($copiedInternal) {',
+        '    $copiedExe = Invoke-Retry "copy exe" { Copy-Item -LiteralPath (Join-Path $NewRoot $ExeName) -Destination $TargetExe -Force -ErrorAction Stop }',
+        '}',
+        'if ($copiedInternal -and $copiedExe) {',
+        '    $started = Invoke-Retry "start new version" { Start-Process -FilePath $TargetExe -WorkingDirectory $TargetDir -ErrorAction Stop }',
+        '    if (!$started) {',
+        '        Write-UpdaterLog "onedir: restart failed, rolling back"',
+        '        Invoke-Retry "rollback exe" { if (Test-Path -LiteralPath $BackupExe) { Move-Item -LiteralPath $BackupExe -Destination $TargetExe -Force -ErrorAction Stop } } | Out-Null',
+        '        Invoke-Retry "rollback internal" { if (Test-Path -LiteralPath $BackupInternal) { Remove-Item -LiteralPath $TargetInternal -Recurse -Force -ErrorAction SilentlyContinue; Move-Item -LiteralPath $BackupInternal -Destination $TargetInternal -Force -ErrorAction Stop } } | Out-Null',
+        '        exit 1',
+        '    }',
+        '    Write-UpdaterLog "onedir: updated and restarted"',
+        '    Invoke-Retry "cleanup internal backup" { if (Test-Path -LiteralPath $BackupInternal) { Remove-Item -LiteralPath $BackupInternal -Recurse -Force -ErrorAction Stop } } | Out-Null',
+        '    Invoke-Retry "cleanup exe backup" { if (Test-Path -LiteralPath $BackupExe) { Remove-Item -LiteralPath $BackupExe -Force -ErrorAction Stop } } | Out-Null',
+        '    Invoke-Retry "cleanup extracted package" { Remove-Item -LiteralPath $NewRoot -Recurse -Force -ErrorAction Stop } | Out-Null',
+        '    exit 0',
+        '}',
+        'Write-UpdaterLog "onedir: copy failed, rolling back"',
+        'Invoke-Retry "rollback internal" { if (Test-Path -LiteralPath $BackupInternal) { Remove-Item -LiteralPath $TargetInternal -Recurse -Force -ErrorAction SilentlyContinue; Move-Item -LiteralPath $BackupInternal -Destination $TargetInternal -Force -ErrorAction Stop } } | Out-Null',
+        'if ($movedExe) { Invoke-Retry "rollback exe" { Move-Item -LiteralPath $BackupExe -Destination $TargetExe -Force -ErrorAction Stop } | Out-Null }',
+        'exit 1',
+    ]) + chr(10)
+    script.write_text(script_text, encoding='utf-8-sig')
+    write_update_log(f'prepare onedir: target={target} new={new_exe} script={script}')
+    try:
+        subprocess.Popen(
+            ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script),
+             str(os.getpid()), str(new_root), str(target), str(target.parent)],
+            creationflags=(
+                getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+                | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
+            ),
+            close_fds=True,
+            cwd=str(target.parent),
+            env=_clean_child_environment(),
+        )
+        write_update_log('prepare onedir: powershell started')
+    except OSError as exc:
+        write_update_log(f'prepare onedir: powershell failed: {exc}')
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return script
+
+
 def write_update_log(text):
     try:
         log_dir = scl_dir() / 'update'
@@ -515,6 +750,11 @@ def apply_downloaded_update_on_startup():
     version = str(data.get('version') or data.get('tag') or '')
     write_update_log(f'startup: applying downloaded update {version} from {asset}')
     try:
+        if is_onedir_install():
+            # onedir 不能只换 exe；外部脚本会等待本进程退出后整体替换。
+            prepare_update(asset, version)
+            clear_downloaded_update()
+            return True
         if apply_update_inplace(asset, version):
             clear_downloaded_update()
             return True
@@ -552,6 +792,8 @@ def apply_update_inplace(asset_path, version):
 
     if not getattr(sys, 'frozen', False):
         raise DownloadError('源码运行模式不支持自动替换 exe，请手动下载更新。')
+    if is_onedir_install():
+        raise DownloadError('onedir 安装需要使用目录更新器')
     target = Path(sys.executable).resolve()
     if not target.is_file():
         raise DownloadError('找不到当前启动器 exe，无法自动更新。')
@@ -664,8 +906,6 @@ def cleanup_old_executable(retries=20):
     try:
         target = Path(sys.executable).resolve()
         candidates = list(target.parent.glob(target.name + '*.old'))
-        if not candidates:
-            return
         for old_exe in candidates:
             for _ in range(max(1, int(retries))):
                 try:
@@ -674,6 +914,15 @@ def cleanup_old_executable(retries=20):
                     break
                 except OSError:
                     time.sleep(0.25)
+        old_internal = target.parent / '_internal.old'
+        for _ in range(max(1, int(retries))):
+            if not old_internal.exists():
+                break
+            safe_rmtree(old_internal)
+            if not old_internal.exists():
+                write_update_log('cleaned old _internal backup')
+                break
+            time.sleep(0.25)
     except OSError:
         pass
 
@@ -683,6 +932,8 @@ def prepare_update(asset_path, version):
 
     if not getattr(sys, 'frozen', False):
         raise DownloadError('源码运行模式不支持自动替换 exe，请手动下载更新。')
+    if is_onedir_install():
+        return _prepare_onedir_update(asset_path, version)
     target = Path(sys.executable).resolve()
     new_exe = _extract_exe(asset_path)
     update_dir = scl_dir() / 'update'
@@ -772,6 +1023,6 @@ __all__ = [
     'apply_update_inplace', 'cleanup_old_executable', 'clear_downloaded_update',
     'consume_updated_marker', 'downloaded_update_available',
     'pending_update_exists', 'clear_launcher_caches',
-    'fetch_latest_release', 'is_newer', 'prepare_update', 'update_kind',
-    'write_downloaded_update', 'write_update_log',
+    'fetch_latest_release', 'is_newer', 'is_onedir_install', 'prepare_update',
+    'update_kind', 'write_downloaded_update', 'write_update_log',
 ]

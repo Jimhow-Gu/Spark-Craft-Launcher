@@ -1741,6 +1741,7 @@ class ModBrowserPage(QWidget):
         self._page = 1
         self._total = 0
         self._cards = []
+        self._last_projects = []
         self._loaded_once = False
         self._versions_loaded = False
         self._categories = {}
@@ -1919,6 +1920,9 @@ class ModBrowserPage(QWidget):
         if not self._loaded_once:
             self._loaded_once = True
             self.search()
+        elif not self._cards and self._last_projects:
+            # 离页时卡片已销毁，但搜索结果仍保留；回来时直接重建，不再请求网络。
+            self._render_projects(self._last_projects)
         self.icon_loader.set_enabled(True)
         for card in self._cards:
             pix = card.icon_label.pixmap()
@@ -2111,6 +2115,7 @@ class ModBrowserPage(QWidget):
         self._render_token += 1
         self.results_list.setUpdatesEnabled(True)
         self._clear_results()
+        self._last_projects = []
         self.status_label.setText('')
         self.loading_overlay.fail(reason)
 
@@ -2169,6 +2174,7 @@ class ModBrowserPage(QWidget):
     def _render_projects(self, projects):
         self._render_token += 1
         token = self._render_token
+        self._last_projects = list(projects or [])
         self._clear_results()
         # 数据已经返回，立即撤掉居中加载卡片。列表卡片会分帧插入，
         # 不能等全部插完再隐藏遮罩，否则会出现“列表已经显示，加载卡片
@@ -2707,7 +2713,37 @@ class ModBrowserPage(QWidget):
 
     def hideEvent(self, event):
         self.icon_loader.set_enabled(False)
+        self._cancel_loading_workers()
+        self._render_token += 1
+        self._clear_results()
         super().hideEvent(event)
+
+    def _cancel_loading_workers(self):
+        """离页时取消加载线程，下载任务保持运行；回来时重建缓存卡片。"""
+
+        workers = [
+            worker for worker in list(self._workers)
+            if not isinstance(worker, DownloadWorker)
+        ]
+        if self._search_worker is not None and self._search_worker.isRunning():
+            self._loaded_once = False
+            self._last_projects = []
+        for worker in workers:
+            cancel = getattr(worker, 'cancel', None)
+            if callable(cancel):
+                try:
+                    cancel()
+                except Exception:
+                    pass
+        for worker in workers:
+            try:
+                if worker.isRunning():
+                    worker.wait(180)
+                    if worker.isRunning():
+                        worker.terminate()
+                        worker.wait(80)
+            except RuntimeError:
+                continue
 
     def shutdown(self):
         self._render_token += 1

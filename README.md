@@ -47,15 +47,21 @@ mc_launcher/
 
 ## 🚀 快速开始
 
-### 1. 安装依赖
+### 安装版（推荐）
+
+下载 `SparkCraftLauncher-Setup-V1.11.5.exe` 运行安装程序。默认安装到
+`%LOCALAPPDATA%\Programs\SparkCraftLauncher`，支持开始菜单/桌面快捷方式。
+安装、覆盖升级和卸载都会保留同级 `SCL/` 用户数据。
+
+### 便携版（兼容旧版 onefile）
+
+下载 `Spark Craft Launcher.exe` 直接运行。便携版启动时仍需解压，速度慢于
+onedir 安装版；从旧版 onefile 升级时会自动使用兼容包。
+
+### 源码运行
 
 ```bash
 pip install -r requirements.txt
-```
-
-### 2. 运行启动器
-
-```bash
 python main.py
 ```
 

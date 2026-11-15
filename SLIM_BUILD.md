@@ -1,37 +1,82 @@
-# Spark Craft Launcher 瘦身构建（DLL27 slim）
+# Spark Craft Launcher V1.11.5 构建与安装
 
-## 结果
+## 结论
 
-| 项目 | 大小 |
-|---|---:|
-| 原 DLL27 exe | 39,449,405 字节 |
-| 报告中的 v2 修复版 | 39,449,787 字节 |
-| slim exe | **36,632,658 字节** |
-| 相对 DLL27 节省 | **2,816,747 字节（7.14%）** |
-| slim zip | 36,310,528 字节 |
+V1.11.5 改为 **PyInstaller onedir + Inno Setup 安装包** 作为主发布形式，
+同时保留 onefile 便携版，方便旧版 onefile 客户端自动更新。
 
-- exe SHA256：`852cc228d06ec64ce40603dcd7cb8a6415182b2af527fa9b4cdf59193bbe763d`
-- zip SHA256：`f02ad13bf78452d70e5281efc8ae229eb0a084cd1394323bdcdbbf66d6427be7`
-- 构建号：`SCLREL1.11.4.R20261112.RP1.DLL29`
-- 可替换文件：`dist_slim/Spark Craft Launcher.exe`
-- 构建入口：`python build_slim.py`
+| 产物 | 大小 | SHA256 |
+|---|---:|---|
+| onedir 启动器 exe | 3,035,702 字节 | `9a307167d6db367a61f798e04cf54c23791d3098543862b55290fbf0c90f0232` |
+| onedir 更新 zip | 36,592,471 字节 | `a56920aac3f366525562b5d5e9f3496389ad562fa30282267b820cf7b9836120` |
+| Inno Setup 安装包 | 29,125,195 字节 | `01697197fc8016aa711d80a0e2cddeca211656de9c9869f2e9f2f00315bd3fee` |
+| onefile 便携 exe | 36,639,551 字节 | `70366c5999ca0a8c9ed9da2166fdd097668ed067e372534d4637b9d6cf8db859` |
+| onefile zip | 36,316,811 字节 | `cc56ed0621857d9236bd86ec8467ff22661fad9d49f5f3d85e47b1302f3ee8c0` |
 
-## 体积构成
+- 构建号：`SCLREL1.11.5.R20261115.RP1.DLL30`
+- 构建入口：`python build_onedir.py`（主安装包）、`python build_slim.py`（旧版 onefile 兼容包）
+- 安装包默认目录：`%LOCALAPPDATA%\Programs\SparkCraftLauncher`
+- 不使用 UPX，不删除静态图片解码插件，不改变 UI 布局与业务功能。
 
-未使用 UPX 的 DLL27 基线为 39,450,825 字节，和 UPX 版几乎一样；原因是 PyInstaller onefile 本身已用 zlib 压缩，对 Qt/FFmpeg 再套 UPX 几乎没有收益，却会带来杀软误报和签名问题。因此本方案完全关闭 UPX。
+## 启动性能
 
-主要占用（解包后）：
+在 Windows 11、当前开发机的实测：
 
-- Qt6/PySide6：约 16MB 压缩
-- 全量 FFmpeg：约 8.2MB 压缩（`avcodec` 单项约 6.0MB）
-- 字体：约 2.47MB 压缩
-- Python 运行时/PYZ：约 5MB 压缩
+| 场景 | 窗口可见 | 外部消息可响应 |
+|---|---:|---:|
+| 安装后首次启动（安装器已预热） | 1.21s | 1.45s |
+| 后续启动 | 1.05–1.08s | 1.05–1.09s |
+| onefile 便携版（旧兼容包） | 1.69–1.95s | - |
 
-## 采用的方案
+启动优化做法：
 
-### 1. FFmpeg 只裁掉“本项目不用的模块”，保留全部播放解码器
+1. 主页、版本选择器、账号刷新、背景音乐、非当前页面全部延迟到窗口显示后创建；
+2. 侧栏和账户页共用 `ui/widgets/avatar_label.py`，不再因侧栏头像导入整个账号页；
+3. 安装器在文件写入后执行一次 `--prewarm`：只加载模块和 Qt，不建窗口、不读账号配置，减少 Windows 首次执行扫描的影响；
+4. 无边框窗口的原生图标在 `show()` 后设置，避免提前调用 `winId()` 创建两次原生窗口；
+5. 保留启动淡入、页面切换动画、SCL 数据结构、所有页面和下载/启动逻辑。
 
-基于 FFmpeg 7.1 重新编译，保留：
+## 安装/升级/卸载与 SCL
+
+- `SCL/` 是用户数据目录（配置、账号、皮肤、缓存、日志、更新记录），安装、覆盖升级、
+  自动更新、卸载都不会删除它。
+- 卸载只清理 `_internal/`、启动器 exe、旧 `.old` 备份和安装清单中的快捷方式；
+  `SCL/`、`.minecraft/` 会保留。
+- 覆盖升级先清理旧 `_internal/`，避免旧 DLL/Qt 插件与新版本混用。
+- 安装器检测到启动器正在运行时会要求先退出，不会替换正在使用的文件。
+- 安装器使用固定的 Inno `AppId`，后续版本可原位覆盖升级。
+
+## onedir 自动更新
+
+下载完成后根据当前安装形态选择附件：
+
+- onedir 安装：优先 `*-onedir.zip`；
+- onefile 便携版：优先非安装器 exe，再回退 zip。
+
+onedir 更新流程：
+
+1. 安全解压到 `SCL/update/onedir_new`（拒绝 zip slip、`SCL/` 用户数据和异常体积）；
+2. 校验启动器 exe 的 `MZ` 头和 `_internal/` 内容；
+3. PowerShell 更新器等待旧进程退出；
+4. 把当前 `_internal`、exe 备份为 `.old`，复制新目录；
+5. 启动新版本；成功则清理备份，失败则恢复旧版本；
+6. 下次启动清理残留 `_internal.old`。
+
+更新器只在 `SCL/update` 下工作，不会移动或覆盖 `SCL/` 用户数据。
+
+## 体积构成与 FFmpeg
+
+未使用 UPX 的 DLL27 onefile 基线为 39,449,405 字节。V1.11.5 onefile 为
+36,639,551 字节，减少 2,809,854 字节（7.12%）。
+
+主要占用：
+
+- Qt6/PySide6：约 16MB（压缩后）
+- 精简 FFmpeg：约 4.5MB（压缩后）
+- 字体：约 2.47MB（压缩后）
+- Python 运行时/PYZ：约 5MB（压缩后）
+
+基于 FFmpeg 7.1 自定义构建，保留：
 
 - 全部 decoders
 - 全部 demuxers / parsers
@@ -40,74 +85,49 @@
 
 关闭：
 
-- encoders（启动器不编码）
-- muxers（启动器不封装/转码）
-- avfilter（Qt 插件不链接 avfilter）
-- avdevice / devices（不采集设备）
-- programs / docs
+- encoders、muxers、avfilter、avdevice、programs、docs
+- `--enable-small -Os` 优化体积，不改变解码器集合
 
-同时使用 `--enable-small` 和 `-Os`，只改变编译优化策略，不改变解码器集合。`ffmpegmediaplugin.dll` 由 Qt 提供，原样保留。
-
-### 2. PyInstaller `optimize=2`
-
-移除字节码 docstring/assert 等运行时不需要的内容，PYZ 从约 3.10MB 降到约 2.63MB。
-
-### 3. 完全关闭 UPX
-
-`SparkCraftLauncher.slim.spec` 中 `upx=False`，没有 UPX 自定义压缩块。静态图片解码插件 `qgif/qico/qjpeg/qwebp` 全部保留。
-
-### 4. 不修改 UI / 业务代码
-
-没有修改任何页面、样式、布局、功能逻辑；只新增 slim spec、精简 FFmpeg DLL 和构建脚本。
-
-## 实测验证清单
-
-- [x] slim exe 正常启动，真实窗口出现，`Responding=True`。
-- [x] 运行时确认从 `_MEI.../PySide6/avcodec-61.dll` 加载精简 DLL。
-- [x] HEVC/AAC 1080p 背景视频可播放；5 秒内 145 帧，原版约 147 帧（差异在采样噪声范围）。
-- [x] H.264/AAC、MP3、WAV 均能进入 `LoadedMedia`；MP4/MP3/WAV 元数据和时长正确。
-- [x] `qgif.dll`、`qico.dll`、`qjpeg.dll`、`qwebp.dll` 仍在包内。
-- [x] 构建产物无 `UPX!` 标记。
-- [x] 构建产物不含旧 CurseForge Key。
-- [x] 打包 exe 关闭后进程正常退出。
-- [x] 未改变配置目录、SCL 数据结构或账号数据。
+静态图片插件 `qgif/qico/qjpeg/qwebp` 全部保留；`ffmpegmediaplugin.dll` 原样保留。
+源码、配置、哈希和 LGPL-2.1-or-later 许可见 `slim_ffmpeg/README.md` 和
+`slim_ffmpeg/COPYING.LGPLv2.1`。
 
 ## 构建
 
-```bash
-cd D:/PMGL
-python build_slim.py
+环境：Python 3.10、PySide6 6.11.1、PyInstaller 6.21、Inno Setup 6.7.4。
+
+```powershell
+cd D:\PMGL
+python build_onedir.py                  # onedir + 更新 zip + 安装包
+python build_slim.py                    # onefile 便携版 + zip
 ```
 
-要求：
+`build_onedir.py` 会：
 
-- Python 3.10 + PyInstaller 6.x + PySide6 6.11.1
-- `slim_ffmpeg/` 中五个 DLL 与 `SHA256SUMS` 一致
-- 不需要安装 UPX
+1. 校验 `slim_ffmpeg/` 哈希；
+2. 用 `SparkCraftLauncher.slim_onedir.spec` 构建；
+3. 校验 exe、`_internal/`、静态图片插件、无 UPX、无旧 CurseForge Key；
+4. 生成 `dist_installer/SparkCraftLauncher-V1.11.5-onedir.zip`；
+5. 调用 Inno Setup 生成 `dist_installer/SparkCraftLauncher-Setup-V1.11.5.exe`；
+6. 输出体积和 SHA256。
 
-构建脚本会：
+`INNO_SETUP_ISCC` 可指定 `ISCC.exe` 路径；找不到时只跳过安装包生成。
+安装包语言文件为 `installer/ChineseSimplified.isl`。
 
-1. 校验 `slim_ffmpeg` 文件哈希；
-2. 用 `SparkCraftLauncher.slim.spec` 构建；
-3. 校验归档中的精简 FFmpeg、静态图片插件、无 UPX、无旧 Key；
-4. 生成 zip；
-5. 输出体积对比和 SHA256。
+## 回滚
 
-FFmpeg DLL 的来源、配置、哈希和 LGPL 许可见 `slim_ffmpeg/README.md`。
+用户数据不需要回滚：
 
-## 回滚方式
-
-保留原版文件即可随时回滚，不需要动 SCL 用户数据：
-
-1. 用原 DLL27 的 `Spark Craft Launcher.exe` 覆盖 `dist_slim/Spark Craft Launcher.exe`（或直接替换已部署 exe）。
-2. 退出并重新启动启动器。
-3. 如果只回滚 FFmpeg：用安装目录中 PySide6 原始的五个 DLL 替换 `slim_ffmpeg` 中同名文件，再运行 `python build_slim.py`。
-4. 若已上传为 Release 资产，把原 DLL27 exe/zip 重新上传覆盖即可。
+1. 重新运行旧版安装包覆盖安装，或把旧版 onedir 目录中的 exe 与 `_internal/` 替换回去；
+2. 保留 `SCL/` 不动；
+3. 若自动更新失败，更新器会恢复 `.old` 备份；启动后也会清理残留备份。
 
 ## 风险说明
 
-- **FFmpeg DLL 是本地重新编译的未签名二进制**：已实测常见播放格式，但极端/罕见编码的覆盖范围取决于 FFmpeg 解码器，不等同于 Qt 官方全量构建的逐字节保证。
-- 移除了 FFmpeg 编码器/复用器/滤镜/设备模块。当前启动器只做本地播放，不使用 `QMediaRecorder`、转码或采集；未来若新增录制/转码功能，需要恢复对应模块。
-- `--enable-small/-Os` 可能让极端高码率视频的软解略慢；1080p HEVC 实测帧数与完整版基本一致。
-- 仍未做 Authenticode 签名，SmartScreen/杀软提示不会因为瘦身消失。
-- 分发这些 FFmpeg DLL 时需遵守 LGPL-2.1-or-later；`slim_ffmpeg/COPYING.LGPLv2.1` 已附，源码与构建配置已给出。
+- 未做 Authenticode 签名，SmartScreen/杀软提示不会因瘦身或 onedir 消失。
+- FFmpeg 为本地重新编译的未签名二进制；常见播放格式已实测，但极端编码覆盖范围
+  不等同于 Qt 官方全量构建的逐字节保证。
+- 移除了 FFmpeg 编码/复用/滤镜/设备模块；当前启动器只做本地播放。未来新增录制/
+  转码功能时需恢复对应模块。
+- 安装器预热只加载模块，不创建窗口、不读取账号配置；若在异常环境被安全软件拦截，
+  仍可手动运行启动器，功能不受影响。

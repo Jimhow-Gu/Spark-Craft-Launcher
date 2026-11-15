@@ -7,6 +7,7 @@ import logging
 import sys
 from pathlib import Path
 
+
 def _prepare_qt_runtime():
     """固定 Qt 插件和 DLL 搜索到 PyInstaller 解包目录，避免外部同名插件劫持。"""
 
@@ -236,7 +237,50 @@ def init_game_dirs():
     print(f"[启动] 当前选中: {selected}")
     return selected
 
+def _run_prewarm():
+    """安装后预热：加载 Qt 与页面模块，不创建窗口、不读账号配置。
+
+    Windows 首次执行新文件时会做实时扫描；让安装程序先跑一次这个轻量
+    进程，用户第一次正常启动即可复用系统文件缓存。
+    """
+
+    import threading
+    threading.Timer(10.0, lambda: os._exit(0)).start()
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    for module in (
+        'PySide6.QtMultimedia',
+        'PySide6.QtNetwork',
+        'core.java_download',
+        'core.forge_artifacts',
+        'core.launch',
+        'ui.pages.home_page',
+        'ui.pages.version_page',
+        'ui.pages.account_page',
+        'ui.pages.settings_page',
+        'ui.pages.about_page',
+        'ui.pages.download_manager_page',
+        'ui.pages.news_page',
+        'ui.pages.news_detail',
+        'ui.pages.game_settings_page',
+        'ui.pages.loader_modify_page',
+        'ui.pages.mod_browser_page',
+        'ui.pages.mod_manager_dialog',
+        'ui.pages.modpack_import_page',
+        'ui.pages.version_detail_page',
+    ):
+        try:
+            __import__(module)
+        except Exception:
+            pass
+    app.processEvents()
+    os._exit(0)
+
+
 def main():
+    if '--prewarm' in sys.argv[1:]:
+        _run_prewarm()
+        return
     set_taskbar_identity()
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
@@ -362,8 +406,8 @@ def main():
             pass
         sys.exit(1)
     window.setWindowIcon(app.windowIcon())
-    if ico_path.exists():
-        apply_windows_window_icon(window, ico_path)
+    # 原生窗口图标必须在窗口真正显示后再写。提前调用 winId() 会创建一次
+    # 原生窗口，再由 show() 重新布局，冷启动多花约 100ms。
     try:
         config = ConfigManager()
         config.set("launcher_window_width", window.width(), auto_save=False)

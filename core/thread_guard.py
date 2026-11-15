@@ -48,9 +48,14 @@ def shutdown_threads(timeout_ms=700):
         gc.collect()
 
 
+_INSTALLED = False
+
+
 def install_thread_guard(app):
-    if app is None:
+    global _INSTALLED
+    if app is None or _INSTALLED:
         return
+    _INSTALLED = True
     app.aboutToQuit.connect(shutdown_threads)
     atexit.register(shutdown_threads)
 

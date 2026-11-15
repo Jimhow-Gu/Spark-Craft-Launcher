@@ -964,6 +964,15 @@ class VersionPage(QWidget):
         if self._install_busy():
             self._pending_available_refresh = True
             return
+        type_map = {0: 'release', 1: 'snapshot'}
+        vtype = type_map.get(self.type_combo.currentIndex(), 'release')
+        # 同一筛选下重复点击刷新时复用正在进行的请求；只有切换筛选才中断重载。
+        if (
+            self._load_worker is not None
+            and (self._loading or self._load_worker.isRunning())
+            and vtype == getattr(self, '_available_filter', 'release')
+        ):
+            return
         self._available_silent = bool(silent)
         self._load_gen += 1
         gen = self._load_gen
@@ -983,8 +992,6 @@ class VersionPage(QWidget):
             self.available_list.clear()
             self.available_loading.start('正在加载版本列表', 0)
         mirror_urls = self.config.get_version_mirrors() or ['https://launchermeta.mojang.com', 'https://bmclapi2.bangbang93.com', 'https://openbmclapi.bangbang93.com']
-        type_map = {0: 'release', 1: 'snapshot'}
-        vtype = type_map.get(self.type_combo.currentIndex(), 'release')
         self._available_filter = vtype
         self._loading = True
         self._load_worker = LoadVersionsWorker(mirror_urls, 'all')
