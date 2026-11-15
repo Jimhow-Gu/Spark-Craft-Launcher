@@ -55,6 +55,8 @@ class AvatarLabel(QLabel):
         self._manager = QNetworkAccessManager(self)
         self._manager.finished.connect(self._on_image_loaded)
         self._replies = set()
+        self._reply_epochs = {}
+        self._image_epoch = 0
         self._image_urls = []
         self._fallback_head = ''
         self._cache_path = None
@@ -120,6 +122,9 @@ class AvatarLabel(QLabel):
 
     def set_head_source(self, pixmap):
         """用与账户页完全相同的皮肤源渲染，保证侧栏和账户卡头像一致。"""
+        self._begin_image_epoch()
+        self._image_urls = []
+        self._fallback_head = ''
         self._set_3d_head(pixmap)
 
     def head_source(self):
@@ -217,12 +222,7 @@ class AvatarLabel(QLabel):
         self._image_urls = []
         self._fallback_head = ''
         self._cache_path = None
-        for reply in list(self._replies):
-            try:
-                reply.abort()
-            except RuntimeError:
-                pass
-        self._replies.clear()
+        self._begin_image_epoch()
         self._update_placeholder_style()
         from ui.widgets.settings_widgets import device_pixel_ratio
         dpr = device_pixel_ratio()
@@ -343,6 +343,26 @@ class AvatarLabel(QLabel):
         # Minecraft 头像是像素画：用最近邻缩放保持清晰，平滑缩放会糊成色块
         return hidpi_pixmap(pixmap, size, size, smooth=False)
 
+    def _begin_image_epoch(self):
+        """让所有旧头像请求失效；新请求只允许最新一轮写入界面。"""
+
+        self._image_epoch += 1
+        for reply in list(self._replies):
+            try:
+                reply.abort()
+            except RuntimeError:
+                pass
+            try:
+                reply.deleteLater()
+            except RuntimeError:
+                pass
+        self._replies.clear()
+        self._reply_epochs.clear()
+        return self._image_epoch
+
+    def _cancel_image_requests(self):
+        self._begin_image_epoch()
+
     def setText(self, text):
         self._name = text or '?'
         self._set_default()
@@ -350,6 +370,7 @@ class AvatarLabel(QLabel):
     def set_image_url(self, urls, fallback_head=None, cache_path=None):
         if isinstance(urls, str):
             urls = [urls]
+        self._begin_image_epoch()
         from ui.widgets.settings_widgets import hidpi_pixmap
         self._cache_path = Path(cache_path) if cache_path else None
         # 有缓存时直接使用；但旧版本可能把头图写进皮肤缓存，必须先按
@@ -372,7 +393,7 @@ class AvatarLabel(QLabel):
         # 网络头像加载期间先显示同一个默认头颅，而不是字母占位；
         # 侧栏会复用这份 source，加载完成后再一起切换。
         if self._fallback_head:
-            self.set_head_file(self._fallback_head)
+            self.set_head_file(self._fallback_head, cancel_network=False)
         else:
             self._set_default()
         self._try_next_image()
@@ -384,7 +405,7 @@ class AvatarLabel(QLabel):
             fallback = self._fallback_head
             self._fallback_head = ''
             if fallback:
-                self.set_head_file(fallback)
+                self.set_head_file(fallback, cancel_network=False)
             try:
                 self.all_failed.emit()
             except RuntimeError:
@@ -397,15 +418,21 @@ class AvatarLabel(QLabel):
             req.setTransferTimeout(5000)
         except Exception:
             pass
+        epoch = self._image_epoch
         reply = self._manager.get(req)
         if not bool(self.config().get('verify_ssl', True)):
             reply.sslErrors.connect(
                 lambda _errors, r=reply: r.ignoreSslErrors()
             )
         self._replies.add(reply)
+        self._reply_epochs[reply] = epoch
 
     def _on_image_loaded(self, reply):
+        epoch = self._reply_epochs.pop(reply, None)
         self._replies.discard(reply)
+        if epoch != self._image_epoch:
+            reply.deleteLater()
+            return
         if self._showing_person:
             reply.deleteLater()
             return
@@ -437,15 +464,22 @@ class AvatarLabel(QLabel):
             self._try_next_image()
 
     def set_skin_file(self, path):
+        self._begin_image_epoch()
+        self._image_urls = []
+        self._fallback_head = ''
         pix = QPixmap(str(path)) if path else QPixmap()
         if pix.isNull():
             self._set_default()
             return
         self._set_3d_head(pix)
 
-    def set_head_file(self, path):
+    def set_head_file(self, path, cancel_network=True):
         '''显示头像文件；默认 Steve/Alex 头像优先用配套完整皮肤渲染 3D。'''
 
+        if cancel_network:
+            self._begin_image_epoch()
+            self._image_urls = []
+            self._fallback_head = ''
         path_obj = Path(str(path)) if path else Path()
         pix = QPixmap(str(path_obj)) if path else QPixmap()
         if pix.isNull():

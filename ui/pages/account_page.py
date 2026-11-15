@@ -902,9 +902,13 @@ class AccountPage(QWidget):
         self._ms_profile_worker = None
         self._ms_profile_retry_count = 0
         self._ms_profile_retry_pending = False
+        self._ms_profile_generation = 0
+        self._ms_profile_account_key = ''
         self._ms_saved_login_worker = None
         self._tp_skin_worker = None
         self._tp_skin_last_attempt = 0.0
+        self._tp_skin_generation = 0
+        self._tp_skin_account_key = ''
         self._ms_icon_loader = SavedAccountIconLoader(self)
         self._ms_icon_loader.ready.connect(self._on_ms_account_icon_ready)
         self._init_ui()
@@ -3443,16 +3447,21 @@ class AccountPage(QWidget):
         if user_initiated:
             self._ms_profile_retry_count = 0
             self._ms_profile_retry_pending = False
+        self._ms_profile_generation += 1
+        generation = self._ms_profile_generation
+        account = self.config.get('microsoft_account', {}) or {}
+        account_key = str(account.get('uuid') or account.get('name') or '')
+        self._ms_profile_account_key = account_key
         token = self._begin_skin_refresh_feedback() if user_initiated else None
         worker = MicrosoftProfileSkinWorker()
         self._ms_profile_worker = worker
         worker.success.connect(
-            (lambda result, ui=user_initiated, t=token:
-             self._on_ms_profile_skin_ready(result, ui, t))
+            (lambda result, ui=user_initiated, t=token, g=generation, k=account_key:
+             self._on_ms_profile_skin_ready(result, ui, t, g, k))
         )
         worker.error.connect(
-            (lambda msg, kind, ui=user_initiated, t=token:
-             self._on_ms_profile_skin_error(msg, kind, ui, t))
+            (lambda msg, kind, ui=user_initiated, t=token, g=generation, k=account_key:
+             self._on_ms_profile_skin_error(msg, kind, ui, t, g, k))
         )
         worker.finished.connect(worker.deleteLater)
         worker.finished.connect((lambda w=worker: self._on_ms_profile_worker_done(w)))
@@ -3491,8 +3500,17 @@ class AccountPage(QWidget):
             self._ms_profile_worker = None
 
     def _on_ms_profile_skin_ready(self, result: dict, user_initiated: bool=False,
-                                  refresh_token=None):
+                                  refresh_token=None, generation=None,
+                                  account_key=''):
         if self.config.get('login_type', 'offline') != 'microsoft':
+            return
+        if generation is not None and generation != self._ms_profile_generation:
+            return
+        if refresh_token is not None and refresh_token != self._skin_refresh_token:
+            return
+        current_account = self.config.get('microsoft_account', {}) or {}
+        current_key = str(current_account.get('uuid') or current_account.get('name') or '')
+        if account_key and current_key and current_key != account_key:
             return
         import time as _time
         profile = result.get('profile') or {}
@@ -3540,8 +3558,17 @@ class AccountPage(QWidget):
         self.ms_status_label.setStyleSheet('color:rgba(255,255,255,0.6); font-size:13px;')
 
     def _on_ms_profile_skin_error(self, message: str, kind: str='general',
-                                  user_initiated: bool=True, refresh_token=None):
+                                  user_initiated: bool=True, refresh_token=None,
+                                  generation=None, account_key=''):
         if self.config.get('login_type', 'offline') != 'microsoft':
+            return
+        if generation is not None and generation != self._ms_profile_generation:
+            return
+        if refresh_token is not None and refresh_token != self._skin_refresh_token:
+            return
+        current_account = self.config.get('microsoft_account', {}) or {}
+        current_key = str(current_account.get('uuid') or current_account.get('name') or '')
+        if account_key and current_key and current_key != account_key:
             return
         message = friendly_auth_error(message, kind)
         if user_initiated:
@@ -3565,16 +3592,21 @@ class AccountPage(QWidget):
             if now - self._tp_skin_last_attempt < 30:
                 return
         self._tp_skin_last_attempt = now
+        self._tp_skin_generation += 1
+        generation = self._tp_skin_generation
+        account = self.config.get('thirdparty_account', {}) or {}
+        account_key = str(account.get('uuid') or account.get('name') or '')
+        self._tp_skin_account_key = account_key
         token = self._begin_skin_refresh_feedback() if user_initiated else None
         worker = ThirdPartySkinWorker()
         self._tp_skin_worker = worker
         worker.success.connect(
-            (lambda result, ui=user_initiated, t=token:
-             self._on_tp_skin_ready(result, ui, t))
+            (lambda result, ui=user_initiated, t=token, g=generation, k=account_key:
+             self._on_tp_skin_ready(result, ui, t, g, k))
         )
         worker.error.connect(
-            (lambda msg, kind, ui=user_initiated, t=token:
-             self._on_tp_skin_error(msg, kind, ui, t))
+            (lambda msg, kind, ui=user_initiated, t=token, g=generation, k=account_key:
+             self._on_tp_skin_error(msg, kind, ui, t, g, k))
         )
         worker.finished.connect(worker.deleteLater)
         worker.finished.connect((lambda w=worker: self._on_tp_skin_worker_done(w)))
@@ -3585,10 +3617,17 @@ class AccountPage(QWidget):
             self._tp_skin_worker = None
 
     def _on_tp_skin_ready(self, result: dict, user_initiated: bool=False,
-                          refresh_token=None):
+                          refresh_token=None, generation=None, account_key=''):
         if self.config.get('login_type', 'offline') != 'thirdparty':
             return
+        if generation is not None and generation != self._tp_skin_generation:
+            return
+        if refresh_token is not None and refresh_token != self._skin_refresh_token:
+            return
         account = self.config.get('thirdparty_account', {}) or {}
+        current_key = str(account.get('uuid') or account.get('name') or '')
+        if account_key and current_key and current_key != account_key:
+            return
         if result.get('name'):
             account['name'] = result['name']
         if result.get('uuid'):
@@ -3626,8 +3665,17 @@ class AccountPage(QWidget):
             )
 
     def _on_tp_skin_error(self, message: str, kind: str='general',
-                          user_initiated: bool=False, refresh_token=None):
+                          user_initiated: bool=False, refresh_token=None,
+                          generation=None, account_key=''):
         if self.config.get('login_type', 'offline') != 'thirdparty':
+            return
+        if generation is not None and generation != self._tp_skin_generation:
+            return
+        if refresh_token is not None and refresh_token != self._skin_refresh_token:
+            return
+        current_account = self.config.get('thirdparty_account', {}) or {}
+        current_key = str(current_account.get('uuid') or current_account.get('name') or '')
+        if account_key and current_key and current_key != account_key:
             return
         message = friendly_auth_error(message, kind)
         if user_initiated:
