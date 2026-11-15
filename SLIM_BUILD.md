@@ -1,20 +1,17 @@
-# Spark Craft Launcher V1.11.7 构建与安装
+# Spark Craft Launcher V1.11.4 DLL33 构建说明
 
 ## 结论
 
-V1.11.7 改为 **PyInstaller onedir + Inno Setup 安装包** 作为主发布形式，
-同时保留 onefile 便携版，方便旧版 onefile 客户端自动更新。
+当前正式发布恢复到 **V1.11.4 + DLL33 onefile**。1.11.5–1.11.7 的 onedir/安装包
+发布已转为草稿并撤回，以下保留内部构建与回滚说明。
 
 | 产物 | 大小 | SHA256 |
 |---|---:|---|
-| onedir 启动器 exe | 3,039,746 字节 | `0d1e89922e01b866d913775348b80d80136bf5dc5d2d387c18dbe0adbb666fa5` |
-| onedir 更新 zip | 36,597,763 字节 | `6ae2a55e5dd95999a87e094fe1807a53f27d3b85424a021dbf32de74668bd353` |
-| Inno Setup 安装包 | 29,135,551 字节 | `1adf8f9f9ebb56bf793bf2f71dedc0e2003aa1a3d2ea74e820eb5b86d827a8ca` |
-| onefile 便携 exe | 36,645,429 字节 | `de6f547d50dcf29c37c49e973666396518c52801dd716bb4b81f3128db0ece12` |
-| onefile zip | 36,322,898 字节 | `db31f509d4d74fddb542d64d8e618bc400a912328e73d3d8d5396ba8fb3c0a46` |
+| 正式 onefile 便携 exe | 36,644,986 字节 | `3bbd91b0cd0bb049df1069a21ee908b86f8894fb95e8820fa94a2eac4e6b2b1b` |
+| 正式 onefile 便携 zip | 36,322,292 字节 | `aec77719d856c859f5e0f27798b1b8711ad13577c45183eda2139912f4085117` |
 
-- 构建号：`SCLREL1.11.7.R20261115.RP1.DLL32`
-- 构建入口：`python build_onedir.py`（主安装包）、`python build_slim.py`（旧版 onefile 兼容包）
+- 构建号：`SCLREL1.11.4.R20261115.RP1.DLL33`
+- 构建入口：`python build_slim.py`（当前正式发布）；`python build_onedir.py` 仅保留内部/回滚构建
 - 安装包默认目录：`%LOCALAPPDATA%\Programs\SparkCraftLauncher`
 - 不使用 UPX，不删除静态图片解码插件，不改变 UI 布局与业务功能。
 

@@ -47,16 +47,13 @@ mc_launcher/
 
 ## 🚀 快速开始
 
-### 安装版（推荐）
+### 便携版（当前正式发布）
 
-下载 `V1.11.7-Setup-SparkCraftLauncher.exe` 运行安装程序。默认安装到
-`%LOCALAPPDATA%\Programs\SparkCraftLauncher`，支持开始菜单/桌面快捷方式。
-安装、覆盖升级和卸载都会保留同级 `SCL/` 用户数据。
+下载 `Spark.Craft.Launcher.exe`（V1.11.4 DLL33）直接运行，或用
+`Spark.Craft.Launcher.zip` 解压。`SCL/` 用户数据保持不变。
 
-### 便携版（兼容旧版 onefile）
-
-下载 `Spark Craft Launcher.exe` 直接运行。便携版启动时仍需解压，速度慢于
-onedir 安装版；从旧版 onefile 升级时会自动使用兼容包。
+> 1.11.5–1.11.7 的 onedir/安装包发布已撤回为草稿，当前版本线恢复到
+> 1.11.4，并继续按 DLL 增量发布。
 
 ### 源码运行
 
