@@ -651,6 +651,14 @@ class HomePage(QWidget):
     def start_version_delete(self, version_id, version_dir):
         '''后台删除版本目录，删除期间保持界面可响应。'''
 
+        try:
+            window = self.window()
+            if window is not None and hasattr(window, 'is_version_running') and window.is_version_running(version_id):
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, '无法删除', '该版本的游戏正在运行，请先关闭游戏后再删除。')
+                return
+        except RuntimeError:
+            pass
         if self._delete_worker is not None and self._delete_worker.isRunning():
             return
         self.status_label.setText(f'正在删除版本 {version_id} ...')
@@ -1318,6 +1326,12 @@ class HomePage(QWidget):
         info = {'version_id': version_id, 'nickname': nickname, 'log_path': log_path, 'log_handle': log_handle, 'lines': [], 'user_stopped': False, 'started': False, 'pid': None, 'window_seen': False, 'window_missing': False}
         self._instance_info[worker] = info
         self._instances.append(worker)
+        try:
+            window = self.window()
+            if window is not None and hasattr(window, 'mark_version_running'):
+                window.mark_version_running(version_id, True)
+        except RuntimeError:
+            pass
         if len(self._instances) == 1:
             self._set_game_running_media(True)
         self._launch_worker = worker
@@ -1435,6 +1449,12 @@ class HomePage(QWidget):
         except Exception:
             pass
         self._add_running_row(worker)
+        try:
+            window = self.window()
+            if window is not None and hasattr(window, 'mark_version_running'):
+                window.mark_version_running(info.get('version_id'), True)
+        except RuntimeError:
+            pass
 
     def _on_game_window_ready(self, worker):
         info = self._instance_info.get(worker)
@@ -1623,7 +1643,11 @@ class HomePage(QWidget):
             return
         mode = str(self.config.get('launcher_visibility', 'keep') or 'keep')
         if mode == 'hide_close':
-            QApplication.instance().quit()
+            window = self.window()
+            if window is not None:
+                window.close()
+            else:
+                QApplication.instance().quit()
             return
         if mode in ('hide_restore', 'minimize'):
             window = self.window()
@@ -1634,6 +1658,7 @@ class HomePage(QWidget):
 
     def _finalize_instance(self, worker):
         info = self._instance_info.pop(worker, None)
+        version_id = str((info or {}).get('version_id') or '')
         if info:
             handle = info.get('log_handle')
             if handle:
@@ -1644,6 +1669,16 @@ class HomePage(QWidget):
                     pass
         if worker in self._instances:
             self._instances.remove(worker)
+        if version_id and not any(
+            str(item.get('version_id') or '') == version_id
+            for item in self._instance_info.values()
+        ):
+            try:
+                window = self.window()
+                if window is not None and hasattr(window, 'mark_version_running'):
+                    window.mark_version_running(version_id, False)
+            except RuntimeError:
+                pass
         if not self._instances:
             # 最后一个游戏实例退出后恢复启动器背景视频/音乐。
             self._set_game_running_media(False)

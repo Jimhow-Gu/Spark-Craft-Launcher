@@ -5,6 +5,7 @@
 import copy
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -22,6 +23,7 @@ class ConfigManager:
 
     _instance = None
     _instance_lock = threading.Lock()
+    MAX_CONFIG_BYTES = 2 * 1024 * 1024
 
     def __new__(cls):
         if cls._instance is None:
@@ -36,6 +38,8 @@ class ConfigManager:
         '''初始化配置目录和默认配置'''
 
         self._loaded_changed = False
+        self._save_lock = threading.RLock()
+        self.recovered_bad_config = False
         home = Path.home()
         config_dir = None
         # 绿色版配置必须跟随启动器目录；SCL_CONFIG_DIR 仅用于开发/测试隔离。
@@ -220,20 +224,25 @@ class ConfigManager:
             return
         legacy = home / '.mc_launcher_py' / 'config.json'
         try:
+            if self.config_file.is_file() and self.config_file.stat().st_size > self.MAX_CONFIG_BYTES:
+                raise ValueError('配置超过大小上限')
             scl_config = (
                 json.loads(self.config_file.read_text(encoding='utf-8'))
                 if self.config_file.is_file() else None
             )
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError, MemoryError):
+            self._backup_bad_config()
             scl_config = None
         if isinstance(scl_config, dict) and scl_config.get('portable_config_migrated'):
             return
         try:
+            if legacy.is_file() and legacy.stat().st_size > self.MAX_CONFIG_BYTES:
+                raise ValueError('配置超过大小上限')
             legacy_config = (
                 json.loads(legacy.read_text(encoding='utf-8'))
                 if legacy.is_file() else None
             )
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError, MemoryError):
             legacy_config = None
         if isinstance(legacy_config, dict):
             merged = self._merge_config_dicts(legacy_config, scl_config)
@@ -255,6 +264,7 @@ class ConfigManager:
             pass
 
     def _backup_bad_config(self):
+        self.recovered_bad_config = True
         try:
             stamp = time.strftime('%Y%m%d-%H%M%S')
             backup = self.config_file.with_name(
@@ -551,6 +561,14 @@ class ConfigManager:
             elif kind is bool and not isinstance(value, bool):
                 result[key] = bool(value) if value in (0, 1) else False
                 changed = True
+        if 'download_speed_limit' in result:
+            try:
+                limit = float(result.get('download_speed_limit'))
+                if not math.isfinite(limit) or limit < 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                result['download_speed_limit'] = 0.0
+                changed = True
         offline_skin = result.get('offline_skin')
         if isinstance(offline_skin, dict):
             cleaned = dict(offline_skin)
@@ -576,13 +594,15 @@ class ConfigManager:
             if not self.config_file.exists():
                 return copy.deepcopy(self._default)
             try:
+                if self.config_file.stat().st_size > self.MAX_CONFIG_BYTES:
+                    raise ValueError('配置超过大小上限')
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     user_config = json.load(f)
-            except (json.JSONDecodeError, UnicodeDecodeError):
+            except OSError:
+                return copy.deepcopy(self._default)
+            except (json.JSONDecodeError, UnicodeDecodeError, ValueError, RecursionError, MemoryError):
                 self._backup_bad_config()
                 self._loaded_changed = True
-                return copy.deepcopy(self._default)
-            except OSError:
                 return copy.deepcopy(self._default)
         if not isinstance(user_config, dict):
             self._backup_bad_config()
@@ -636,18 +656,36 @@ class ConfigManager:
         return merged
 
     def save(self):
-        tmp_file = self.config_file.with_suffix('.tmp')
-        try:
-            self.config_dir.mkdir(parents=True, exist_ok=True)
-            with open(tmp_file, 'w', encoding='utf-8') as f:
-                json.dump(self.config, f, indent=2, ensure_ascii=False)
-            tmp_file.replace(self.config_file)
-        except (OSError, TypeError, ValueError):
+        '''线程安全地保存配置；返回是否成功。'''
+
+        with self._save_lock:
             try:
-                if tmp_file.exists():
-                    tmp_file.unlink()
-            except OSError:
-                pass
+                snapshot = copy.deepcopy(self.config)
+            except Exception as exc:
+                logger.error('配置快照失败: %s', exc)
+                return False
+            tmp_file = self.config_file.with_name(
+                f'.config.{os.getpid()}.{threading.get_ident()}.tmp'
+            )
+            try:
+                self.config_dir.mkdir(parents=True, exist_ok=True)
+                with open(tmp_file, 'w', encoding='utf-8') as f:
+                    json.dump(snapshot, f, indent=2, ensure_ascii=False)
+                    f.flush()
+                    try:
+                        os.fsync(f.fileno())
+                    except OSError:
+                        pass
+                tmp_file.replace(self.config_file)
+                return True
+            except (OSError, TypeError, ValueError, RuntimeError) as exc:
+                logger.error('配置保存失败: %s', exc)
+                try:
+                    if tmp_file.exists():
+                        tmp_file.unlink()
+                except OSError:
+                    pass
+                return False
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.config.get(key, default)
@@ -681,9 +719,11 @@ class ConfigManager:
         self.save()
 
     def set(self, key: str, value: Any, auto_save: bool = True):
-        self.config[key] = value
-        if auto_save:
-            self.save()
+        with self._save_lock:
+            self.config[key] = value
+            if auto_save:
+                return self.save()
+        return True
 
     def get_mc_dir(self) -> str:
         value = self.get('mc_dir')

@@ -214,6 +214,7 @@ class BackgroundWidget(QWidget):
     def _stop_video(self):
         player = self._video_player
         sink = self._video_sink
+        audio = self._video_audio
         self._video_player = None
         self._video_sink = None
         self._video_audio = None
@@ -225,6 +226,10 @@ class BackgroundWidget(QWidget):
                 sink.videoFrameChanged.disconnect(self._on_video_frame)
             except (RuntimeError, TypeError):
                 pass
+            try:
+                sink.deleteLater()
+            except RuntimeError:
+                pass
         if player is not None:
             try:
                 player.stop()
@@ -232,7 +237,21 @@ class BackgroundWidget(QWidget):
                 player.deleteLater()
             except RuntimeError:
                 pass
+        if audio is not None:
+            try:
+                audio.deleteLater()
+            except RuntimeError:
+                pass
         self.video_state_changed.emit(False)
+
+    def shutdown(self):
+        """关闭启动器时释放 QMediaPlayer/QVideoSink/QAudioOutput。"""
+
+        self._freeze_updates = True
+        self._stop_video()
+        self._source = None
+        self._scaled = None
+        self._blurred = None
 
     def _invalidate_video_cache(self):
         self._video_source_cache = None

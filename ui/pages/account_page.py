@@ -3,6 +3,7 @@
 适配新版auth.py，彻底移除所有device_code相关代码
 '''
 
+import re
 import shutil
 import time
 import webbrowser
@@ -3153,8 +3154,8 @@ class AccountPage(QWidget):
             return '请输入玩家名称'
         if len(name) < 3 or len(name) > 16:
             return '玩家名长度需在 3-16 个字符之间'
-        if not name.replace('_', '').isalnum():
-            return '玩家名只能包含字母、数字和下划线'
+        if re.fullmatch(r'[A-Za-z0-9_]{3,16}', name) is None:
+            return '玩家名只能包含英文字母、数字和下划线'
         return ''
 
     def _auto_update_offline_name(self):

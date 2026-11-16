@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget, QListWidgetItem, QLabel, QMessageBox, QApplication, QGraphicsColorizeEffect, QPushButton, QGraphicsOpacityEffect, QFrame, QDialog)
-from PySide6.QtCore import (Qt, QPoint, QPropertyAnimation, QVariantAnimation, QEasingCurve, QTimer, QSize, QEvent, QRect, QRectF)
+from PySide6.QtCore import (Qt, QPoint, QPropertyAnimation, QVariantAnimation, QEasingCurve, QTimer, QSize, QEvent, QRect, QRectF, Slot)
 from PySide6.QtGui import QColor, QCursor, QFont, QPainterPath, QPixmap, QRegion
 import os
 import time
@@ -81,6 +81,7 @@ class MainWindow(QMainWindow):
         self._account_card_started = False
         self._media_backgrounded = False
         self._game_running = False
+        self._running_versions = set()
         self._game_media_paused = False
         self._game_video_was_playing = False
         self._game_music_was_playing = False
@@ -1128,6 +1129,18 @@ class MainWindow(QMainWindow):
             self.fireworks_overlay.set_paused(True)
         self._update_media_buttons()
 
+    def mark_version_running(self, version_id: str, running: bool):
+        value = str(version_id or '').strip()
+        if not value:
+            return
+        if running:
+            self._running_versions.add(value)
+        else:
+            self._running_versions.discard(value)
+
+    def is_version_running(self, version_id: str) -> bool:
+        return str(version_id or '').strip() in self._running_versions
+
     def set_game_running(self, running: bool):
         '''游戏运行时强制暂停启动器背景视频/音乐，避免和游戏抢 CPU/GPU。'''
 
@@ -1989,6 +2002,26 @@ class MainWindow(QMainWindow):
             pass
         self._quit_for_update(asset_path, version)
 
+    @Slot()
+    def shutdown_media(self):
+        """停止并释放背景视频/音乐，避免 os._exit 时仍持有 D3D/WASAPI 设备。"""
+
+        if getattr(self, '_media_shutdown_done', False):
+            return
+        self._media_shutdown_done = True
+        self._game_running = False
+        self._game_media_paused = False
+        try:
+            self.central.shutdown()
+        except Exception:
+            pass
+        player = self._music_player
+        if player is not None:
+            try:
+                player.shutdown()
+            except Exception:
+                pass
+
     def _flush_exit_state(self):
         try:
             from core.config import ConfigManager
@@ -2019,6 +2052,7 @@ class MainWindow(QMainWindow):
                 from core.update import apply_update_inplace, is_onedir_install
                 if not is_onedir_install() and apply_update_inplace(asset_path, version):
                     # 新进程已经创建；立即退出，避免旧进程继续占用 exe / 单实例锁。
+                    self.shutdown_media()
                     self._flush_exit_state()
                     try:
                         from core.thread_guard import shutdown_threads
@@ -2052,6 +2086,7 @@ class MainWindow(QMainWindow):
                 return False
         # 外部更新脚本正在等待本进程退出；先落盘再结束进程，
         # 避免配置/日志缓冲被 os._exit 截断。
+        self.shutdown_media()
         self._flush_exit_state()
         try:
             from core.thread_guard import shutdown_threads
@@ -2093,6 +2128,7 @@ class MainWindow(QMainWindow):
                 pass
             from core.single_instance import release_single_instance
             release_single_instance()
+            self.shutdown_media()
             try:
                 from core.java_scan import JavaScanService
                 JavaScanService.instance().shutdown()

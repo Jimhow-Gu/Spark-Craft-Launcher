@@ -165,6 +165,27 @@ class BackgroundMusicPlayer(QObject):
         self.config.set('background_music_index', 0)
         self.state_changed.emit()
 
+    def shutdown(self):
+        """释放媒体播放器与音频设备，供启动器退出时调用。"""
+
+        try:
+            self._player.stop()
+            self._player.setSource(QUrl())
+        except Exception:
+            pass
+        try:
+            self._audio.deleteLater()
+        except Exception:
+            pass
+        try:
+            self._player.deleteLater()
+        except Exception:
+            pass
+        try:
+            self.state_changed.emit()
+        except Exception:
+            pass
+
     def current_name(self):
         if self._source_path:
             return Path(self._source_path).name

@@ -22,7 +22,7 @@ from core.paths import safe_rmtree, scl_dir
 CURRENT_VERSION = '1.11.4'
 VERSION_DISPLAY = 'V1.11.4（正式版）'
 # DLL 构建号在同一版本内递增；每次发布新大版本时重置为 1。
-EXECUTABLE_BUILD = '34'
+EXECUTABLE_BUILD = '35'
 REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
 API_KGGITHUB = f'https://api.kkgithub.com/repos/{REPO}/releases/latest'
@@ -343,6 +343,20 @@ class UpdateDownloadWorker(QThread):
                     try:
                         version = str(self.info.get('version') or self.info.get('tag') or '')
                         prepare_update(dest, version)
+                        # 退出前让 GUI 线程释放 QMediaPlayer/音频设备，避免
+                        # 更新替换 exe 时仍有 D3D/WASAPI 句柄。
+                        try:
+                            from PySide6.QtCore import QMetaObject, Qt
+                            from PySide6.QtWidgets import QApplication
+                            app = QApplication.instance()
+                            if app is not None:
+                                for widget in app.topLevelWidgets():
+                                    if hasattr(widget, 'shutdown_media'):
+                                        QMetaObject.invokeMethod(
+                                            widget, 'shutdown_media', Qt.QueuedConnection
+                                        )
+                        except Exception:
+                            pass
                         threading.Timer(2.0, lambda: os._exit(0)).start()
                         write_update_log('download: external updater armed; exiting in 2s')
                     except Exception as exc:

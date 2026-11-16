@@ -424,6 +424,18 @@ def main():
     except Exception:
         pass
     window.show()
+    try:
+        if ConfigManager().recovered_bad_config:
+            from ui.widgets.toast import show_toast
+            QTimer.singleShot(
+                1200,
+                lambda: show_toast(
+                    '配置文件已损坏，原文件已备份并恢复默认设置',
+                    'warning', window, 6500,
+                ),
+            )
+    except Exception:
+        pass
     window.setWindowIcon(app.windowIcon())
     try:
         window.windowHandle().setIcon(app.windowIcon())
@@ -438,6 +450,13 @@ def main():
     # 首帧绘制后再后台扫描 Java，避免启动卡顿
 
     exit_code = app.exec()
+    # 先释放 QtMultimedia/显卡/音频设备，再结束进程；正常 closeEvent
+    # 已经做过一次，这里是 app.quit() 等绕过 closeEvent 路径的兜底。
+    try:
+        window.shutdown_media()
+        app.processEvents()
+    except Exception:
+        pass
     # 退出时可能仍有网络/日志线程在运行。交给 Python 析构 QThread 会触发
     # “QThread: Destroyed while thread is still running” 甚至崩溃；
     # 事件循环结束后直接结束进程，由操作系统回收线程。

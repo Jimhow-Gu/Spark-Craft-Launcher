@@ -48,11 +48,34 @@ def gc_arguments(key: str, java_major=None) -> List[str]:
     return []
 
 def split_arguments(text: str) -> List[str]:
+    """按 Windows/Java 规则拆分参数：只识别双引号，反斜杠原样保留。
+
+    shlex(posix=False) 不会去掉参数中间的引号，也不适合 C:\path 这类
+    Windows 路径；这里改用单遍状态机，支持 -Dfoo="a b" 与带引号的
+    -javaagent:C:\Program Files\agent.jar。
+    """
+
     text = (text or '').strip()
     if not text:
         return []
-    try:
-        return [part for part in shlex.split(text, posix=False) if part]
-    except Exception:
-        return [part for part in text.split() if part]
+    result: List[str] = []
+    buffer = []
+    in_quotes = False
+    token_started = False
+    for char in text:
+        if char == '"':
+            in_quotes = not in_quotes
+            token_started = True
+            continue
+        if char.isspace() and not in_quotes:
+            if token_started or buffer:
+                result.append(''.join(buffer))
+                buffer = []
+                token_started = False
+            continue
+        buffer.append(char)
+        token_started = True
+    if token_started or buffer:
+        result.append(''.join(buffer))
+    return result
 

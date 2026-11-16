@@ -1620,7 +1620,8 @@ class GameSettingsPage(QWidget):
         folder = QFileDialog.getExistingDirectory(self, '选择启动脚本导出位置', str(Path.home()))
         if not folder:
             return
-        safe_name = re.sub('[<>:"/\\\\|?*\\x00-\\x1f]', '_', self.version_id).strip() or '版本'
+        from core.modpack import sanitize_version_name
+        safe_name = sanitize_version_name(self.version_id) or '版本'
         path = Path(folder) / f'导出{safe_name}.bat'
         if path.exists():
             reply = QMessageBox.question(self, '文件已存在', f'{path.name} 已存在，是否覆盖？', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)

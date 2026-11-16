@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import List, Optional
 from PySide6.QtCore import (Qt, QThread, Signal, QUrl, QSize)
-from PySide6.QtGui import (QColor, QFont, QPainter, QPixmap, QDesktopServices)
+from PySide6.QtGui import (QBrush, QColor, QFont, QPainter, QPixmap, QDesktopServices)
 from PySide6.QtWidgets import (QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QListWidget, QListWidgetItem, QMessageBox, QFrame, QWidget, QLineEdit, QFileDialog)
 from core.app_font import ui_font
 from core.launch import LaunchManager
@@ -37,6 +37,9 @@ def _manifest_version(zf):
         names = {name.lower(): name for name in zf.namelist()}
         manifest = names.get('meta-inf/manifest.mf')
         if not manifest:
+            return ''
+        info = zf.getinfo(manifest)
+        if int(info.file_size or 0) > MAX_MOD_META_BYTES:
             return ''
         text = zf.read(manifest).decode('utf-8', 'replace')
         text = text.replace('\r\n ', '').replace('\n ', '')
@@ -69,14 +72,61 @@ def _clean_mod_version(version, zf, filename):
         value = _manifest_version(zf) or _version_from_filename(filename)
     return value.strip()
 
+MAX_MOD_META_BYTES = 2 * 1024 * 1024
+MAX_MOD_ICON_BYTES = 2 * 1024 * 1024
+
+
+def _text(value, fallback=''):
+    if value is None:
+        return str(fallback or '')
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, dict):
+        for key in ('en', 'zh', 'text', 'name', 'title'):
+            if key in value:
+                return _text(value.get(key), fallback)
+        return str(fallback or '')
+    return str(value)
+
+
+def _icon_path(value):
+    if isinstance(value, dict):
+        for key in ('128', '64', '32', 'icon'):
+            if key in value:
+                return _icon_path(value.get(key))
+        return ''
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            path = _icon_path(item)
+            if path:
+                return path
+        return ''
+    return str(value or '').strip()
+
+
 def _extract_icon(zf, icon_name):
-    name = (icon_name or '').strip().lstrip('/')
+    name = _icon_path(icon_name).lstrip('/')
     if not name:
         return b''
     try:
+        info = zf.getinfo(name)
+        if int(info.file_size or 0) > MAX_MOD_ICON_BYTES:
+            return b''
         return zf.read(name)
     except Exception:
         return b''
+
+
+def _read_meta_json(zf, name):
+    try:
+        info = zf.getinfo(name)
+        if int(info.file_size or 0) > MAX_MOD_META_BYTES:
+            return None
+        return json.loads(zf.read(name).decode('utf-8', 'replace'))
+    except Exception:
+        return None
 
 def _finish_mod_info(info, filename):
     try:
@@ -103,44 +153,53 @@ def scan_mod_file(path):
             names = set(zf.namelist())
             if 'fabric.mod.json' in names or 'quilt.mod.json' in names:
                 meta_name = 'fabric.mod.json' if 'fabric.mod.json' in names else 'quilt.mod.json'
-                meta = json.loads(zf.read(meta_name).decode('utf-8', 'replace'))
+                meta = _read_meta_json(zf, meta_name)
+                meta = meta if isinstance(meta, dict) else {}
                 info['loader'] = 'Fabric' if meta_name == 'fabric.mod.json' else 'Quilt'
-                info['name'] = meta.get('name') or meta.get('id') or fallback
-                info['version'] = str(meta.get('version') or '')
-                info['modid'] = str(meta.get('id') or '')
-                desc = meta.get('description') or ''
-                info['description'] = str(desc) if not isinstance(desc, dict) else str(desc.get('en', ''))
+                info['name'] = _text(meta.get('name') or meta.get('id'), fallback)
+                info['version'] = _text(meta.get('version'), '')
+                info['modid'] = _text(meta.get('id'), '')
+                desc = meta.get('description')
+                info['description'] = _text(
+                    desc.get('en') if isinstance(desc, dict) else desc, ''
+                )
                 contact = meta.get('contact') or {}
                 if isinstance(contact, dict):
-                    info['homepage'] = contact.get('homepage') or contact.get('sources') or ''
-                icon = meta.get('icon')
-                if isinstance(icon, dict):
-                    icon = icon.get('128') or icon.get('64') or next(iter(icon.values()), '')
-                info['icon'] = _extract_icon(zf, icon)
+                    info['homepage'] = _text(
+                        contact.get('homepage') or contact.get('sources'), ''
+                    )
+                info['icon'] = _extract_icon(zf, meta.get('icon'))
             elif 'META-INF/neoforge.mods.toml' in names or 'META-INF/mods.toml' in names:
                 meta_name = 'META-INF/neoforge.mods.toml' if 'META-INF/neoforge.mods.toml' in names else 'META-INF/mods.toml'
-                text = zf.read(meta_name).decode('utf-8', 'replace')
+                try:
+                    meta_info = zf.getinfo(meta_name)
+                    if int(meta_info.file_size or 0) > MAX_MOD_META_BYTES:
+                        raise ValueError
+                    text = zf.read(meta_name).decode('utf-8', 'replace')
+                except Exception:
+                    text = ''
                 info['loader'] = 'NeoForge' if 'neoforge' in meta_name.lower() else 'Forge'
-                info['modid'] = _toml_value(text, 'modId')
-                info['name'] = _toml_value(text, 'displayName') or info['modid'] or fallback
-                info['version'] = _toml_value(text, 'version')
-                info['description'] = _toml_value(text, 'description')
-                logo = _toml_value(text, 'logoFile')
-                if not logo:
-                    logo = _toml_value(text, 'logoBlur')
+                info['modid'] = _text(_toml_value(text, 'modId'), '')
+                info['name'] = _text(
+                    _toml_value(text, 'displayName') or info['modid'] or fallback,
+                    fallback,
+                )
+                info['version'] = _text(_toml_value(text, 'version'), '')
+                info['description'] = _text(_toml_value(text, 'description'), '')
+                logo = _toml_value(text, 'logoFile') or _toml_value(text, 'logoBlur')
                 info['icon'] = _extract_icon(zf, logo)
             elif 'mcmod.info' in names:
-                data = json.loads(zf.read('mcmod.info').decode('utf-8', 'replace'))
+                data = _read_meta_json(zf, 'mcmod.info')
                 if isinstance(data, list) and data:
                     data = data[0]
                 if isinstance(data, dict):
                     info['loader'] = 'Forge'
-                    info['name'] = data.get('name') or fallback
-                    info['version'] = str(data.get('version') or '')
-                    info['modid'] = str(data.get('modid') or '')
-                    info['description'] = str(data.get('description') or '')
-                    info['homepage'] = str(data.get('url') or '')
-                    info['icon'] = _extract_icon(zf, data.get('logoFile') or '')
+                    info['name'] = _text(data.get('name'), fallback)
+                    info['version'] = _text(data.get('version'), '')
+                    info['modid'] = _text(data.get('modid'), '')
+                    info['description'] = _text(data.get('description'), '')
+                    info['homepage'] = _text(data.get('url'), '')
+                    info['icon'] = _extract_icon(zf, data.get('logoFile'))
             if not info['loader']:
                 if any((n.lower().startswith('fabric.mod.json') for n in names)):
                     info['loader'] = 'Fabric'
@@ -430,13 +489,14 @@ class ModRowWidget(QWidget):
         if raw:
             source.loadFromData(raw)
         if source.isNull():
-            color = QColor.fromHsv(abs(hash(self.info.get('name', ''))) % 360, 130, 150)
+            display_name = str(self.info.get('name') or '?')
+            color = QColor.fromHsv(abs(hash(display_name)) % 360, 130, 150)
             painter.setBrush(color)
             painter.setPen(Qt.NoPen)
             painter.drawRoundedRect(0, 0, size, size, 7, 7)
             painter.setPen(QColor('#ffffff'))
             painter.setFont(ui_font(18, QFont.Bold))
-            letter = (self.info.get('name') or '?')[:1].upper()
+            letter = display_name[:1].upper()
             painter.drawText(pix.rect(), Qt.AlignCenter, letter)
         else:
             scaled = source.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -809,8 +869,12 @@ class ModManagerPage(QWidget):
                     item.setData(Qt.UserRole, info)
                     item.setSizeHint(QSize(0, 66))
                     self.list.addItem(item)
-                    widget = ModRowWidget(info, self.list)
-                    self.list.setItemWidget(item, widget)
+                    try:
+                        widget = ModRowWidget(info, self.list)
+                        self.list.setItemWidget(item, widget)
+                    except Exception:
+                        item.setText(f'元数据损坏：{info.get("filename") or info.get("name") or "未知 Mod"}')
+                        item.setForeground(QBrush(QColor('#ff9c9c')))
                     if str(info.get('path')) in selected_paths:
                         item.setSelected(True)
                 self.status_label.setText(f'共 {len(mods)} 个 Mod：{self.mods_dir}')

@@ -21,7 +21,7 @@ from ui.widgets.frameless_dialog import FramelessInputDialog
 from core.config import ConfigManager
 from core.download_manager import DownloadManager
 from core.launch import LaunchManager
-from core.modpack import (ModpackImportWorker, inspect_modpack, sanitize_version_name)
+from core.modpack import (ModpackImportWorker, inspect_modpack, sanitize_version_name, is_windows_reserved_name)
 from core.version import (FullInstallWorker, VersionManager, VersionDeleteWorker, cleanup_deleted_version, detect_version_loader)
 from core.net import HttpClient, is_network_error_text, network_available
 from core.paths import scl_dir
@@ -765,7 +765,6 @@ class VersionPage(QWidget):
         path.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
-    _WINDOWS_RESERVED_NAMES = {'CON', 'PRN', 'AUX', 'NUL', *{f'COM{i}' for i in range(1, 10)}, *{f'LPT{i}' for i in range(1, 10)}}
     def _rename_version_error(self, name: str, current_id: str) -> str:
         '''重命名前的完整校验，包括与任意现有文件夹重名。'''
 
@@ -778,7 +777,9 @@ class VersionPage(QWidget):
             return '名称不能包含 < > : " / \\ | ? * 等字符！'
         if name.endswith((' ', '.')):
             return '名称不能以空格或点结尾！'
-        if name.split('.', 1)[0].strip().upper() in self._WINDOWS_RESERVED_NAMES:
+        if len(name) > 80:
+            return '名称不能超过 80 个字符！'
+        if is_windows_reserved_name(name):
             return '该名称为系统保留名称，请更换！'
         if name.casefold() == str(current_id).casefold():
             return '新名称与当前版本名称相同！'
@@ -792,12 +793,26 @@ class VersionPage(QWidget):
                 return '不可与现有文件夹重名！'
         return ''
 
+    def _version_running(self, version_id):
+        try:
+            window = self.window()
+            return bool(
+                window is not None
+                and hasattr(window, 'is_version_running')
+                and window.is_version_running(version_id)
+            )
+        except RuntimeError:
+            return False
+
     def _on_rename_version(self):
         current = self.installed_list.currentItem()
         if not current:
             return
         version_id = current.data(Qt.UserRole)
         if not version_id:
+            return
+        if self._version_running(version_id):
+            QMessageBox.warning(self, '无法重命名', '该版本的游戏正在运行，请先关闭游戏后再重命名。')
             return
         rename_dialog = FramelessInputDialog(self, '重命名版本', f'请输入新的版本名称（当前：{version_id}）\n名称不能与 versions 目录中任何现有文件夹重名：', version_id, validator=(lambda value: self._rename_version_error(value, version_id)))
         if rename_dialog.exec() != QDialog.Accepted:
@@ -833,6 +848,9 @@ class VersionPage(QWidget):
             return
         version_id = current.data(Qt.UserRole)
         if not version_id:
+            return
+        if self._version_running(version_id):
+            QMessageBox.warning(self, '无法删除', '该版本的游戏正在运行，请先关闭游戏后再删除。')
             return
         if self._delete_worker is not None and self._delete_worker.isRunning():
             return

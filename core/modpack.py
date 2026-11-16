@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -72,7 +73,36 @@ class ModpackInfo:
         return {'mrpack': 'Modrinth', 'curseforge': 'CurseForge', 'multimc': 'MultiMC/Prism', 'hmcl': 'HMCL/MCBBS'}.get(self.kind, self.kind)
 
 
-def _read_json(zf, name):
+MAX_ARCHIVE_UNCOMPRESSED = 2 * 1024 * 1024 * 1024
+MAX_ARCHIVE_ENTRY = 512 * 1024 * 1024
+MAX_ARCHIVE_RATIO = 200
+MAX_MANIFEST_BYTES = 8 * 1024 * 1024
+MAX_ICON_BYTES = 4 * 1024 * 1024
+
+
+def _zip_limits(zf, max_total=MAX_ARCHIVE_UNCOMPRESSED,
+                max_entry=MAX_ARCHIVE_ENTRY, max_ratio=MAX_ARCHIVE_RATIO):
+    total = 0
+    for info in zf.infolist():
+        size = max(0, int(info.file_size or 0))
+        packed = max(0, int(info.compress_size or 0))
+        if size > max_entry:
+            raise DownloadError(f'整合包内文件过大: {info.filename}')
+        if size > 1024 * 1024 and packed > 0 and size / packed > max_ratio:
+            raise DownloadError(f'整合包压缩比异常: {info.filename}')
+        total += size
+        if total > max_total:
+            raise DownloadError('整合包解压后体积超过限制')
+    return total
+
+
+def _read_json(zf, name, max_bytes=MAX_MANIFEST_BYTES):
+    try:
+        info = zf.getinfo(name)
+    except KeyError:
+        raise DownloadError(f'整合包缺少文件: {name}')
+    if int(info.file_size or 0) > max_bytes:
+        raise DownloadError(f'整合包元数据过大: {name}')
     return json.loads(zf.read(name).decode('utf-8-sig'))
 
 
@@ -131,11 +161,32 @@ def _loader_from_deps(deps):
     return '', ''
 
 
+WINDOWS_RESERVED_NAMES = {
+    'CON', 'PRN', 'AUX', 'NUL',
+    *{f'COM{i}' for i in range(1, 10)},
+    *{f'LPT{i}' for i in range(1, 10)},
+}
+
+
+def is_windows_reserved_name(name):
+    stem = str(name or '').split('.', 1)[0].strip().upper()
+    return stem in WINDOWS_RESERVED_NAMES
+
+
 def sanitize_version_name(name):
     name = (name or '').strip()
-    name = re.sub('[<>:"/\\\\|?*\\x00-\\x1f]', '-', name)
-    name = re.sub('\\s+', ' ', name).strip(' .')
-    return name[:80]
+    name = ''.join('-' if (ord(ch) < 32 or ch in '<>:"/\|?*') else ch for ch in name)
+    name = re.sub(r'\s+', ' ', name).strip(' .')
+    if not name:
+        return ''
+    if is_windows_reserved_name(name):
+        stem, dot, ext = name.partition('.')
+        name = f'{stem}-pack{dot}{ext}'
+    # 超长名称附加短哈希，避免两个不同名称截断后静默撞名。
+    if len(name) > 80:
+        digest = hashlib.sha1(name.encode('utf-8')).hexdigest()[:6]
+        name = name[:73].rstrip(' .') + '-' + digest
+    return name[:80].strip(' .')
 
 
 def _safe_join(base, relative):
@@ -191,6 +242,7 @@ def inspect_modpack(path):
     if not zipfile.is_zipfile(path):
         raise DownloadError('不是有效的整合包（需要 .mrpack 或 .zip）')
     with zipfile.ZipFile(path) as zf:
+        _zip_limits(zf)
         names = list(zf.namelist())
         normalized = [name.replace('\\', '/') for name in names]
         # Modrinth
@@ -747,7 +799,9 @@ class ModpackImportWorker(QThread):
             return
         self.status_updated.emit('正在解压整合包覆盖文件...')
         with zipfile.ZipFile(self.path) as zf:
-            entries = [name.replace('\\', '/') for name in zf.namelist()]
+            _zip_limits(zf)
+            actual = {name.replace('\\', '/'): name for name in zf.namelist()}
+            entries = list(actual)
             selected = [name for name in entries if not name.endswith('/') and any(name.startswith(prefix) for prefix in prefixes)]
             total = max(1, len(selected))
             for index, name in enumerate(selected, 1):
@@ -758,9 +812,20 @@ class ModpackImportWorker(QThread):
                     continue
                 base = self.mc_dir if rel.lower().startswith(('libraries/', 'assets/')) else alias_dir
                 dest = _safe_join(base, rel)
+                info = zf.getinfo(actual[name])
+                if int(info.file_size or 0) > MAX_ARCHIVE_ENTRY:
+                    raise DownloadError(f'覆盖文件过大: {name}')
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(name) as src, open(dest, 'wb') as dst:
-                    shutil.copyfileobj(src, dst)
+                written = 0
+                with zf.open(actual[name]) as src, open(dest, 'wb') as dst:
+                    while True:
+                        chunk = src.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        written += len(chunk)
+                        if written > MAX_ARCHIVE_ENTRY:
+                            raise DownloadError(f'覆盖文件解压后过大: {name}')
+                        dst.write(chunk)
                 if index % 20 == 0 or index == total:
                     self.progress_updated.emit(88 + int(6 * index / total))
                     self.status_updated.emit(f'正在解压覆盖文件 {index}/{total}')
@@ -768,7 +833,7 @@ class ModpackImportWorker(QThread):
     _PACK_ICON_CANDIDATES = ('icon.png', 'pack.png', 'logo.png', 'loading/logo.png')
     @staticmethod
     def _is_image_bytes(data):
-        if not data or len(data) > 8388608:
+        if not data or len(data) > MAX_ICON_BYTES:
             return False
         return data.startswith(b'\x89PNG\r\n\x1a\n') or data.startswith(b'\xff\xd8') or data.startswith((b'GIF87a', b'GIF89a', b'BM')) or (data[:4] == b'RIFF' and data[8:12] == b'WEBP')
 
@@ -783,6 +848,9 @@ class ModpackImportWorker(QThread):
                         if not name:
                             continue
                         try:
+                            info = zf.getinfo(name)
+                            if int(info.file_size or 0) > MAX_ICON_BYTES:
+                                continue
                             data = zf.read(name)
                         except (OSError, KeyError):
                             continue
