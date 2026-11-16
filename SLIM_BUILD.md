@@ -1,16 +1,19 @@
-# Spark Craft Launcher V1.11.4 DLL33 构建说明
+# Spark Craft Launcher V1.11.4 DLL34 构建说明
 
 ## 结论
 
-当前正式发布恢复到 **V1.11.4 + DLL33 onefile**。1.11.5–1.11.7 的 onedir/安装包
+当前正式发布恢复到 **V1.11.4 + DLL34 onefile**。1.11.5–1.11.7 的 onedir/安装包
 发布已转为草稿并撤回，以下保留内部构建与回滚说明。
+
+DLL34 起背景视频强制使用 FFmpeg 软件解码，关闭 Windows 硬件解码/纹理转换，
+用于规避 NVIDIA Overlay / DWM 在部分驱动版本下的崩溃路径。
 
 | 产物 | 大小 | SHA256 |
 |---|---:|---|
-| 正式 onefile 便携 exe | 36,644,986 字节 | `3bbd91b0cd0bb049df1069a21ee908b86f8894fb95e8820fa94a2eac4e6b2b1b` |
-| 正式 onefile 便携 zip | 36,322,292 字节 | `aec77719d856c859f5e0f27798b1b8711ad13577c45183eda2139912f4085117` |
+| 正式 onefile 便携 exe | 36,645,161 字节 | `9e1fd1d07911e3eaea520bfbfe832bf9df8b15716ecbfa99eaaeb21131cd9fb7` |
+| 正式 onefile 便携 zip | 36,322,536 字节 | `e2679d6cf5bae7c141481008127ec9236f63fcb65a406007c475dcde59b6cc7c` |
 
-- 构建号：`SCLREL1.11.4.R20261115.RP1.DLL33`
+- 构建号：`SCLREL1.11.4.R20261115.RP1.DLL34`
 - 构建入口：`python build_slim.py`（当前正式发布）；`python build_onedir.py` 仅保留内部/回滚构建
 - 安装包默认目录：`%LOCALAPPDATA%\Programs\SparkCraftLauncher`
 - 不使用 UPX，不删除静态图片解码插件，不改变 UI 布局与业务功能。

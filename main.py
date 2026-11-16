@@ -1,6 +1,10 @@
 import os
 os.environ["QT_OPENGL"] = "software"   # 降低 OpenGL 栈冲突风险
 os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.ffmpeg.info=false")
+# NVIDIA Overlay / DWM 在部分驱动版本下会在 D3D11 视频解码路径崩溃。
+# 背景视频改用 FFmpeg 软件解码，避免把启动器接入硬件解码/Overlay 链路。
+os.environ.setdefault("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", "")
+os.environ.setdefault("QT_DISABLE_HW_TEXTURES_CONVERSION", "1")
 
 import ctypes
 import logging
