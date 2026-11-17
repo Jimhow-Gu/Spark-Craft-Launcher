@@ -249,7 +249,9 @@ def _run_prewarm():
     """
 
     import threading
-    threading.Timer(10.0, lambda: os._exit(0)).start()
+    watchdog = threading.Timer(10.0, lambda: os._exit(0))
+    watchdog.daemon = True
+    watchdog.start()
     from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
     for module in (
@@ -278,13 +280,61 @@ def _run_prewarm():
         except Exception:
             pass
     app.processEvents()
-    os._exit(0)
+    sys.exit(0)
+
+
+def _show_launch_error(message):
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(0, str(message), '启动失败', 0x10)
+    except Exception:
+        print(message, file=sys.stderr)
+
+
+def _run_exported_launch(token):
+    """导出的 bat 只传安全 token，在这里解析版本并启动 Java。"""
+
+    import base64
+    import subprocess
+    try:
+        raw = str(token or '').strip()
+        raw += '=' * (-len(raw) % 4)
+        version_id = base64.urlsafe_b64decode(raw.encode('ascii')).decode('utf-8')
+    except Exception:
+        _show_launch_error('启动脚本参数损坏，请重新导出。')
+        return 1
+    from core.config import ConfigManager
+    from core.launch import LaunchManager
+    manager = LaunchManager()
+    command, error = manager.build_launch_command(version_id, prompt_java=False)
+    if not command:
+        _show_launch_error(error or '无法生成启动命令')
+        return 1
+    try:
+        working_dir = manager.get_game_dir(version_id)
+        subprocess.Popen(
+            command,
+            cwd=str(working_dir),
+            close_fds=True,
+            env=os.environ.copy(),
+        )
+        return 0
+    except Exception as exc:
+        _show_launch_error(f'启动游戏失败：{exc}')
+        return 1
 
 
 def main():
     if '--prewarm' in sys.argv[1:]:
         _run_prewarm()
         return
+    if '--launch-b64' in sys.argv[1:]:
+        index = sys.argv.index('--launch-b64')
+        token = sys.argv[index + 1] if index + 1 < len(sys.argv) else ''
+        sys.exit(_run_exported_launch(token))
+    for argument in sys.argv[1:]:
+        if argument.startswith('--launch-b64='):
+            sys.exit(_run_exported_launch(argument.split('=', 1)[1]))
     set_taskbar_identity()
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
@@ -449,22 +499,30 @@ def main():
     window.setWindowState(Qt.WindowNoState)
     # 首帧绘制后再后台扫描 Java，避免启动卡顿
 
-    exit_code = app.exec()
-    # 先释放 QtMultimedia/显卡/音频设备，再结束进程；正常 closeEvent
-    # 已经做过一次，这里是 app.quit() 等绕过 closeEvent 路径的兜底。
+    exit_code = int(app.exec() or 0)
+    # 正常退出优先走 Qt/Python 的析构流程：先停媒体设备和 worker，
+    # 再让窗口 deleteLater 并在事件循环中真正销毁。只有析构被残留
+    # 线程卡住时才由下面的超时线程 os._exit 兜底。
+    try:
+        from core.thread_guard import shutdown_threads
+        shutdown_threads()
+    except Exception:
+        pass
     try:
         window.shutdown_media()
+        window.deleteLater()
         app.processEvents()
     except Exception:
         pass
-    # 退出时可能仍有网络/日志线程在运行。交给 Python 析构 QThread 会触发
-    # “QThread: Destroyed while thread is still running” 甚至崩溃；
-    # 事件循环结束后直接结束进程，由操作系统回收线程。
     try:
         logging.shutdown()
     except Exception:
         pass
-    os._exit(int(exit_code or 0))
+    import threading
+    fallback = threading.Timer(8.0, lambda: os._exit(exit_code))
+    fallback.daemon = True
+    fallback.start()
+    sys.exit(exit_code)
 
 if __name__ == "__main__":
     main()

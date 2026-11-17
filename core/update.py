@@ -22,7 +22,7 @@ from core.paths import safe_rmtree, scl_dir
 CURRENT_VERSION = '1.11.4'
 VERSION_DISPLAY = 'V1.11.4（正式版）'
 # DLL 构建号在同一版本内递增；每次发布新大版本时重置为 1。
-EXECUTABLE_BUILD = '35'
+EXECUTABLE_BUILD = '36'
 REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
 API_KGGITHUB = f'https://api.kkgithub.com/repos/{REPO}/releases/latest'
@@ -132,6 +132,27 @@ def update_kind(info, current=CURRENT_VERSION, current_dll=EXECUTABLE_BUILD):
     return 'dll' if remote_dll > local_dll else 'none'
 
 
+def is_unpublished_build(info, current=CURRENT_VERSION, current_dll=EXECUTABLE_BUILD):
+    '''当前运行版本是否比 GitHub 上已发布的正式版还新（意外流出的构建）。'''
+
+    if not isinstance(info, dict):
+        return False
+    latest = str(info.get('version') or info.get('tag') or '').strip()
+    if not latest:
+        return False
+    if is_newer(current, latest):
+        return True
+    if _version_tuple(latest) != _version_tuple(current):
+        return False
+    try:
+        remote_dll = int(info.get('dll_build') or 0)
+        local_dll = int(current_dll or 0)
+    except (TypeError, ValueError):
+        return False
+    # Release 正文没有 DLL 构建号时无法判断，不能据此误报。
+    return remote_dll > 0 and local_dll > remote_dll
+
+
 def _fetch_release_api(api_url, timeout, results):
     http = None
     try:
@@ -166,10 +187,19 @@ def is_onedir_install():
 
 
 def _asset_priority(assets, prefer_onedir):
-    usable = [
-        asset for asset in assets
-        if isinstance(asset, dict) and str(asset.get('name') or '').strip()
-    ]
+    usable = []
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get('name') or '').strip()
+        if not name:
+            continue
+        lowered = name.lower()
+        # Release 里保留了历史 .bak/.old 备份，旧版更新器只按顺序取第一个
+        # exe；显式跳过备份，避免新客户端下载到旧构建。
+        if any(marker in lowered for marker in ('.bak', 'backup', '.old')):
+            continue
+        usable.append(asset)
     if prefer_onedir:
         for asset in usable:
             name = str(asset.get('name') or '').lower()
@@ -1056,6 +1086,6 @@ __all__ = [
     'apply_update_inplace', 'cleanup_old_executable', 'clear_downloaded_update',
     'consume_updated_marker', 'downloaded_update_available',
     'pending_update_exists', 'clear_launcher_caches',
-    'fetch_latest_release', 'is_newer', 'is_onedir_install', 'prepare_update',
-    'update_kind', 'write_downloaded_update', 'write_update_log',
+    'fetch_latest_release', 'is_newer', 'is_onedir_install', 'is_unpublished_build',
+    'prepare_update', 'update_kind', 'write_downloaded_update', 'write_update_log',
 ]

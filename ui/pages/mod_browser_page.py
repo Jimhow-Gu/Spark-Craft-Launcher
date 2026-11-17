@@ -45,6 +45,8 @@ PROJECT_TEMP.mkdir(parents=True, exist_ok=True)
 _ACTIVE_WORKERS: 'set' = set()
 _CATEGORY_CACHE: 'dict' = {}
 _CATEGORY_LOADING: 'set' = set()
+# MC百科没有公开的项目 ID 映射；首次点击时解析搜索页首条结果并缓存详情页。
+_MCMOD_DETAIL_CACHE: 'dict' = {}
 
 def _track_worker(worker):
     _ACTIVE_WORKERS.add(worker)
@@ -1181,18 +1183,20 @@ class DependencyCard(QFrame):
 
 class ProjectFilesDialog(QDialog):
     dependency_selected = Signal(object)
-    def __init__(self, project, mc_version, loader, game_dir, project_type, parent=None, embedded=False):
+    def __init__(self, project, mc_version, loader, game_dir, project_type, parent=None, embedded=False, preferred_source=''):
         super().__init__(parent)
         self.project = project
         self.mc_version = mc_version
         self.loader = loader
         self.game_dir = Path(game_dir)
         self.project_type = project_type
+        self.preferred_source = str(preferred_source or '').strip()
         # 整合包自带游戏版本，不能按当前实例版本过滤其文件列表。
         self._files_mc_version = '' if project_type == 'modpack' else mc_version
         self._files_loader = '' if project_type == 'modpack' else loader
         self.embedded = embedded
         self._cleaned = False
+        self._mcmod_net = None
         self._worker = None
         self._files = []
         self._file_rows = []
@@ -1240,13 +1244,28 @@ class ProjectFilesDialog(QDialog):
         layout.addWidget(sub)
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
-        self.modrinth_btn = QPushButton('转到 Modrinth')
-        self.modrinth_btn.setStyleSheet(
+        source_name = str(getattr(project, 'source', '') or '').strip()
+        # “全部”不是具体来源：结果卡片仍保留它实际来自 Modrinth/CurseForge。
+        if source_name.lower() in ('', 'all', '全部', '全部来源'):
+            source_name = self.preferred_source
+        if source_name.lower() in ('', 'all', '全部', '全部来源'):
+            source_name = 'CurseForge'
+        self._source_name = source_name
+        is_mod = str(
+            getattr(project, 'project_type', '') or project_type or 'mod'
+        ).lower() == 'mod'
+        source_style = (
+            'QPushButton { background:transparent; color:#f0a030; border:1px solid #c47b1d;'
+            ' border-radius:6px; padding:6px 12px; }'
+            'QPushButton:hover { background:rgba(240,160,48,0.16); }'
+            if 'curseforge' in source_name.lower() else
             'QPushButton { background:transparent; color:#9ac35a; border:1px solid #719b3d;'
             ' border-radius:6px; padding:6px 12px; }'
             'QPushButton:hover { background:rgba(120,170,60,0.16); }'
         )
-        self.modrinth_btn.clicked.connect(self._open_modrinth)
+        self.source_btn = QPushButton(f'转到 {source_name}')
+        self.source_btn.setStyleSheet(source_style)
+        self.source_btn.clicked.connect(self._open_source)
         self.mcmod_btn = QPushButton('转到 MC 百科')
         self.mcmod_btn.setStyleSheet(
             'QPushButton { background:transparent; color:#e8e8e8; border:1px solid rgba(255,255,255,0.30);'
@@ -1254,6 +1273,7 @@ class ProjectFilesDialog(QDialog):
             'QPushButton:hover { background:rgba(255,255,255,0.10); }'
         )
         self.mcmod_btn.clicked.connect(self._open_mcmod)
+        self.mcmod_btn.setVisible(is_mod)
         self.copy_name_btn = QPushButton('复制名称')
         self.copy_name_btn.setStyleSheet(
             'QPushButton { background:transparent; color:#e8e8e8; border:1px solid rgba(255,255,255,0.30);'
@@ -1261,8 +1281,9 @@ class ProjectFilesDialog(QDialog):
             'QPushButton:hover { background:rgba(255,255,255,0.10); }'
         )
         self.copy_name_btn.clicked.connect(self._copy_name)
-        action_row.addWidget(self.modrinth_btn, 1)
-        action_row.addWidget(self.mcmod_btn, 1)
+        action_row.addWidget(self.source_btn, 1)
+        if is_mod:
+            action_row.addWidget(self.mcmod_btn, 1)
         action_row.addWidget(self.copy_name_btn, 1)
         layout.addLayout(action_row)
         self.warning_label = QLabel('')
@@ -1664,20 +1685,162 @@ class ProjectFilesDialog(QDialog):
             return ''
         return self.world_combo.currentData() or ''
 
-    def _open_modrinth(self):
+    def _open_source(self):
+        '''按项目实际来源打开详情页；来源为“全部”时使用当前项目来源。'''
+
         project = self.project
-        project_type = str(project.project_type or 'mod')
-        url = str(project.website_url or '')
-        if 'modrinth.com' not in url:
-            slug = str(project.slug or '').strip()
-            if slug:
-                url = f'https://modrinth.com/{project_type}/{slug}'
+        project_type = str(
+            getattr(project, 'project_type', '') or self.project_type or 'mod'
+        ).lower()
+        source = str(
+            getattr(self, '_source_name', '') or getattr(project, 'source', '') or ''
+        ).strip()
+        source_lower = source.lower()
+        slug = str(getattr(project, 'slug', '') or '').strip()
+        url = ''
+        if 'curseforge' in source_lower and slug:
+            sections = {
+                'mod': 'mc-mods', 'modpack': 'modpacks',
+                'resourcepack': 'texture-packs', 'shader': 'shaders',
+                'datapack': 'data-packs',
+            }
+            url = (
+                'https://www.curseforge.com/minecraft/'
+                f'{sections.get(project_type, "mc-mods")}/{quote(slug)}'
+            )
+        elif 'modrinth' in source_lower and slug:
+            url = f'https://modrinth.com/{project_type}/{quote(slug)}'
+        if not url:
+            url = str(getattr(project, 'website_url', '') or '').strip()
         if url:
             QDesktopServices.openUrl(QUrl(url))
 
+    def _open_modrinth(self):
+        # 兼容旧调用：现在统一按项目来源打开。
+        self._open_source()
+
+    @staticmethod
+    def _mcmod_text(value):
+        return re.sub(
+            r'\s+', ' ',
+            html.unescape(re.sub(r'<[^>]+>', '', str(value or ''))),
+        ).strip()
+
+    @classmethod
+    def _mcmod_norm(cls, value):
+        return re.sub(
+            r'[\s\-_:/\\（）()\[\]【】]+', '',
+            cls._mcmod_text(value),
+        ).casefold()
+
+    @classmethod
+    def _mcmod_detail_from_html(cls, text, queries):
+        '''从 MC百科搜索结果中挑选标题最匹配的详情页。'''
+
+        source = str(text or '')
+        starts = [m.start() for m in re.finditer(r'<div class="result-item">', source)]
+        best_url = ''
+        best_score = 0
+        for index, start in enumerate(starts):
+            end = starts[index + 1] if index + 1 < len(starts) else len(source)
+            item = source[start:end]
+            match = re.search(
+                r'<div class="head">.*?<a[^>]+href="(https?://(?:www\.)?mcmod\.cn/class/\d+\.html)"[^>]*>(.*?)</a>',
+                item, re.S,
+            )
+            if not match:
+                continue
+            url = match.group(1)
+            title = cls._mcmod_text(match.group(2))
+            title_norm = cls._mcmod_norm(title)
+            if not title_norm:
+                continue
+            for query in queries:
+                query_norm = cls._mcmod_norm(query)
+                if not query_norm:
+                    continue
+                if query_norm == title_norm:
+                    score = 100
+                elif query_norm in title_norm:
+                    score = 50 + min(20, len(query_norm))
+                elif title_norm in query_norm:
+                    score = 30 + min(10, len(title_norm))
+                else:
+                    score = 0
+                if score > best_score:
+                    best_score = score
+                    best_url = url
+        return best_url
+
     def _open_mcmod(self):
-        name = self.project.translated_title or self.project.english_title or self.project.title
-        QDesktopServices.openUrl(QUrl(f'https://search.mcmod.cn/s?key={quote(str(name))}'))
+        '''先解析 MC百科搜索页的首条匹配结果，再直接打开项目详情页。
+
+        PCL 通过内置 WikiEntries 的 WikiId 直接拼
+        https://www.mcmod.cn/class/{id}.html；这里采用等价的按需解析，
+        避免随包携带大型映射表，同时保证最终打开的是详情页而非搜索页。
+        '''
+
+        project = self.project
+        queries = []
+        for value in (
+            getattr(project, 'translated_title', ''),
+            getattr(project, 'english_title', ''),
+            getattr(project, 'title', ''),
+        ):
+            value = str(value or '').strip()
+            if value and value not in queries:
+                queries.append(value)
+        if not queries:
+            return
+        cache_key = self._mcmod_norm(queries[0])
+        cached = _MCMOD_DETAIL_CACHE.get(cache_key)
+        if cached:
+            QDesktopServices.openUrl(QUrl(cached))
+            return
+        search_url = f'https://search.mcmod.cn/s?key={quote(queries[0])}'
+        if self._mcmod_net is None:
+            self._mcmod_net = QNetworkAccessManager(self)
+        request = QNetworkRequest(QUrl(search_url))
+        request.setRawHeader(
+            b'User-Agent',
+            b'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        )
+        reply = self._mcmod_net.get(request)
+        self.mcmod_btn.setEnabled(False)
+        self.mcmod_btn.setText('正在查找 MC 百科...')
+        reply.finished.connect(
+            lambda r=reply, u=search_url, q=list(queries), k=cache_key:
+            self._on_mcmod_search(r, u, q, k)
+        )  # noqa: E731
+
+    def _on_mcmod_search(self, reply, search_url, queries, cache_key):
+        data = b''
+        try:
+            if reply.error() == QNetworkReply.NoError:
+                data = bytes(reply.readAll())
+        except RuntimeError:
+            data = b''
+        finally:
+            try:
+                reply.deleteLater()
+            except RuntimeError:
+                pass
+        detail_url = ''
+        try:
+            detail_url = self._mcmod_detail_from_html(
+                data.decode('utf-8', 'replace'), queries
+            )
+        except Exception:
+            detail_url = ''
+        if detail_url:
+            _MCMOD_DETAIL_CACHE[cache_key] = detail_url
+        try:
+            self.mcmod_btn.setEnabled(True)
+            self.mcmod_btn.setText('转到 MC 百科')
+        except RuntimeError:
+            pass
+        # 找不到匹配详情时才回退搜索页，避免打开错误项目。
+        QDesktopServices.openUrl(QUrl(detail_url or search_url))
 
     def _copy_name(self):
         name = bilingual_plain(self.project.translated_title, self.project.english_title) or self.project.title
@@ -2387,7 +2550,11 @@ class ModBrowserPage(QWidget):
         mc_version = self._target_mc_version()
         loader = self.loader_combo.currentData() if self.loader_combo.isEnabled() else ''
         game_dir = self._target_game_dir()
-        page = ProjectFilesDialog(project, mc_version, loader, game_dir, self.project_type, self, embedded=True)
+        page = ProjectFilesDialog(
+            project, mc_version, loader, game_dir, self.project_type, self,
+            embedded=True,
+            preferred_source=self.source_combo.currentText(),
+        )
         page.dependency_selected.connect(self._download_project)
         page.accepted.connect((lambda p=page, pr=project: self._on_files_page_accepted(p, pr)))
         page.rejected.connect(self._close_files_page)

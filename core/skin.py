@@ -18,7 +18,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 from core.config import ConfigManager
 from core.net import HttpClient
 from core.paths import scl_dir
@@ -28,7 +28,22 @@ STEVE_URL = 'https://mc-heads.net/skin/MHF_Steve'
 ALEX_URL = 'https://mc-heads.net/skin/MHF_Alex'
 PREMIUM_URL = 'https://mc-heads.net/skin/{name}'
 MINOTAR_SKIN_URL = 'https://minotar.net/skin/{name}'
+MINESKIN_SKIN_URL = 'https://mineskin.eu/skin/{name}'
 BUNDLED_SKIN_DIR = Path(__file__).resolve().parent.parent / 'ui' / 'imgs'
+
+
+def premium_skin_urls(name: str) -> list:
+    '''正版皮肤下载源：mc-heads 常被 Cloudflare 403，保留多个镜像回退。'''
+
+    safe = quote(str(name or '').strip(), safe='')
+    if not safe:
+        return []
+    # mc-heads 对部分网络固定返回 403，放到最后避免每次先等一个失败请求。
+    return [
+        MINOTAR_SKIN_URL.format(name=safe),
+        MINESKIN_SKIN_URL.format(name=safe),
+        PREMIUM_URL.format(name=safe),
+    ]
 
 def skin_cache_key(uuid: str='', name: str='') -> str:
     key = str(uuid or name or 'player').strip().replace('-', '')
@@ -407,6 +422,7 @@ class SkinManager:
                 dest.unlink()
             except OSError:
                 pass
+        errors = []
         for url in urls:
             if not url:
                 continue
@@ -415,13 +431,21 @@ class SkinManager:
                 if dest.exists() and dest.stat().st_size > 64:
                     if valid_skin_file(dest):
                         return dest
+                    errors.append(f'{url}: 返回的文件不是有效皮肤')
                     try:
                         dest.unlink()
                     except OSError:
                         pass
             except Exception as exc:
-                logger.warning(f'下载皮肤失败 {url}: {exc}')
+                errors.append(f'{url}: {exc}')
                 continue
+        # 单个镜像 403/超时很常见；只有全部来源都失败时才写警告，
+        # 避免 mc-heads 403 之类被误报成皮肤损坏。
+        if errors:
+            logger.warning(
+                '下载皮肤失败（所有来源均不可用）: %s',
+                '；'.join(errors[:3]),
+            )
 
     def _fallback_skin(self, filename: str, color: str) -> Path:
         dest = self.dir / filename
@@ -474,7 +498,11 @@ class SkinManager:
                 pass
             if cached.is_file() and cached.stat().st_size > 64:
                 return cached
-        urls = [ALEX_URL, 'https://minotar.net/skin/MHF_Alex'] if is_alex else [STEVE_URL, 'https://minotar.net/skin/MHF_Steve']
+        urls = (
+            [ALEX_URL, 'https://minotar.net/skin/MHF_Alex', 'https://mineskin.eu/skin/MHF_Alex']
+            if is_alex else
+            [STEVE_URL, 'https://minotar.net/skin/MHF_Steve', 'https://mineskin.eu/skin/MHF_Steve']
+        )
         path = self._download_skin_candidates(urls, filename)
         return path or self._fallback_skin(filename, '#c58b67' if is_alex else '#5b8fbe')
 
@@ -500,7 +528,7 @@ class SkinManager:
                 model = 'slim' if model == 'slim' else 'classic'
             else:
                 safe = re.sub('[^A-Za-z0-9_\-]', '_', name)[:32]
-                skin_path = self._download_skin_candidates([PREMIUM_URL.format(name=name), MINOTAR_SKIN_URL.format(name=name)], f'premium_{safe}.png')
+                skin_path = self._download_skin_candidates(premium_skin_urls(name), f'premium_{safe}.png')
                 if skin_path is None:
                     skin_path = self._default_skin('classic')
                 model = 'slim' if model == 'slim' else 'classic'
@@ -553,7 +581,7 @@ class SkinManager:
                     cached.unlink()
                 except OSError:
                     pass
-            return self._download_skin_candidates([PREMIUM_URL.format(name=name), MINOTAR_SKIN_URL.format(name=name)], f'premium_{safe}.png')
+            return self._download_skin_candidates(premium_skin_urls(name), f'premium_{safe}.png')
         if mode == 'custom':
             path = self._resolve_custom_path(settings.get('custom_path', ''))
             if path.is_file():

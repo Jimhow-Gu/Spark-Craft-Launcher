@@ -130,6 +130,10 @@ class CollapsibleSection(QWidget):
                 self._animation.start()
             self.arrow.set_expanded(False, animate=animate)
             self.arrow.setToolTip('展开')
+        # 卡片背景是半透明自绘的；高度变化后显式刷新，避免旧内容
+        # 留在父级 backing store 上形成残影。
+        self.card.update()
+        self.update()
         self.toggled.emit(expanded)
 
     def _on_animation_finished(self):
@@ -138,3 +142,5 @@ class CollapsibleSection(QWidget):
         else:
             self.content.hide()
             self.content.setMaximumHeight(0)
+        self.card.update()
+        self.update()

@@ -19,9 +19,16 @@ from core.paths import scl_dir
 from core.update import VERSION_DISPLAY
 from ui.design import ACCENT, DEEP_ACCENT_LIGHT, MUTED_DARK, MUTED_LIGHT, TEXT_DARK, TEXT_LIGHT
 from ui.widgets.settings_widgets import hidpi_pixmap, rounded_pixmap, trim_transparent
+from ui.widgets.avatar_label import AvatarLabel
+from ui.widgets.mc_head import is_skin_image
 from ui.widgets.collapsible_section import CollapsibleSection
 
 _IMAGES_DIR = Path(__file__).resolve().parent.parent / 'imgs'
+_GUBWON_SKIN_URLS = (
+    'https://minotar.net/skin/Gubwon',
+    'https://mineskin.eu/skin/Gubwon',
+    'https://mc-heads.net/skin/Gubwon',
+)
 _VERSION_TEXT = VERSION_DISPLAY
 _THANKS = (
     ('bangbang93', '提供 BMCLAPI 镜像源和 Forge 安装工具，详见 ', 'https://bmclapi.bangbang93.com'),
@@ -220,7 +227,7 @@ class AboutPage(QWidget):
         card_title.setStyleSheet('color:rgba(255,255,255,0.6); font-size:13px; font-weight:900;')
         layout.addWidget(card_title)
 
-        gubwon = _icon_label()
+        gubwon = AvatarLabel(size=44, radius=10)
         deepseek = _icon_label()
         zhipu = _icon_label()
         scl = _icon_label()
@@ -398,18 +405,29 @@ class AboutPage(QWidget):
         self._load_local(label, 'bigmodel.png', '智', '#3859FF')
 
     def _load_gubwon(self, label):
-        # 先显示预缓存头像，避免机房网络不可用时直接变成史蒂夫；
-        # 同时继续请求官方资料，网络恢复后自动替换为最新头像。
-        cache = scl_dir() / 'icon_cache' / 'gubwon_head.png'
-        bundled = _IMAGES_DIR / 'gubwon_head.png'
-        # 内置头像已合成 Hat 覆盖层；旧缓存可能是单层，优先使用内置版本，
-        # 网络恢复后再用 Mojang 的最新皮肤覆盖。
-        initial = bundled if bundled.is_file() else cache
-        pixmap = QPixmap(str(initial)) if initial.is_file() else QPixmap()
-        if pixmap.isNull():
-            steve = _IMAGES_DIR / 'steve_head.png'
-            pixmap = QPixmap(str(steve)) if steve.is_file() else QPixmap()
-        self._set_icon(label, pixmap)
+        # 与账户页共用 AvatarLabel 的 3D 头颅渲染；完整皮肤才能还原
+        # 底层脸 + 帽子层的立体边缘。离线时优先使用内置皮肤。
+        cache_skin = scl_dir() / 'icon_cache' / 'gubwon_skin.png'
+        bundled_skin = _IMAGES_DIR / 'gubwon_skin.png'
+        account_skin = scl_dir() / 'skins' / 'premium_Gubwon.png'
+        for path in (cache_skin, bundled_skin, account_skin):
+            if not path.is_file():
+                continue
+            pixmap = QPixmap(str(path))
+            if not pixmap.isNull() and is_skin_image(pixmap):
+                label.set_head_source(pixmap)
+                break
+        else:
+            cache_head = scl_dir() / 'icon_cache' / 'gubwon_head.png'
+            bundled_head = _IMAGES_DIR / 'gubwon_head.png'
+            steve_head = _IMAGES_DIR / 'steve_head.png'
+            for path in (cache_head, bundled_head, steve_head):
+                if not path.is_file():
+                    continue
+                pixmap = QPixmap(str(path))
+                if not pixmap.isNull():
+                    label.set_head_source(pixmap)
+                    break
         self._request(
             'https://api.mojang.com/users/profiles/minecraft/Gubwon',
             lambda reply: self._on_uuid_reply(label, reply),
@@ -478,32 +496,42 @@ class AboutPage(QWidget):
         pixmap = QPixmap()
         if not data or not pixmap.loadFromData(data) or pixmap.isNull():
             return self._fallback_skin(label)
-        head = _head_from_skin(pixmap, 44)
-        self._set_icon(label, head)
+        label.set_head_source(pixmap)
         try:
             cache_dir = scl_dir() / 'icon_cache'
             cache_dir.mkdir(parents=True, exist_ok=True)
-            head.save(str(cache_dir / 'gubwon_head.png'), 'PNG')
+            pixmap.save(str(cache_dir / 'gubwon_skin.png'), 'PNG')
+            # 保留旧版头颅缓存，方便回退版本继续显示头像。
+            head = _head_from_skin(pixmap, 44)
+            if not head.isNull():
+                head.save(str(cache_dir / 'gubwon_head.png'), 'PNG')
         except OSError:
             pass
 
-    def _fallback_skin(self, label):
+    def _fallback_skin(self, label, index=0):
+        if index >= len(_GUBWON_SKIN_URLS):
+            return
         self._request(
-            'https://mc-heads.net/avatar/Gubwon/44',
-            lambda r: self._on_heads_reply(label, r),
+            _GUBWON_SKIN_URLS[index],
+            lambda reply, i=index: self._on_heads_reply(label, reply, i),
         )
 
-    def _on_heads_reply(self, label, reply):
+    def _on_heads_reply(self, label, reply, index=0):
         data = b''
         if reply.error() == QNetworkReply.NoError:
             data = reply.readAll()
         reply.deleteLater()
         pixmap = QPixmap()
         if data and pixmap.loadFromData(data) and not pixmap.isNull():
-            self._set_icon(label, pixmap)
+            label.set_head_source(pixmap)
             try:
                 cache_dir = scl_dir() / 'icon_cache'
                 cache_dir.mkdir(parents=True, exist_ok=True)
-                pixmap.save(str(cache_dir / 'gubwon_head.png'), 'PNG')
+                pixmap.save(str(cache_dir / 'gubwon_skin.png'), 'PNG')
+                head = _head_from_skin(pixmap, 44)
+                if not head.isNull():
+                    head.save(str(cache_dir / 'gubwon_head.png'), 'PNG')
             except OSError:
                 pass
+            return
+        self._fallback_skin(label, index + 1)

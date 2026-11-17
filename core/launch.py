@@ -1335,81 +1335,43 @@ class LaunchManager:
     def build_launch_script(self, version_id: str) -> tuple[str, str]:
         '''生成可双击运行的启动脚本。
 
-        用户可控的版本名、路径和参数全部放进 Base64 JSON，再由 PowerShell
-        使用 Windows 参数引用规则启动 Java。批处理文件里不拼接用户字符串，
-        避免 cmd 的 & | < > ^ " % ! 注入；同时保留 authlib-injector 和
-        127.0.0.1 代理等合法参数。
+        版本名/参数全部编码进安全 token，bat 只调用启动器自身的
+        ``--launch-b64`` 模式，不再拼接命令行，也不依赖 PowerShell。
+        这样既避免 cmd 注入，也减少 PowerShell/EncodedCommand 的杀软误报。
         '''
 
         command, err = self.build_launch_command(version_id)
         if not command:
             return '', err
+        token = base64.urlsafe_b64encode(
+            str(version_id).encode('utf-8')
+        ).decode('ascii').rstrip('=')
         game_dir = self.get_game_dir(version_id)
         try:
             game_dir.mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
-        payload = {
-            'exe': str(command[0]),
-            'work': str(game_dir),
-            'title': f'启动 - {version_id}',
-            'args': [str(arg) for arg in command[1:]],
-        }
-        raw = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
-        encoded_payload = base64.b64encode(raw).decode('ascii')
-        ps_lines = [
-            "$ErrorActionPreference = 'Stop'",
-            '$batch = [string]$env:SCL_BATCH',
-            "$payloadLines = Get-Content -LiteralPath $batch -Encoding Ascii | Where-Object { $_ -like 'rem SCLPAYLOAD:*' }",
-            "$encoded = ($payloadLines | ForEach-Object { $_.Substring(15) }) -join ''",
-            '$raw = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))',
-            '$data = $raw | ConvertFrom-Json',
-            'try { $Host.UI.RawUI.WindowTitle = [string]$data.title } catch {}',
-            'function Quote-WindowsArgument([string]$arg) {',
-            "    if ($arg -eq '') { return '\"\"' }",
-            "    if ($arg -notmatch '[\\s\\\"]') { return $arg }",
-            '    $builder = New-Object System.Text.StringBuilder',
-            '    [void]$builder.Append([char]34)',
-            '    $backslashes = 0',
-            '    foreach ($ch in $arg.ToCharArray()) {',
-            '        if ($ch -eq [char]92) { $backslashes++; continue }',
-            '        if ($ch -eq [char]34) {',
-            '            if ($backslashes -gt 0) { [void]$builder.Append(([string][char]92) * ($backslashes * 2 + 1)) }',
-            '            else { [void]$builder.Append([char]92) }',
-            '            [void]$builder.Append([char]34)',
-            '            $backslashes = 0',
-            '        } else {',
-            '            if ($backslashes -gt 0) { [void]$builder.Append(([string][char]92) * $backslashes); $backslashes = 0 }',
-            '            [void]$builder.Append($ch)',
-            '        }',
-            '    }',
-            '    if ($backslashes -gt 0) { [void]$builder.Append(([string][char]92) * ($backslashes * 2)) }',
-            '    [void]$builder.Append([char]34)',
-            '    return $builder.ToString()',
-            '}',
-            '$quoted = @($data.args) | ForEach-Object { Quote-WindowsArgument ([string]$_) }',
-            "$arguments = $quoted -join ' '",
-            "$process = Start-Process -FilePath ([string]$data.exe) -WorkingDirectory ([string]$data.work) -ArgumentList $arguments -PassThru -Wait",
-            'exit $process.ExitCode',
-        ]
-        ps_text = '\r\n'.join(ps_lines)
-        encoded_script = base64.b64encode(ps_text.encode('utf-16le')).decode('ascii')
-        payload_lines = ''.join(
-            f'rem SCLPAYLOAD:{encoded_payload[offset:offset + 6000]}\r\n'
-            for offset in range(0, len(encoded_payload), 6000)
-        )
-        content = (
-            '@echo off\r\n'
-            'setlocal DisableDelayedExpansion\r\n'
-            'chcp 936>nul\r\n'
-            'set "SCL_BATCH=%~f0"\r\n'
-            'echo 游戏正在启动，请稍候。\r\n'
-            f'powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded_script}\r\n'
-            'echo 游戏已退出。\r\n'
-            'pause\r\n'
-            'exit /b\r\n'
-            + payload_lines
-        )
+        if getattr(sys, 'frozen', False):
+            launcher = [str(Path(sys.executable).resolve())]
+        else:
+            launcher = [
+                str(Path(sys.executable).resolve()),
+                str(Path(__file__).resolve().parent.parent / 'main.py'),
+            ]
+
+        def quoted(value):
+            # cmd 中 % 需要双写；路径不能包含双引号（Windows 文件名限制）。
+            return '"' + str(value).replace('%', '%%') + '"'
+
+        launcher_line = ' '.join(quoted(part) for part in launcher)
+        newline = chr(13) + chr(10)
+        content = newline.join([
+            '@echo off',
+            'setlocal DisableDelayedExpansion',
+            'chcp 936>nul',
+            f'start "" {launcher_line} --launch-b64 {token}',
+            'exit /b',
+        ]) + newline
         return content, ''
 
     def pre_launch_check(self, version_id: str) -> tuple[bool, str]:

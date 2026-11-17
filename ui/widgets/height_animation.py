@@ -22,23 +22,37 @@ class HeightAnimation(QPropertyAnimation):
         self.finished.connect(self._schedule_final_refresh)
 
     def _schedule_final_refresh(self):
-        self._refresh_area()
-        QTimer.singleShot(0, self._refresh_area)
+        # 结束帧用同步 repaint，确保透明卡片缩小后旧内容立即被擦掉；
+        # 再用两个延迟刷新覆盖 finished 回调里才执行 hide/setMaximumHeight 的情况。
+        self._final_refresh()
+        QTimer.singleShot(0, self._final_refresh)
+        QTimer.singleShot(24, self._final_refresh)
 
-    def _refresh_area(self, *_args):
-        target = self._target_widget
+    def _final_refresh(self):
+        try:
+            self._refresh_area(force=True)
+        except RuntimeError:
+            pass
+
+    def _refresh_area(self, *_args, force=False):
+        try:
+            target = self._target_widget
+        except RuntimeError:
+            return
         widget = target
         area = None
         try:
             target.updateGeometry()
             target.update()
             # 依次激活 section、分组容器和滚动内容布局，避免下一组标题
-            # 还停留在动画前的位置。
-            for _ in range(6):
+            # 还停留在动画前的位置。透明背景下只 updateGeometry 不够，
+            # 父级也必须标记重绘，否则会留下旧高度的卡片背景。
+            for _ in range(10):
                 parent = widget.parentWidget()
                 if parent is None:
                     break
                 parent.updateGeometry()
+                parent.update()
                 layout = parent.layout()
                 if layout is not None:
                     try:
@@ -53,9 +67,21 @@ class HeightAnimation(QPropertyAnimation):
             return
         try:
             if area is not None:
-                area.viewport().update()
+                if force:
+                    area.viewport().repaint()
+                    # 设置页叠在半透明背景/视频上，只重绘 viewport 可能
+                    # 不会清掉顶层的旧像素；最后再刷新一次顶层窗口。
+                    try:
+                        area.window().update()
+                    except RuntimeError:
+                        pass
+                else:
+                    area.viewport().update()
             elif target.parentWidget() is not None:
-                target.parentWidget().update()
+                if force:
+                    target.parentWidget().repaint()
+                else:
+                    target.parentWidget().update()
         except RuntimeError:
             pass
 

@@ -73,27 +73,8 @@ class ModpackInfo:
         return {'mrpack': 'Modrinth', 'curseforge': 'CurseForge', 'multimc': 'MultiMC/Prism', 'hmcl': 'HMCL/MCBBS'}.get(self.kind, self.kind)
 
 
-MAX_ARCHIVE_UNCOMPRESSED = 2 * 1024 * 1024 * 1024
-MAX_ARCHIVE_ENTRY = 512 * 1024 * 1024
-MAX_ARCHIVE_RATIO = 200
 MAX_MANIFEST_BYTES = 8 * 1024 * 1024
 MAX_ICON_BYTES = 4 * 1024 * 1024
-
-
-def _zip_limits(zf, max_total=MAX_ARCHIVE_UNCOMPRESSED,
-                max_entry=MAX_ARCHIVE_ENTRY, max_ratio=MAX_ARCHIVE_RATIO):
-    total = 0
-    for info in zf.infolist():
-        size = max(0, int(info.file_size or 0))
-        packed = max(0, int(info.compress_size or 0))
-        if size > max_entry:
-            raise DownloadError(f'整合包内文件过大: {info.filename}')
-        if size > 1024 * 1024 and packed > 0 and size / packed > max_ratio:
-            raise DownloadError(f'整合包压缩比异常: {info.filename}')
-        total += size
-        if total > max_total:
-            raise DownloadError('整合包解压后体积超过限制')
-    return total
 
 
 def _read_json(zf, name, max_bytes=MAX_MANIFEST_BYTES):
@@ -103,7 +84,12 @@ def _read_json(zf, name, max_bytes=MAX_MANIFEST_BYTES):
         raise DownloadError(f'整合包缺少文件: {name}')
     if int(info.file_size or 0) > max_bytes:
         raise DownloadError(f'整合包元数据过大: {name}')
-    return json.loads(zf.read(name).decode('utf-8-sig'))
+    try:
+        return json.loads(zf.read(name).decode('utf-8-sig'))
+    except RecursionError as exc:
+        raise DownloadError(f'整合包元数据嵌套过深: {name}') from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise DownloadError(f'整合包元数据格式异常: {name}') from exc
 
 
 def _entry_map(zf):
@@ -242,7 +228,6 @@ def inspect_modpack(path):
     if not zipfile.is_zipfile(path):
         raise DownloadError('不是有效的整合包（需要 .mrpack 或 .zip）')
     with zipfile.ZipFile(path) as zf:
-        _zip_limits(zf)
         names = list(zf.namelist())
         normalized = [name.replace('\\', '/') for name in names]
         # Modrinth
@@ -799,11 +784,30 @@ class ModpackImportWorker(QThread):
             return
         self.status_updated.emit('正在解压整合包覆盖文件...')
         with zipfile.ZipFile(self.path) as zf:
-            _zip_limits(zf)
             actual = {name.replace('\\', '/'): name for name in zf.namelist()}
             entries = list(actual)
             selected = [name for name in entries if not name.endswith('/') and any(name.startswith(prefix) for prefix in prefixes)]
+            selected_infos = [zf.getinfo(actual[name]) for name in selected]
             total = max(1, len(selected))
+            # 与 PCL2/HMCL 一致：不设置固定解压大小上限，只检查磁盘余量。
+            required_bytes = sum(max(0, int(item.file_size or 0)) for item in selected_infos)
+            if required_bytes:
+                reserve_bytes = int(required_bytes * 1.10)
+                free_candidates = []
+                for root in {Path(alias_dir), Path(self.mc_dir)}:
+                    try:
+                        free_candidates.append(shutil.disk_usage(str(root)).free)
+                    except OSError:
+                        continue
+                if free_candidates and reserve_bytes > min(free_candidates):
+                    free_bytes = min(free_candidates)
+                    raise DownloadError(
+                        '磁盘空间不足：需要约 %.2f GB，当前剩余 %.2f GB'
+                        % (
+                            max(0.01, reserve_bytes / (1024 ** 3)),
+                            max(0.01, free_bytes / (1024 ** 3)),
+                        )
+                    )
             for index, name in enumerate(selected, 1):
                 self._check_cancel()
                 prefix = next((p for p in prefixes if name.startswith(p)), '')
@@ -812,19 +816,12 @@ class ModpackImportWorker(QThread):
                     continue
                 base = self.mc_dir if rel.lower().startswith(('libraries/', 'assets/')) else alias_dir
                 dest = _safe_join(base, rel)
-                info = zf.getinfo(actual[name])
-                if int(info.file_size or 0) > MAX_ARCHIVE_ENTRY:
-                    raise DownloadError(f'覆盖文件过大: {name}')
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                written = 0
                 with zf.open(actual[name]) as src, open(dest, 'wb') as dst:
                     while True:
                         chunk = src.read(1024 * 1024)
                         if not chunk:
                             break
-                        written += len(chunk)
-                        if written > MAX_ARCHIVE_ENTRY:
-                            raise DownloadError(f'覆盖文件解压后过大: {name}')
                         dst.write(chunk)
                 if index % 20 == 0 or index == total:
                     self.progress_updated.emit(88 + int(6 * index / total))

@@ -190,7 +190,8 @@ class GameSettingsPage(QWidget):
             page_scroll.setStyleSheet('\n            QScrollArea { background: transparent; border: none; }\n            QScrollBar:vertical { background: #2a2a2a; width: 12px; border-radius: 6px; }\n            QScrollBar::handle:vertical { background: #555; border-radius: 6px; min-height: 20px; }\n            QScrollBar::handle:vertical:hover { background: #777; }\n            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }\n        ')
             page_content = QWidget()
             page_layout = QVBoxLayout(page_content)
-            page_layout.setContentsMargins(0, 16, 0, 30)
+            # 内容紧跟标签栏，去掉每个 TAB 顶部空出来的第一行。
+            page_layout.setContentsMargins(0, 0, 0, 30)
             page_layout.setSpacing(20)
             page_scroll.setWidget(page_content)
             return page_scroll, page_layout
@@ -201,11 +202,11 @@ class GameSettingsPage(QWidget):
         self.tabs.setDocumentMode(False)
         self.tabs.setStyleSheet(
             'QTabWidget { border: none; background: transparent; }'
-            'QTabWidget::pane { border: none; background: transparent; }'
+            'QTabWidget::pane { border: none; background: transparent; top: 0px; }'
             'QTabWidget::tab-bar { border: none; background: transparent; left: 0px; }'
             'QTabBar { border: none; background: transparent; }'
             'QTabBar::tab { background: rgba(255,255,255,0.16); color: #f0f0f0;'
-            ' border: 1px solid rgba(255,255,255,0.24); padding: 8px 22px; margin-right: 6px; margin-bottom: 8px;'
+            ' border: 1px solid rgba(255,255,255,0.24); padding: 8px 22px; margin-right: 6px; margin-bottom: 0px;'
             ' border-radius: 8px; font-size: 11pt; }'
             'QTabBar::tab:selected { background: #88DDDD; color: white; border-color: #88DDDD; }'
             'QTabBar::tab:hover { background: rgba(255,255,255,0.24); }'
@@ -663,7 +664,7 @@ class GameSettingsPage(QWidget):
         scroll.setStyleSheet('QScrollArea { background:transparent; border:none; }')
         content = QWidget()
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(24, 6, 24, 16)
+        content_layout.setContentsMargins(24, 0, 24, 16)
         content_layout.setSpacing(14)
 
         # 顶部：整合包名称 / 版本

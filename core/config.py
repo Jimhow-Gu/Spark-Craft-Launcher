@@ -308,6 +308,37 @@ class ConfigManager:
         return f'{amount:g}{unit}'
 
     @staticmethod
+    def _memory_mb(value):
+        '''把已清洗的内存文本换算成 MB，仅用于比较 min/max。'''
+
+        match = re.fullmatch(r'\s*(\d+(?:\.\d+)?)\s*([GgMm]?)\s*', str(value or ''))
+        if not match:
+            return None
+        try:
+            amount = float(match.group(1))
+        except (TypeError, ValueError):
+            return None
+        if amount <= 0:
+            return None
+        unit = match.group(2).upper()
+        return amount * 1024 if unit == 'G' else amount
+
+    @classmethod
+    def _clamp_memory_pair(cls, values, fallback_max=None):
+        '''确保 -Xms 不会大于 -Xmx；只修正内存对，不碰其他设置。'''
+
+        min_text = values.get('memory_min')
+        max_text = values.get('memory_max') or fallback_max
+        if not min_text or not max_text:
+            return False
+        min_mb = cls._memory_mb(min_text)
+        max_mb = cls._memory_mb(max_text)
+        if min_mb is None or max_mb is None or min_mb <= max_mb:
+            return False
+        values['memory_min'] = max_text
+        return True
+
+    @staticmethod
     def _sanitize_account(account):
         if not isinstance(account, dict):
             return None
@@ -357,6 +388,7 @@ class ConfigManager:
                     result[key] = bool(result[key])
                 else:
                     result.pop(key, None)
+        self._clamp_memory_pair(result)
         return result
 
     def _sanitize_config(self, raw: dict):
@@ -561,6 +593,8 @@ class ConfigManager:
             elif kind is bool and not isinstance(value, bool):
                 result[key] = bool(value) if value in (0, 1) else False
                 changed = True
+        if self._clamp_memory_pair(result, self._default.get('memory_max')):
+            changed = True
         if 'download_speed_limit' in result:
             try:
                 limit = float(result.get('download_speed_limit'))

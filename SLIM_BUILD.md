@@ -1,8 +1,8 @@
-# Spark Craft Launcher V1.11.4 DLL35 构建说明
+# Spark Craft Launcher V1.11.4 DLL36 构建说明
 
 ## 结论
 
-当前正式发布恢复到 **V1.11.4 + DLL35 onefile**。1.11.5–1.11.7 的 onedir/安装包
+当前正式发布恢复到 **V1.11.4 + DLL36 onefile**。1.11.5–1.11.7 的 onedir/安装包
 发布已转为草稿并撤回，以下保留内部构建与回滚说明。
 
 DLL34 起背景视频强制使用 FFmpeg 软件解码，关闭 Windows 硬件解码/纹理转换，
@@ -10,13 +10,31 @@ DLL34 起背景视频强制使用 FFmpeg 软件解码，关闭 Windows 硬件解
 
 | 产物 | 大小 | SHA256 |
 |---|---:|---|
-| 正式 onefile 便携 exe | 36,650,149 字节 | `78eba79a399c08529b208d9d0864bbe68868300ef9ba5f438742a3464209f82b` |
-| 正式 onefile 便携 zip | 36,327,311 字节 | `cd3a68686701156d0d1eaa6b8f35b41f037b7a207b609baef6bc07953450ab6d` |
+| 正式 onefile 便携 exe | 36,656,501 字节 | `319a1ecec9e543686535e80cf64e02e7edc6fbc63e41d04c133357a021f4b8e5` |
+| 正式 onefile 便携 zip | 36,332,365 字节 | `b236efe554b1e7e1abb10529527eda63fcfe163914fa1b053df11cdd9c065ca9` |
 
-- 构建号：`SCLREL1.11.4.R20261115.RP1.DLL35`
+- 构建号：`SCLREL1.11.4.R20261117.RP1.DLL36`
 - 构建入口：`python build_slim.py`（当前正式发布）；`python build_onedir.py` 仅保留内部/回滚构建
 - 安装包默认目录：`%LOCALAPPDATA%\Programs\SparkCraftLauncher`
 - 不使用 UPX，不删除静态图片解码插件，不改变 UI 布局与业务功能。
+
+## DLL36 更新
+
+- 导出启动脚本改为 bat 调用启动器 `--launch-b64`，移除 PowerShell / `-EncodedCommand`，
+  版本名和参数不进入 cmd。
+- 内存配置清洗确保 `-Xms` 不大于 `-Xmx`；限速继续过滤 NaN。
+- 正常退出改为 `deleteLater → processEvents → sys.exit`，`os._exit` 仅保留为超时兜底；
+  更新替换 exe 的路径仍立即退出。
+- 整合包解压移除固定单文件/总大小/压缩比上限，仅保留 zip-slip 和磁盘余量检查
+  （含 10% 预留）；manifest 嵌套过深转为可读错误。
+- JVM 参数解析支持单双引号；导出脚本继续兼容 authlib-injector 和本地代理参数。
+- 关于页 Gubwon 头像改用账户页同款 3D 皮肤渲染，内置完整皮肤；mc-heads 403 时
+  自动回退 minotar/mineskin，且只有全部来源失败才记录警告。
+- Mod 详情页来源按钮按项目实际来源显示；只有 Mod 显示 MC 百科，点击后解析
+  `class/{id}.html` 直接打开详情页（参考 PCL 的 WikiId 思路）。
+- 设置页 TAB 标签栏与内容之间的空白带、折叠列表展开/收起残影已处理。
+- 当前版本高于已发布正式版时，显示白色可点击提示，引导下载最新正式版。
+- 更新附件选择跳过 `.bak`/`.old` 备份，避免自动更新下载到旧构建。
 
 ## 启动性能
 
@@ -96,7 +114,7 @@ onedir 更新流程：
 ## 体积构成与 FFmpeg
 
 未使用 UPX 的 DLL27 onefile 基线为 39,449,405 字节。V1.11.7 onefile 为
-36,650,149 字节，减少 2,799,256 字节（7.10%）。
+36,656,501 字节，减少 2,792,904 字节（7.08%）。
 
 主要占用：
 

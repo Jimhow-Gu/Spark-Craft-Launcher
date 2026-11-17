@@ -90,6 +90,7 @@ class MainWindow(QMainWindow):
         self._pending_update_info = None
         self._pending_update_kind = 'version'
         self._update_notified_tag = ''
+        self._unpublished_notified_tag = ''
         self._update_prepared = False
         self._update_prepared_tag = ''
         self._update_prepare_error = ''
@@ -1878,10 +1879,13 @@ class MainWindow(QMainWindow):
             if manual:
                 QMessageBox.warning(self, '检查更新失败', '无法获取最新版本信息：' + chr(10) + str(error))
             return
-        from core.update import CURRENT_VERSION, update_kind
+        from core.update import CURRENT_VERSION, is_unpublished_build, update_kind
         if not info:
             if manual:
                 QMessageBox.information(self, '检查更新', '暂无可用 Release。')
+            return
+        if is_unpublished_build(info):
+            self._schedule_unpublished_notice(info, 600 if manual else 1500)
             return
         kind = update_kind(info)
         if kind == 'none':
@@ -1894,6 +1898,44 @@ class MainWindow(QMainWindow):
         self._pending_update_info = dict(info)
         self._pending_update_kind = kind
         QTimer.singleShot(1200, (lambda i=dict(info), k=kind: self._show_update_toast(i, k)))
+
+    def _schedule_unpublished_notice(self, info, delay=1500):
+        tag = str(info.get('tag') or info.get('version') or '')
+        if tag and tag == self._unpublished_notified_tag:
+            return
+        QTimer.singleShot(
+            delay,
+            lambda i=dict(info): self._show_unpublished_notice(i),
+        )
+
+    def _show_unpublished_notice(self, info):
+        '''当前运行版本高于已发布正式版时，用白底通知提示意外流出的构建。'''
+
+        if getattr(self, '_closing', False):
+            return
+        tag = str(info.get('tag') or info.get('version') or '')
+        if tag and tag == self._unpublished_notified_tag:
+            return
+        self._unpublished_notified_tag = tag
+        url = str(info.get('html_url') or info.get('asset_url') or '').strip()
+        from ui.widgets.toast import show_toast
+        show_toast(
+            '当前版本并非公布正式版本，可能为意外发出的错误版本！'
+            '可点击下载最新发布的正式版！',
+            'plain',
+            self,
+            15000,
+            (lambda u=url: self._open_release_page(u)) if url else None,
+        )
+
+    @staticmethod
+    def _open_release_page(url):
+        url = str(url or '').strip()
+        if not url.lower().startswith(('https://', 'http://')):
+            return
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        QDesktopServices.openUrl(QUrl(url))
 
     def _show_update_toast(self, info, kind='version'):
         '''自动检查到新版本时先显示可点击通知，不直接弹出下载窗口。'''

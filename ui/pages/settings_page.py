@@ -736,7 +736,8 @@ class SettingsPage(QWidget):
             page_scroll.setStyleSheet('QScrollArea { background:transparent; border:none; }')
             page_content = QWidget()
             page_layout = QVBoxLayout(page_content)
-            page_layout.setContentsMargins(0, 16, 40, 30)
+            # 内容紧跟标签栏，去掉每个 TAB 顶部空出来的第一行。
+            page_layout.setContentsMargins(0, 0, 40, 30)
             page_layout.setSpacing(16)
             page_scroll.setWidget(page_content)
             return page_scroll, page_layout
@@ -748,11 +749,11 @@ class SettingsPage(QWidget):
         self.settings_tabs.setDocumentMode(False)
         self.settings_tabs.setStyleSheet(
             'QTabWidget { border:none; background:transparent; }'
-            'QTabWidget::pane { border:none; background:transparent; }'
+            'QTabWidget::pane { border:none; background:transparent; top:0px; }'
             'QTabWidget::tab-bar { border:none; background:transparent; left:0px; }'
             'QTabBar { border:none; background:transparent; }'
             'QTabBar::tab { background:rgba(255,255,255,0.16); color:#f0f0f0;'
-            ' border:1px solid rgba(255,255,255,0.24); padding:8px 22px; margin-right:6px; margin-bottom:8px;'
+            ' border:1px solid rgba(255,255,255,0.24); padding:8px 22px; margin-right:6px; margin-bottom:0px;'
             ' border-radius:8px; font-size:11pt; }'
             'QTabBar::tab:selected { background:#88DDDD; color:white; border-color:#88DDDD; }'
             'QTabBar::tab:hover { background:rgba(255,255,255,0.24); }'
