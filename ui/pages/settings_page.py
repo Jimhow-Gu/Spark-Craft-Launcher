@@ -736,8 +736,7 @@ class SettingsPage(QWidget):
             page_scroll.setStyleSheet('QScrollArea { background:transparent; border:none; }')
             page_content = QWidget()
             page_layout = QVBoxLayout(page_content)
-            # 内容紧跟标签栏，去掉每个 TAB 顶部空出来的第一行。
-            page_layout.setContentsMargins(0, 0, 40, 30)
+            page_layout.setContentsMargins(0, 24, 40, 30)
             page_layout.setSpacing(16)
             page_scroll.setWidget(page_content)
             return page_scroll, page_layout
@@ -941,7 +940,7 @@ class SettingsPage(QWidget):
     def _create_group(self, title):
         group = RoundedGroupBox(radius=12)
         group_layout = QVBoxLayout(group)
-        group_layout.setContentsMargins(24, 18, 24, 18)
+        group_layout.setContentsMargins(24, 0, 24, 18)
         group_layout.setSpacing(12)
         title_label = QLabel(title)
         title_label.setStyleSheet('color: rgba(255,255,255,0.85); font-size: 15px; font-weight:900;')
