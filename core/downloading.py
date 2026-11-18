@@ -521,6 +521,30 @@ class DownloadClient:
             self._host_failures.pop(host, None)
             self._host_down_until.pop(host, None)
 
+    @staticmethod
+    def _ensure_disk_space(remote):
+        '''写入前检查目标盘余量；没有文件大小时保留最低安全余量。'''
+
+        probe = remote.dest.parent
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        try:
+            free = shutil.disk_usage(str(probe)).free
+        except OSError:
+            return
+        needed = max(0, int(remote.size or 0))
+        if needed and free < needed:
+            raise DownloadError(
+                f'{remote.label}: 磁盘空间不足（需要约 '
+                f'{needed / (1024 ** 3):.2f} GB，当前剩余 '
+                f'{free / (1024 ** 3):.2f} GB）'
+            )
+        if not needed and free < 16 * 1024 * 1024:
+            raise DownloadError(
+                f'{remote.label}: 磁盘空间不足（当前剩余 '
+                f'{free / (1024 ** 2):.1f} MB）'
+            )
+
     def download(self, remote, *, cancel=None, progress=None, deadline=None):
         if cancel and cancel():
             raise DownloadCancelled()
@@ -529,6 +553,7 @@ class DownloadClient:
             return False
         if self._copy_from_other_dirs(remote, mode):
             return True
+        self._ensure_disk_space(remote)
         if not remote.urls:
             raise DownloadError(f'{remote.label}: 无可用下载地址')
         if not deadline and self.file_deadline:

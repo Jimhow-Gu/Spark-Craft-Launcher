@@ -33,7 +33,7 @@ from core.config import ConfigManager
 from core.paths import safe_rmtree
 from core.downloading import DownloadClient, RemoteFile
 from core.installers import (InstallCancelled, ProgressMapper, create_alias, install_fabric, install_forge, install_neoforge, install_quilt, install_vanilla)
-from core.mods import CurseForgeSource
+from core.mods import CurseForgeSource, pcl_mod_mirror
 from core.net import (DownloadCancelled, DownloadError, DownloadGate)
 from core.version import (INCOMPLETE_MARKER, register_active_install, unregister_active_install)
 
@@ -70,7 +70,7 @@ class ModpackInfo:
     extra: dict = field(default_factory=dict)
 
     def format_name(self):
-        return {'mrpack': 'Modrinth', 'curseforge': 'CurseForge', 'multimc': 'MultiMC/Prism', 'hmcl': 'HMCL/MCBBS'}.get(self.kind, self.kind)
+        return {'mrpack': 'Modrinth', 'curseforge': 'CurseForge', 'multimc': 'MultiMC/Prism', 'hmcl': 'HMCL', 'mcbbs': 'MCBBS'}.get(self.kind, self.kind)
 
 
 MAX_MANIFEST_BYTES = 8 * 1024 * 1024
@@ -208,6 +208,9 @@ def _forgecdn_candidates(url):
         candidate = host + path
         if candidate not in result:
             result.append(candidate)
+    mirrored = pcl_mod_mirror(url)
+    if mirrored != url and mirrored not in result:
+        result.append(mirrored)
     return result
 
 
@@ -230,18 +233,23 @@ def inspect_modpack(path):
     with zipfile.ZipFile(path) as zf:
         names = list(zf.namelist())
         normalized = [name.replace('\\', '/') for name in names]
-        # Modrinth
+        # 与 PCL CE 的检测顺序保持一致：
+        # MCBBS -> MultiMC -> Modrinth -> CurseForge/MCBBS manifest -> HMCL。
+        entry = _find_entry(normalized, 'mcbbs.packmeta', root_only=False)
+        if entry:
+            return _inspect_mcbbs_pack(path, zf, entry, normalized)
+        entry = _find_entry(normalized, 'mmc-pack.json', root_only=False)
+        if entry:
+            return _inspect_multimc(path, zf, entry, normalized)
         entry = _find_entry(normalized, 'modrinth.index.json', root_only=False)
         if entry:
             return _inspect_modrinth(path, zf, entry, normalized)
-        # MultiMC / Prism
-        entry = _find_entry(normalized, 'mmc-pack.json', root_only=False)
-        if entry and _find_entry(normalized, 'instance.cfg', root_only=False):
-            return _inspect_multimc(path, zf, entry, normalized)
-        # CurseForge / HMCL / MCBBS
         entry = _find_entry(normalized, 'manifest.json', root_only=False)
         if entry:
             return _inspect_manifest_pack(path, zf, entry, normalized)
+        entry = _find_entry(normalized, 'modpack.json', root_only=False)
+        if entry:
+            return _inspect_hmcl_pack(path, zf, entry, normalized)
     raise DownloadError('无法识别的整合包格式（支持 Modrinth、CurseForge/FTB、MultiMC/Prism、HMCL/MCBBS 导出包）')
 
 
@@ -252,6 +260,8 @@ def _pack_root(entry):
 def _inspect_modrinth(path, zf, entry, names):
     index = _read_json(zf, entry)
     deps = index.get('dependencies') or {}
+    if not deps.get('minecraft'):
+        raise DownloadError('Modrinth 整合包缺少 minecraft 依赖版本')
     loader_id, loader_version = _loader_from_deps(deps)
     files = []
     for item in index.get('files') or []:
@@ -325,13 +335,152 @@ def _inspect_multimc(path, zf, entry, names):
     )
 
 
+def _loader_from_addons(addons):
+    values = {}
+    for item in addons or []:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get('id') or '').strip().lower()
+        if key:
+            values[key] = str(item.get('version') or '').strip()
+    mc_version = values.get('game', '')
+    for key in ('forge', 'neoforge', 'fabric', 'quilt'):
+        if values.get(key):
+            return mc_version, key, values[key]
+    return mc_version, '', ''
+
+
+def _mcbbs_files(items):
+    files = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get('path') or '').strip()
+        urls = []
+        for value in item.get('downloads') or []:
+            if isinstance(value, str) and value and value not in urls:
+                urls.append(value)
+        for value in item.get('urls') or []:
+            if isinstance(value, str) and value and value not in urls:
+                urls.append(value)
+        url = str(item.get('url') or '').strip()
+        if url and url not in urls:
+            urls.insert(0, url)
+        project_id = str(item.get('projectID') or item.get('projectId') or '')
+        file_id = str(item.get('fileID') or item.get('fileId') or '')
+        # addon 类型文件通常已包含在 overrides 中，没有独立下载地址；
+        # 这里只记录可下载的文件，避免把内嵌文件误报为下载失败。
+        if not urls and not (project_id and file_id):
+            continue
+        files.append(ModpackFile(
+            path=path,
+            urls=urls,
+            sha1=str(item.get('hash') or item.get('sha1') or ''),
+            size=item.get('size') or item.get('fileSize'),
+            required=bool(item.get('force', True)),
+            project_id=project_id,
+            file_id=file_id,
+            file_name=str(item.get('fileName') or ''),
+        ))
+    return files
+
+
+def _mcbbs_info(path, data, names, root=''):
+    mc_version, loader_id, loader_version = _loader_from_addons(data.get('addons') or [])
+    if not mc_version:
+        raise DownloadError('MCBBS 整合包缺少 game 组件版本')
+    overrides = str(data.get('overrides') or 'overrides').replace('\\', '/').strip('/')
+    prefixes = [root + overrides + '/', root + 'overrides/']
+    prefixes = list(dict.fromkeys(prefixes))
+    files = _mcbbs_files(data.get('files') or [])
+    return ModpackInfo(
+        path=path, kind='mcbbs',
+        name=str(data.get('name') or path.stem),
+        version=str(data.get('version') or ''),
+        mc_version=mc_version,
+        loader_id=loader_id, loader_version=loader_version,
+        summary=str(data.get('description') or data.get('author') or ''),
+        file_count=max(len(files), _count_entries(names, prefixes)),
+        author=str(data.get('author') or ''),
+        overrides=prefixes, files=files, icon_prefixes=[root] + prefixes,
+        extra={'file_api': str(data.get('fileApi') or '')},
+    )
+
+
+def _inspect_mcbbs_pack(path, zf, entry, names):
+    data = _read_json(zf, entry)
+    if not isinstance(data, dict):
+        raise DownloadError('MCBBS 整合包元数据无效')
+    return _mcbbs_info(path, data, names, _pack_root(entry))
+
+
+def _inspect_hmcl_pack(path, zf, entry, names):
+    data = _read_json(zf, entry)
+    if not isinstance(data, dict):
+        raise DownloadError('HMCL 整合包元数据无效')
+    root = _pack_root(entry)
+    mc_version = str(data.get('gameVersion') or data.get('mcVersion') or '')
+    pack_entry = root + 'minecraft/pack.json'
+    if pack_entry in names:
+        try:
+            pack = _read_json(zf, pack_entry)
+            jar = pack.get('jar')
+            if isinstance(jar, dict):
+                mc_version = mc_version or str(jar.get('id') or '')
+            elif isinstance(jar, str):
+                mc_version = mc_version or jar
+        except DownloadError:
+            pass
+    loader_id = loader_version = ''
+    loader = data.get('loader')
+    if isinstance(loader, dict):
+        loader_id = str(loader.get('type') or loader.get('id') or '')
+        loader_version = str(loader.get('version') or '')
+    elif isinstance(loader, str) and loader.strip():
+        loader_id = loader.strip()
+    if not loader_id:
+        loader_id, loader_version = _loader_from_manifest(
+            data.get('modLoaders') or []
+        )
+    else:
+        if not loader_version:
+            loader_version = str(data.get('loaderVersion') or '')
+        parsed_id, parsed_version = _loader_from_id(loader_id)
+        if parsed_id:
+            loader_id = parsed_id
+            loader_version = loader_version or parsed_version
+    prefix = root + 'minecraft/'
+    return ModpackInfo(
+        path=path, kind='hmcl',
+        name=str(data.get('name') or path.stem),
+        version=str(data.get('version') or ''),
+        mc_version=mc_version,
+        loader_id=loader_id, loader_version=loader_version,
+        summary=str(data.get('description') or data.get('author') or ''),
+        file_count=_count_entries(names, [prefix]),
+        author=str(data.get('author') or ''),
+        overrides=[prefix], icon_prefixes=[root, prefix],
+    )
+
+
 def _inspect_manifest_pack(path, zf, entry, names):
     manifest = _read_json(zf, entry)
     if not isinstance(manifest, dict):
         raise DownloadError('manifest.json 内容无效')
+    # PCL CE 通过 addons 字段区分 MCBBS 与 CurseForge manifest。
+    if isinstance(manifest.get('addons'), list):
+        return _mcbbs_info(path, manifest, names, _pack_root(entry))
     files_raw = [item for item in manifest.get('files') or [] if isinstance(item, dict)]
     minecraft = manifest.get('minecraft') if isinstance(manifest.get('minecraft'), dict) else {}
-    is_curse = bool(minecraft) or any('projectID' in item for item in files_raw)
+    # HMCL/PCL 导出的 manifest 也可能带 minecraft 元数据，但文件项使用
+    # path + downloads；只有 CurseForge 使用 projectID/fileID。不能只凭
+    # minecraft 字段就判定为 CurseForge，否则路径型整合包会被识别错。
+    has_explicit_paths = any(str(item.get('path') or '').strip() for item in files_raw)
+    has_project_ids = any(
+        str(item.get('projectID') or item.get('fileID') or '').strip()
+        for item in files_raw
+    )
+    is_curse = (not has_explicit_paths) and (has_project_ids or bool(minecraft))
     if is_curse:
         mc_version = str(minecraft.get('version') or '')
         loader_id, loader_version = _loader_from_manifest(minecraft.get('modLoaders') or [])
@@ -379,8 +528,15 @@ def _inspect_manifest_pack(path, zf, entry, names):
             size=item.get('size') or item.get('fileSize'),
             required=bool(item.get('required', True)),
         ))
-    mc_version = str(manifest.get('gameVersion') or manifest.get('mcVersion') or '')
-    loader_id, loader_version = '', ''
+    mc_version = str(
+        manifest.get('gameVersion')
+        or manifest.get('mcVersion')
+        or minecraft.get('version')
+        or ''
+    )
+    loader_id, loader_version = _loader_from_manifest(
+        minecraft.get('modLoaders') or []
+    )
     overrides = str(manifest.get('overrides') or 'overrides')
     prefixes = [overrides.rstrip('/') + '/'] if overrides else []
     if 'overrides/' not in prefixes:
@@ -688,6 +844,24 @@ class ModpackImportWorker(QThread):
     def _download_files(self, info, records, alias_dir):
         if not records:
             return
+        known_bytes = sum(max(0, int(record.get('size') or 0)) for record in records)
+        if known_bytes:
+            reserve_bytes = int(known_bytes * 1.10)
+            free_candidates = []
+            for root in {Path(alias_dir), Path(self.mc_dir)}:
+                try:
+                    free_candidates.append(shutil.disk_usage(str(root)).free)
+                except OSError:
+                    continue
+            if free_candidates and reserve_bytes > min(free_candidates):
+                free_bytes = min(free_candidates)
+                raise DownloadError(
+                    '磁盘空间不足：需要约 %.2f GB，当前剩余 %.2f GB'
+                    % (
+                        max(0.01, reserve_bytes / (1024 ** 3)),
+                        max(0.01, free_bytes / (1024 ** 3)),
+                    )
+                )
         downloader = DownloadClient(self.mc_dir, fast=False, file_deadline=self._file_deadline)
         remotes = []
         for record in records:

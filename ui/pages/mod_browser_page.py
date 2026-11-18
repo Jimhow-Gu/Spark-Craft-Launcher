@@ -1320,21 +1320,29 @@ class ProjectFilesDialog(QDialog):
         self.scroll.setWidget(self.groups_widget)
         layout.addWidget(self.scroll, 1)
         self.world_combo = None
+        self._datapack_dir = self.game_dir
         if project_type == 'datapack':
-            world_row = QHBoxLayout()
-            world_row.addWidget(QLabel('存档'))
-            self.world_combo = QComboBox()
-            self.world_combo.setStyleSheet(self._combo_style())
-            saves_dir = self.game_dir / 'saves'
-            if saves_dir.exists():
-                for item in sorted(saves_dir.iterdir(), key=(lambda p: p.name.lower())):
-                    if item.is_dir():
-                        self.world_combo.addItem(item.name, item.name)
-            if self.world_combo.count() == 0:
-                self.world_combo.addItem('（未找到存档，请先创建世界）', '')
-                self.world_combo.setEnabled(False)
-            world_row.addWidget(self.world_combo, 1)
-            layout.addLayout(world_row)
+            dest_row = QHBoxLayout()
+            dest_row.addWidget(QLabel('保存到'))
+            self.datapack_dir_label = QLabel(str(self._datapack_dir))
+            self.datapack_dir_label.setWordWrap(True)
+            self.datapack_dir_label.setStyleSheet(
+                'color:rgba(255,255,255,0.62); font-size:12px;'
+            )
+            self.datapack_dir_label.setToolTip(
+                '数据包默认保存为 zip 到游戏目录；'
+                '选择 saves/<世界>/datapacks 可直接在对应世界中启用。'
+            )
+            choose_btn = QPushButton('选择文件夹...')
+            choose_btn.setStyleSheet(
+                'QPushButton { background:#3a3a3a; color:white; border:none;'
+                ' border-radius:6px; padding:5px 10px; }'
+                'QPushButton:hover { background:#4a4a4a; }'
+            )
+            choose_btn.clicked.connect(self._choose_datapack_dir)
+            dest_row.addWidget(self.datapack_dir_label, 1)
+            dest_row.addWidget(choose_btn)
+            layout.addLayout(dest_row)
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
         self.download_btn = QPushButton('下一步')
@@ -1424,11 +1432,33 @@ class ProjectFilesDialog(QDialog):
                 return True
         return False
 
+    @staticmethod
+    def _file_matches_project_type(filename, project_type):
+        suffix = Path(str(filename or '')).suffix.lower()
+        if project_type == 'datapack':
+            return suffix == '.zip'
+        if project_type in ('resourcepack', 'shader'):
+            return suffix == '.zip'
+        if project_type == 'mod':
+            return suffix in ('.jar', '.litemod')
+        if project_type == 'modpack':
+            return suffix in ('.mrpack', '.zip')
+        return True
+
     def _on_files(self, files):
         try:
             self._load_timeout.stop()
         except (AttributeError, RuntimeError):
             pass
+        # Modrinth 的数据包项目会同时返回 .jar（Mod）和 .zip（数据包）
+        # 版本；按项目类型过滤，避免把 .jar 放进 world/datapacks。
+        filtered = [
+            file for file in (files or [])
+            if self._file_matches_project_type(
+                getattr(file, 'filename', ''), self.project_type
+            )
+        ]
+        files = filtered
         self._files = files or []
         self.retry_btn.hide()
         while self.groups_layout.count():
@@ -1445,6 +1475,12 @@ class ProjectFilesDialog(QDialog):
         if not files:
             if is_modpack:
                 message = '未找到可用的整合包文件。'
+            elif self.project_type == 'datapack':
+                message = '未找到可用的数据包文件（需要 .zip）。'
+            elif self.project_type == 'resourcepack':
+                message = '未找到可用的资源包文件（需要 .zip）。'
+            elif self.project_type == 'shader':
+                message = '未找到可用的光影包文件（需要 .zip）。'
             else:
                 message = '此 Mod 与当前游戏版本不适配或没有可用文件。'
                 if target_version:
@@ -1681,9 +1717,22 @@ class ProjectFilesDialog(QDialog):
             return self._selected_row.mod_file
 
     def selected_world(self):
-        if self.world_combo is None:
-            return ''
-        return self.world_combo.currentData() or ''
+        if self.project_type == 'datapack':
+            return str(self._datapack_dir or self.game_dir)
+        return ''
+
+    def _choose_datapack_dir(self):
+        path = QFileDialog.getExistingDirectory(
+            self, '选择数据包保存文件夹', str(self._datapack_dir or self.game_dir)
+        )
+        if not path:
+            return
+        chosen = Path(path)
+        # 兼容直接选择世界文件夹：游戏实际读取的位置是 <world>/datapacks。
+        if (chosen / 'level.dat').is_file():
+            chosen = chosen / 'datapacks'
+        self._datapack_dir = chosen
+        self.datapack_dir_label.setText(str(chosen))
 
     def _open_source(self):
         '''按项目实际来源打开详情页；来源为“全部”时使用当前项目来源。'''
@@ -2530,19 +2579,22 @@ class ModBrowserPage(QWidget):
     def _download_project(self, project):
         if self._files_page is not None:
             self._close_files_page()
-        try:
-            installed_count = len(self.version_mgr.get_installed_versions())
-        except Exception:
-            installed_count = 0
-        if installed_count == 0:
-            self.status_label.setText('未安装任何游戏版本，请先下载游戏')
-            dialog = DarkQuestionDialog(self, '需要先安装游戏', '未安装任何游戏版本，请先下载游戏后再安装 Mod。', actions=[('前往下载游戏', 'go', True), ('取消', 'cancel', False)])
-            dialog.exec()
-            if dialog.choice == 'go':
-                self.download_game_requested.emit()
-            return
-        if not self._ensure_selected_version():
-            return
+        # 整合包自带游戏版本，下载阶段不依赖已安装的游戏；导入任务会
+        # 自动安装原版和加载器。只有 Mod/资源包等需要当前实例。
+        if self.project_type != 'modpack':
+            try:
+                installed_count = len(self.version_mgr.get_installed_versions())
+            except Exception:
+                installed_count = 0
+            if installed_count == 0:
+                self.status_label.setText('未安装任何游戏版本，请先下载游戏')
+                dialog = DarkQuestionDialog(self, '需要先安装游戏', '未安装任何游戏版本，请先下载游戏后再安装 Mod。', actions=[('前往下载游戏', 'go', True), ('取消', 'cancel', False)])
+                dialog.exec()
+                if dialog.choice == 'go':
+                    self.download_game_requested.emit()
+                return
+            if not self._ensure_selected_version():
+                return
         from core.net import DownloadGate
         if DownloadGate.available() <= 0:
             QMessageBox.warning(self, '下载任务已满', f'当前同时下载任务已达到上限 {DownloadGate.max_threads()}。\n请前往「全局设置 → 下载线程数」调整后再试。')
@@ -2647,10 +2699,12 @@ class ModBrowserPage(QWidget):
             )
         else:
             if self.project_type == 'datapack':
-                if not world:
-                    QMessageBox.warning(self, '无法安装', '请先在游戏内创建世界，再安装数据包')
-                    return
-                dest_dir = game_dir / 'saves' / world / 'datapacks'
+                # 新流程的 world 已经是目标文件夹（saves/<世界>/datapacks
+                # 或游戏目录/自定义目录）；兼容旧调用传入的世界名。
+                target = Path(world) if world else Path(game_dir)
+                if not target.is_absolute():
+                    target = game_dir / 'saves' / target / 'datapacks'
+                dest_dir = target
             elif self.project_type == 'resourcepack':
                 dest_dir = game_dir / 'resourcepacks'
             elif self.project_type == 'shader':

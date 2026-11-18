@@ -536,6 +536,7 @@ class ModManagerPage(QWidget):
         self._update_download_worker = None
         self._update_task_id = ''
         self.setMinimumSize(640, 480)
+        self.setAcceptDrops(True)
         self.setStyleSheet('background:transparent; color:#f0f0f0;')
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0 if self._embedded else 18, 0 if self._embedded else 14, 0 if self._embedded else 18, 10 if self._embedded else 14)
@@ -554,6 +555,7 @@ class ModManagerPage(QWidget):
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText('搜索 Mod 名称 / 描述 / 标签')
         self.search_input.setMinimumHeight(34)
+        self.search_input.setAcceptDrops(False)
         self.search_input.setStyleSheet('\n            QLineEdit { background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.12);\n                        border-radius:7px; color:#f0f0f0; padding:5px 10px; }\n        ')
         self.search_input.textChanged.connect((lambda _t: self._populate()))
         layout.addWidget(self.search_input)
@@ -605,6 +607,8 @@ class ModManagerPage(QWidget):
         layout.addLayout(tab_row)
         self.list = QListWidget()
         self.list.setSelectionMode(QListWidget.MultiSelection)
+        self.list.setAcceptDrops(False)
+        self.list.viewport().setAcceptDrops(False)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.list.setStyleSheet('\n            QListWidget { background: rgba(30,41,41,0.62);\n                          border:1px solid rgba(255,255,255,0.16); border-radius:8px; outline:none; }\n            QListWidget::item { border-bottom:1px solid rgba(255,255,255,0.06); }\n            QListWidget::item:selected { background: rgba(136,221,221,0.3); }\n            QListWidget::item:hover { background: rgba(255,255,255,0.06); }\n        ')
         self.list.itemSelectionChanged.connect(self._on_selection_changed)
@@ -649,35 +653,101 @@ class ModManagerPage(QWidget):
     def _btn_style(self):
         return 'QPushButton { background:#3a3a3a; color:white; border:none; border-radius:5px; padding:5px 12px; } QPushButton:hover { background:#4a4a4a; } QPushButton:disabled { background:#2a2a2a; color:#666; }'
 
+    @staticmethod
+    def _is_mod_filename(filename):
+        name = str(filename or '').lower()
+        # 与 PCL CE 一致：按最后一个扩展名识别 jar/litemod/disabled/old。
+        return name.endswith(('.jar', '.litemod', '.disabled', '.old'))
+
+    @staticmethod
+    def _enabled_mod_name(filename):
+        # PCL CE 拖入 .disabled/.old 时会先恢复为可加载的 jar。
+        name = Path(str(filename or '')).name.replace('.disabled', '').replace('.old', '')
+        if '.' not in name:
+            name += '.jar'
+        return name or 'mod.jar'
+
+    @staticmethod
+    def _drop_file_paths(mime):
+        if not mime.hasUrls():
+            return []
+        result = []
+        for url in mime.urls():
+            if not url.isLocalFile():
+                continue
+            path = Path(url.toLocalFile())
+            if path.is_file():
+                result.append(path)
+        return result
+
+    def dragEnterEvent(self, event):
+        paths = self._drop_file_paths(event.mimeData())
+        if any(self._is_mod_filename(path.name) for path in paths):
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event):
+        paths = self._drop_file_paths(event.mimeData())
+        if any(self._is_mod_filename(path.name) for path in paths):
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dropEvent(self, event):
+        paths = [
+            path for path in self._drop_file_paths(event.mimeData())
+            if self._is_mod_filename(path.name)
+        ]
+        if not paths:
+            event.ignore()
+            return
+        self._install_mod_files(paths)
+        event.acceptProposedAction()
+
     def _open_folder(self):
         self.mods_dir.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.mods_dir)))
 
     def _install_from_file(self):
-        files, _ = QFileDialog.getOpenFileNames(self, '选择 Mod 文件', '', 'Minecraft Mod (*.jar);;所有文件 (*.*)')
-        if not files:
-            return
+        files, _ = QFileDialog.getOpenFileNames(
+            self, '选择 Mod 文件', '',
+            'Minecraft Mod (*.jar *.litemod *.disabled *.old);;所有文件 (*.*)',
+        )
+        if files:
+            self._install_mod_files(files)
+
+    def _install_mod_files(self, files):
         self.mods_dir.mkdir(parents=True, exist_ok=True)
         errors = []
         copied = 0
+        skipped = 0
         for file_path in files:
+            src = Path(file_path)
+            if not src.is_file() or not self._is_mod_filename(src.name):
+                errors.append(f'{src.name}: 不是有效的 Mod 文件')
+                continue
+            dest = self.mods_dir / self._enabled_mod_name(src.name)
             try:
-                src = Path(file_path)
-                dest = self.mods_dir / src.name
+                if dest.exists() and src.resolve() == dest.resolve():
+                    skipped += 1
+                    continue
+                # 与 PCL 的拖入安装一致：同名文件覆盖，不保留旧 jar。
                 if dest.exists():
-                    errors.append(f'{src.name} 已存在')
-                else:
-                    shutil.copy2(src, dest)
-                    copied += 1
-                continue
+                    dest.unlink()
+                shutil.copy2(src, dest)
+                copied += 1
             except OSError as exc:
-                errors.append(f'{file_path}: {exc}')
-                continue
+                errors.append(f'{src.name}: {exc}')
         if errors:
             self._notify(chr(10).join(errors[:8]), 'error', '部分安装失败')
         if copied:
             self.status_label.setText(f'已安装 {copied} 个 Mod')
-        self.refresh()
+            show_toast(f'已复制 {copied} 个 Mod 到 mods 文件夹', 'success', self, 3000)
+        elif skipped:
+            self.status_label.setText('文件已经在 mods 文件夹中')
+        if copied or skipped:
+            self.refresh()
 
     def _open_mod_download(self):
         window = self.window()

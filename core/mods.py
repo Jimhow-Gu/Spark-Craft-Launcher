@@ -88,23 +88,61 @@ class ModFile:
     sha512: 'str' = ''
     dependencies: 'List[dict]' = field(default_factory=list)
 
+def pcl_mod_mirror(url):
+    '''按 PCL 的 DlSourceModGet 规则生成 mcimirror 镜像地址。'''
+
+    return (
+        str(url or '')
+        # staging-api 包含 api.modrinth.com 子串，必须先替换更长的域名。
+        .replace('staging-api.modrinth.com', 'mod.mcimirror.top/modrinth')
+        .replace('api.modrinth.com', 'mod.mcimirror.top/modrinth')
+        .replace('cdn.modrinth.com', 'mod.mcimirror.top')
+        .replace('api.curseforge.com', 'mod.mcimirror.top/curseforge')
+        .replace('edge.forgecdn.net', 'mod.mcimirror.top')
+        .replace('mediafilez.forgecdn.net', 'mod.mcimirror.top')
+        .replace('media.forgecdn.net', 'mod.mcimirror.top')
+    )
+
+
 def download_candidates(url):
-    '''社区资源下载候选源；优先使用可直连的 Modrinth CDN 节点。'''
+    '''社区资源下载候选源；按 PCL 的官方/镜像规则生成回退列表。'''
 
     url = str(url or '').strip()
     if not url:
         return []
-    candidates = []
+    official = []
+    mirror = []
     if 'cdn.modrinth.com/' in url:
         path = url.split('cdn.modrinth.com/', 1)[1]
-        candidates.extend([f'https://cdn.modrinth.com/{path}', f'https://cdn-raw.modrinth.com/{path}', f'https://mod.mcimirror.top/{path}'])
+        official.extend([
+            f'https://cdn.modrinth.com/{path}',
+            f'https://cdn-raw.modrinth.com/{path}',
+        ])
     elif 'cdn-raw.modrinth.com/' in url:
         path = url.split('cdn-raw.modrinth.com/', 1)[1]
-        candidates.extend([f'https://cdn-raw.modrinth.com/{path}', f'https://cdn.modrinth.com/{path}', f'https://mod.mcimirror.top/{path}'])
+        official.extend([
+            f'https://cdn-raw.modrinth.com/{path}',
+            f'https://cdn.modrinth.com/{path}',
+        ])
     if 'edge.forgecdn.net' in url:
-        candidates.extend([url.replace('edge.forgecdn.net', 'mediafilez.forgecdn.net'), url])
-    elif 'mediafilez.forgecdn.net' in url:
-        candidates.append(url)
+        official.extend([
+            url.replace('edge.forgecdn.net', 'mediafilez.forgecdn.net'),
+            url,
+        ])
+    elif 'mediafilez.forgecdn.net' in url or 'media.forgecdn.net' in url:
+        official.append(url)
+    mirrored = pcl_mod_mirror(url)
+    if mirrored and mirrored != url:
+        mirror.append(mirrored)
+    if url not in official:
+        official.append(url)
+    try:
+        preference = str(
+            ConfigManager().get('community_source_pref', 'official') or 'official'
+        ).lower()
+    except Exception:
+        preference = 'official'
+    candidates = mirror + official if preference == 'mirror' else official + mirror
     if url not in candidates:
         candidates.append(url)
     return list(dict.fromkeys(candidates))

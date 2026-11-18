@@ -1,8 +1,8 @@
-# Spark Craft Launcher V1.11.4 DLL37 构建说明
+# Spark Craft Launcher V1.11.4 DLL38 构建说明
 
 ## 结论
 
-当前正式发布恢复到 **V1.11.4 + DLL37 onefile**。1.11.5–1.11.7 的 onedir/安装包
+当前正式发布恢复到 **V1.11.4 + DLL38 onefile**。1.11.5–1.11.7 的 onedir/安装包
 发布已转为草稿并撤回，以下保留内部构建与回滚说明。
 
 DLL34 起背景视频强制使用 FFmpeg 软件解码，关闭 Windows 硬件解码/纹理转换，
@@ -10,15 +10,15 @@ DLL34 起背景视频强制使用 FFmpeg 软件解码，关闭 Windows 硬件解
 
 | 产物 | 大小 | SHA256 |
 |---|---:|---|
-| 正式 onefile 便携 exe | 36,656,964 字节 | `db87ba745263cb03134e0515750536766b5a03e11b11a29121f32315876d4f15` |
-| 正式 onefile 便携 zip | 36,332,540 字节 | `864ffec73fc3df44a586cb0d2ce3e075f914d62a6ed36fa449938884f8dbda1b` |
+| 正式 onefile 便携 exe | 36,659,583 字节 | `72eb9f75914d2765113842b4cbd55a18ccb611d5edc84a74662fc88fca2f76a3` |
+| 正式 onefile 便携 zip | 36,335,477 字节 | `a2bb3e37a5d072726ba555693985c5b3990dfe7b17d1ab259f7259fab63e2444` |
 
-- 构建号：`SCLREL1.11.4.R20261117.RP1.DLL37`
+- 构建号：`SCLREL1.11.4.R20261118.RP1.DLL38`
 - 构建入口：`python build_slim.py`（当前正式发布）；`python build_onedir.py` 仅保留内部/回滚构建
 - 安装包默认目录：`%LOCALAPPDATA%\Programs\SparkCraftLauncher`
 - 不使用 UPX，不删除静态图片解码插件，不改变 UI 布局与业务功能。
 
-## DLL36 / DLL37 更新
+## DLL36 / DLL37 / DLL38 更新
 
 - 导出启动脚本改为 bat 调用启动器 `--launch-b64`，移除 PowerShell / `-EncodedCommand`，
   版本名和参数不进入 cmd。
@@ -36,6 +36,7 @@ DLL34 起背景视频强制使用 FFmpeg 软件解码，关闭 Windows 硬件解
 - 当前版本高于已发布正式版时，显示白色可点击提示，引导下载最新正式版。
 - 更新附件选择跳过 `.bak`/`.old` 备份，避免自动更新下载到旧构建。
 - DLL37 按指定值恢复设置页顶部间距为 24px，设置分组顶部内边距改为 0，调整卡片标题与内容的首行布局。
+- DLL38 按 PCL CE 的检测顺序补齐 MCBBS、HMCL modpack.json、MultiMC 无 instance.cfg、manifest addons 等格式；数据包下载不再检测/要求世界，默认保存到游戏目录并支持选择世界 datapacks；无已安装游戏时允许下载整合包；Mod 拖入支持 .disabled/.old 恢复为 jar。
 
 ## 启动性能
 
@@ -115,7 +116,7 @@ onedir 更新流程：
 ## 体积构成与 FFmpeg
 
 未使用 UPX 的 DLL27 onefile 基线为 39,449,405 字节。V1.11.7 onefile 为
-36,656,964 字节，减少 2,792,441 字节（7.08%）。
+36,659,583 字节，减少 2,789,822 字节（7.07%）。
 
 主要占用：
 
