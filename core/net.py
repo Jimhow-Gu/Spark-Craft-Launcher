@@ -316,7 +316,7 @@ class HttpClient:
                             '磁盘空间不足：需要约 %.2f GB，当前剩余 %.2f GB'
                             % (remaining / (1024 ** 3), free_now / (1024 ** 3))
                         )
-                    if not total and free_now < 16 * 1024 * 1024:
+                    if not total and free_now < 64 * 1024 * 1024:
                         raise DownloadError(
                             '磁盘空间不足：当前剩余 %.1f MB'
                             % (free_now / (1024 ** 2))
@@ -339,7 +339,7 @@ class HttpClient:
                                 free_after = shutil.disk_usage(str(dest.parent)).free
                             except OSError:
                                 free_after = None
-                            if free_after is not None and free_after < 8 * 1024 * 1024:
+                            if free_after is not None and free_after < 64 * 1024 * 1024:
                                 raise DownloadError(
                                     '磁盘空间不足：当前剩余 %.1f MB'
                                     % (free_after / (1024 ** 2))

@@ -5,7 +5,6 @@ import logging
 from pathlib import Path
 from typing import List, Optional
 from PySide6.QtCore import (QObject, QUrl, Signal)
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from core.config import ConfigManager
 from core.paths import scl_dir
 logger = logging.getLogger('Music')
@@ -34,6 +33,9 @@ class BackgroundMusicPlayer(QObject):
 
     def __init__(self):
         super().__init__()
+        # 只有确实存在音乐文件时才会创建本单例；QtMultimedia 延迟到这里导入，
+        # 没有背景音乐时启动器完全不加载多媒体运行时。
+        from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
         self.config = ConfigManager()
         self._player = QMediaPlayer(self)
         self._audio = QAudioOutput(self)
@@ -145,6 +147,7 @@ class BackgroundMusicPlayer(QObject):
         self.play()
 
     def is_playing(self):
+        from PySide6.QtMultimedia import QMediaPlayer
         return self._player.playbackState() == QMediaPlayer.PlayingState
 
     def has_tracks(self):
@@ -203,6 +206,7 @@ class BackgroundMusicPlayer(QObject):
         self.state_changed.emit()
 
     def _on_media_status(self, status):
+        from PySide6.QtMultimedia import QMediaPlayer
         if status == QMediaPlayer.EndOfMedia:
             self.next_track()
         self.state_changed.emit()

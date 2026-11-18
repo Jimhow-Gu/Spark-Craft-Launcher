@@ -539,7 +539,7 @@ class DownloadClient:
                 f'{needed / (1024 ** 3):.2f} GB，当前剩余 '
                 f'{free / (1024 ** 3):.2f} GB）'
             )
-        if not needed and free < 16 * 1024 * 1024:
+        if not needed and free < 64 * 1024 * 1024:
             raise DownloadError(
                 f'{remote.label}: 磁盘空间不足（当前剩余 '
                 f'{free / (1024 ** 2):.1f} MB）'

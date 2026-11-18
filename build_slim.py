@@ -3,10 +3,10 @@
 
 Requirements:
 - Python 3.10 with PyInstaller 6.x and PySide6 (same environment as the normal build)
-- slim_ffmpeg/ with the five FFmpeg 7.1 DLLs and their SHA256SUMS
 
-The build keeps all Qt image-format plugins and all FFmpeg playback decoders.
-UPX is disabled.
+Media playback uses Windows Media Foundation, so no FFmpeg DLLs are bundled.
+The build keeps all static Qt image-format plugins. UPX is disabled.
+The exe icon is sparkler_neutral.ico; runtime taskbar icons are switched by theme.
 """
 
 from __future__ import annotations
@@ -19,19 +19,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 SPEC = ROOT / "SparkCraftLauncher.slim.spec"
-SLIM_FFMPEG = ROOT / "slim_ffmpeg"
 DIST = ROOT / "dist_slim"
 WORK = ROOT / "build_slim_pyi"
-BASELINE_BYTES = 39_449_405  # DLL27, the last full-FFmpeg build
-REPORTED_BASELINE_BYTES = 39_449_787
-FFMPEG_FILES = (
-    "avcodec-61.dll",
-    "avformat-61.dll",
-    "avutil-59.dll",
-    "swscale-8.dll",
-    "swresample-5.dll",
-)
+BASELINE_BYTES = 36_662_822  # DLL39, the last FFmpeg-based build
 IMAGE_PLUGINS = ("qgif.dll", "qico.dll", "qjpeg.dll", "qwebp.dll")
+MSVC_NAMES = (
+    "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll",
+    "vcruntime140.dll", "vcruntime140_1.dll", "concrt140.dll",
+)
 KEY_MARKERS = (
     "JDJhJDEwJFozbWlLbzY3SUYvTzEwYkIuQVJWM2VxOFBlUnpkU0lXOW1Id0xOSjRnMDVEQ0JySzJ5ZEhl",
     "$2a$10$Z3miKo67IF/O10bB.ARV3eq8PeRzdSIW9mHwLNJ4g05DCBrK2ydHe",
@@ -46,25 +41,7 @@ def fail(message: str):
     raise SystemExit("SLIM BUILD FAILED: " + message)
 
 
-def check_inputs():
-    for name in FFMPEG_FILES:
-        path = SLIM_FFMPEG / name
-        if not path.is_file():
-            fail(f"缺少 {path}")
-    sums = SLIM_FFMPEG / "SHA256SUMS"
-    if sums.is_file():
-        for line in sums.read_text(encoding="utf-8").splitlines():
-            parts = line.split()
-            if len(parts) < 2:
-                continue
-            expected, name = parts[0], parts[-1].lstrip("*")
-            path = SLIM_FFMPEG / name
-            if path.is_file() and sha256(path) != expected:
-                fail(f"文件校验失败: {name}")
-
-
 def build():
-    check_inputs()
     DIST.mkdir(parents=True, exist_ok=True)
     cmd = [
         sys.executable,
@@ -96,15 +73,40 @@ def inspect():
         from PyInstaller.archive.readers import CArchiveReader
         archive = CArchiveReader(str(exe))
         toc = archive.toc
-        avcodec = toc.get("PySide6\\avcodec-61.dll")
-        if not avcodec:
-            fail("归档中没有精简 avcodec-61.dll")
-        if int(avcodec[2]) != (SLIM_FFMPEG / "avcodec-61.dll").stat().st_size:
-            fail("归档中的 avcodec 大小与 slim_ffmpeg 不一致")
+        lowered = {str(name).replace("/", "\\").lower(): name for name in toc}
+        if "pyside6\\plugins\\multimedia\\windowsmediaplugin.dll" not in lowered:
+            fail("Windows Media Foundation 插件丢失")
+        if "pyside6\\plugins\\multimedia\\ffmpegmediaplugin.dll" in lowered:
+            fail("归档中仍包含 FFmpeg 多媒体插件")
+        for name in lowered:
+            base = name.rsplit("\\", 1)[-1]
+            if base.startswith(("avcodec-", "avformat-", "avutil-",
+                                "swscale-", "swresample-")):
+                fail(f"归档中仍包含 FFmpeg DLL: {name}")
         for plugin in IMAGE_PLUGINS:
-            name = f"PySide6\\plugins\\imageformats\\{plugin}"
-            if name not in toc:
+            name = f"pyside6\\plugins\\imageformats\\{plugin}"
+            if name not in lowered:
                 fail(f"静态图片解码插件丢失: {plugin}")
+        for icon in (
+            "sparkler_light.png", "sparkler_light.ico",
+            "sparkler_dark.png", "sparkler_dark.ico",
+        ):
+            if f"ui\\imgs\\{icon}" not in lowered:
+                fail(f"运行时主题图标丢失: {icon}")
+        if any("tcl" in name or "tk8" in name for name in lowered):
+            fail("归档中仍包含 Tcl/Tk 启动闪屏运行库")
+        if "pyside6\\plugins\\tls\\qschannelbackend.dll" not in lowered:
+            fail("Windows Schannel TLS 插件丢失")
+        if "pyside6\\plugins\\tls\\qopensslbackend.dll" in lowered:
+            fail("归档中仍包含未使用的 OpenSSL TLS 插件")
+        counts = {}
+        for name in lowered:
+            base = name.rsplit("\\", 1)[-1]
+            if base in MSVC_NAMES:
+                counts[base] = counts.get(base, 0) + 1
+        duplicate = next((name for name, count in counts.items() if count > 1), "")
+        if duplicate:
+            fail(f"VC 运行库未去重: {duplicate} x{counts[duplicate]}")
     except ImportError:
         fail("当前环境缺少 PyInstaller archive reader")
     return exe
@@ -124,7 +126,7 @@ def main():
     size = exe.stat().st_size
     saved = BASELINE_BYTES - size
     print("\n=== SLIM BUILD OK ===")
-    print(f"baseline DLL27: {BASELINE_BYTES:,} bytes ({REPORTED_BASELINE_BYTES:,} reported)")
+    print(f"baseline DLL39: {BASELINE_BYTES:,} bytes")
     print(f"slim exe:       {size:,} bytes")
     print(f"saved:          {saved:,} bytes ({saved / BASELINE_BYTES * 100:.2f}%)")
     print(f"exe sha256:     {sha256(exe)}")

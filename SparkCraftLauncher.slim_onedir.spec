@@ -42,6 +42,8 @@ excludes = [
     "brotli",
     "brotlicffi",
     "_brotli",
+    "chardet",
+    "pip",
     # 共享 CurseForge Key 会被 exe 提取，已改为用户自填；禁止再打包。
     "core._curseforge_key",
     "core.curseforge_builtin",
@@ -85,6 +87,10 @@ _drop_names = {
     "qt6opengl.dll",
     # 触摸屏插件未使用。
     "qtuiotouchplugin.dll",
+    # 改用 Windows Media Foundation，完整移除 Qt 自带的 FFmpeg 栈。
+    "ffmpegmediaplugin.dll",
+    "avcodec-61.dll", "avformat-61.dll", "avutil-59.dll",
+    "swscale-8.dll", "swresample-5.dll",
 }
 
 
@@ -106,28 +112,12 @@ a.datas = [
     and str(entry[0]).replace(chr(92), "/").lower() not in _drop_datas
 ]
 
-# 用只移除编码器/复用器/滤镜、保留全部播放解码器的精简 FFmpeg 替换 Qt 全量包。
-# 这样不改变播放格式支持，也不使用 UPX。
-_slim_ffmpeg = Path("slim_ffmpeg")
-_slim_libs = {
-    "avcodec-61.dll": _slim_ffmpeg / "avcodec-61.dll",
-    "avformat-61.dll": _slim_ffmpeg / "avformat-61.dll",
-    "avutil-59.dll": _slim_ffmpeg / "avutil-59.dll",
-    "swscale-8.dll": _slim_ffmpeg / "swscale-8.dll",
-    "swresample-5.dll": _slim_ffmpeg / "swresample-5.dll",
-}
-for _name, _src in _slim_libs.items():
-    if not _src.is_file():
-        raise SystemExit(f"缺少精简 FFmpeg 文件: {_src}")
-_slim_names = {name.lower() for name in _slim_libs}
-a.binaries = [
-    entry for entry in a.binaries
-    if os.path.basename(str(entry[0])).lower() not in _slim_names
-]
-a.binaries.extend(
-    (os.path.join("PySide6", name), str(src), "BINARY")
-    for name, src in _slim_libs.items()
-)
+# Windows Media Foundation 插件必须保留；FFmpeg 播放器插件已剔除。
+if not any(
+    os.path.basename(str(entry[0])).lower() == "windowsmediaplugin.dll"
+    for entry in a.binaries
+):
+    raise SystemExit("Windows Media Foundation 多媒体插件未被收集")
 
 pyz = PYZ(a.pure)
 
@@ -149,7 +139,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="ui/imgs/sparkler.ico",
+    icon="ui/imgs/sparkler_neutral.ico",
 )
 coll = COLLECT(
     exe,

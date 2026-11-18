@@ -42,6 +42,9 @@ excludes = [
     "brotli",
     "brotlicffi",
     "_brotli",
+    # requests.help 才会用到 chardet；启动器不调用它。
+    "chardet",
+    "pip",
     # 共享 CurseForge Key 会被 exe 提取，已改为用户自填；禁止再打包。
     "core._curseforge_key",
     "core.curseforge_builtin",
@@ -79,12 +82,22 @@ _drop_names = {
     "qdirect2d.dll", "qminimal.dll", "qoffscreen.dll",
     "qicns.dll", "qtga.dll", "qtiff.dll", "qwbmp.dll",
     "qcertonlybackend.dll",
+    # Windows 默认使用 Schannel；OpenSSL TLS 插件未使用。
+    "qopensslbackend.dll",
+    # Fusion 是强制基础样式；原生 Windows 样式插件未使用。
+    "qmodernwindowsstyle.dll",
+    # 网络状态监听插件未使用。
+    "qnetworklistmanager.dll",
     # 界面只使用 PNG/ICO/GIF，不包含 SVG；去掉未使用的 SVG 模块和插件。
     "qt6svg.dll", "qsvg.dll", "qsvgicon.dll",
     # QtMultimedia/Gui 均不依赖 OpenGL 模块，且启动器使用光栅绘制。
     "qt6opengl.dll",
     # 触摸屏插件未使用。
     "qtuiotouchplugin.dll",
+    # 改用 Windows Media Foundation，完整移除 Qt 自带的 FFmpeg 栈。
+    "ffmpegmediaplugin.dll",
+    "avcodec-61.dll", "avformat-61.dll", "avutil-59.dll",
+    "swscale-8.dll", "swresample-5.dll",
 }
 
 
@@ -99,35 +112,44 @@ def _keep_binary(entry):
 a.binaries = [entry for entry in a.binaries if _keep_binary(entry)]
 # translations 也可能被收集进 datas；启动器界面全部自带文本，不需要 Qt 翻译包。
 # Loading.gif 是旧版备用图，实际使用 Loading_small.gif；打包时去掉大图。
-_drop_datas = {"ui/imgs/loading.gif"}
+_drop_datas = {
+    "ui/imgs/loading.gif",
+    # neutral 只用于编译期 PE 图标；运行时任务栏使用 light/dark。
+    "ui/imgs/sparkler.ico",
+    "ui/imgs/sparkler_neutral.ico",
+    "ui/imgs/sparkler_neutral.png",
+}
 a.datas = [
     entry for entry in a.datas
     if "/translations/" not in str(entry[0]).replace(chr(92), "/").lower()
     and str(entry[0]).replace(chr(92), "/").lower() not in _drop_datas
 ]
 
-# 用只移除编码器/复用器/滤镜、保留全部播放解码器的精简 FFmpeg 替换 Qt 全量包。
-# 这样不改变播放格式支持，也不使用 UPX。
-_slim_ffmpeg = Path("slim_ffmpeg")
-_slim_libs = {
-    "avcodec-61.dll": _slim_ffmpeg / "avcodec-61.dll",
-    "avformat-61.dll": _slim_ffmpeg / "avformat-61.dll",
-    "avutil-59.dll": _slim_ffmpeg / "avutil-59.dll",
-    "swscale-8.dll": _slim_ffmpeg / "swscale-8.dll",
-    "swresample-5.dll": _slim_ffmpeg / "swresample-5.dll",
+# Windows Media Foundation 插件必须保留；FFmpeg 播放器插件已在上面剔除。
+if not any(
+    os.path.basename(str(entry[0])).lower() == "windowsmediaplugin.dll"
+    for entry in a.binaries
+):
+    raise SystemExit("Windows Media Foundation 多媒体插件未被收集")
+
+# PyInstaller 会在 PySide6/shiboken6 下重复收集同一份 VC 运行时。
+# 同名只保留一份，并统一放到解包根目录，避免 onefile 多解压约 1.2 MB。
+_msvc_names = {
+    "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll",
+    "vcruntime140.dll", "vcruntime140_1.dll", "concrt140.dll",
 }
-for _name, _src in _slim_libs.items():
-    if not _src.is_file():
-        raise SystemExit(f"缺少精简 FFmpeg 文件: {_src}")
-_slim_names = {name.lower() for name in _slim_libs}
-a.binaries = [
-    entry for entry in a.binaries
-    if os.path.basename(str(entry[0])).lower() not in _slim_names
-]
-a.binaries.extend(
-    (os.path.join("PySide6", name), str(src), "BINARY")
-    for name, src in _slim_libs.items()
-)
+_seen_msvc = set()
+_deduped_binaries = []
+for _entry in a.binaries:
+    _base = os.path.basename(str(_entry[0])).lower()
+    if _base in _msvc_names:
+        if _base in _seen_msvc:
+            continue
+        _seen_msvc.add(_base)
+        _entry = (_base, _entry[1], _entry[2])
+    _deduped_binaries.append(_entry)
+a.binaries = _deduped_binaries
+
 
 pyz = PYZ(a.pure)
 
@@ -136,12 +158,11 @@ exe = EXE(
     a.scripts,
     a.binaries,
     a.datas,
-    [],
     name="Spark Craft Launcher",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    # 用户要求压缩 Qt/FFmpeg 等 DLL；Python/VC 运行时保留原样以提高稳定性。
+    # 不使用 UPX：避免杀软误报并保持 Qt DLL 加载稳定。
     upx=False,
     runtime_tmpdir=None,
     console=False,
@@ -150,5 +171,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="ui/imgs/sparkler.ico",
+    icon="ui/imgs/sparkler_neutral.ico",
 )

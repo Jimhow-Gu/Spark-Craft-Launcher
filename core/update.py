@@ -22,7 +22,7 @@ from core.paths import safe_rmtree, scl_dir
 CURRENT_VERSION = '1.11.4'
 VERSION_DISPLAY = 'V1.11.4（正式版）'
 # DLL 构建号在同一版本内递增；每次发布新大版本时重置为 1。
-EXECUTABLE_BUILD = '39'
+EXECUTABLE_BUILD = '40'
 REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
 API_KGGITHUB = f'https://api.kkgithub.com/repos/{REPO}/releases/latest'
@@ -942,16 +942,33 @@ def apply_update_inplace(asset_path, version):
         raise
 
 
+def _schedule_delete_on_reboot(path):
+    '''Windows 兜底：仍被句柄占用的 .old 放到重启时删除。'''
+
+    if os.name != 'nt':
+        return False
+    try:
+        import ctypes
+        fn = ctypes.windll.kernel32.MoveFileExW
+        fn.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint]
+        fn.restype = ctypes.c_bool
+        # MOVEFILE_DELAY_UNTIL_REBOOT = 0x4
+        return bool(fn(str(path), None, 0x4))
+    except Exception:
+        return False
+
+
 def cleanup_old_executable(retries=20, retry_rounds=1):
     '''启动后清理上一版重命名留下的 .old 文件。
 
-    安全软件/旧进程可能在启动瞬间仍持有 exe 句柄；单轮 5 秒失败就留下
-    .old 是之前“更新后无法删除”的原因之一。这里在后台按 0/5/15/30/
-    60/120 秒多轮重试，每次启动也会重新尝试，文件释放后自动清掉。
+    安全软件/旧进程可能在启动瞬间仍持有 exe 句柄；单轮失败就留下
+    .old 是之前“更新后无法删除”的原因之一。这里按 0/1/2/4/8/15/
+    30/60/120 秒多轮重试，每次启动也会重新尝试，文件释放后自动清掉。
+    仍被占用时注册 Windows 重启删除，并返回残留路径供 UI 提示。
     '''
 
     if not getattr(sys, 'frozen', False):
-        return
+        return []
     try:
         target = Path(sys.executable).resolve()
         old_internal = target.parent / '_internal.old'
@@ -993,9 +1010,19 @@ def cleanup_old_executable(retries=20, retry_rounds=1):
                     break
                 time.sleep(0.25)
             if not list(target.parent.glob(target.name + '*.old')) and not old_internal.exists():
-                return
+                return []
+        remaining = [
+            path for path in target.parent.glob(target.name + '*.old')
+            if path.exists()
+        ]
+        for path in remaining:
+            if _schedule_delete_on_reboot(path):
+                write_update_log(
+                    f'scheduled old executable for reboot deletion: {path.name}'
+                )
+        return remaining
     except OSError:
-        pass
+        return []
 
 
 def prepare_update(asset_path, version):

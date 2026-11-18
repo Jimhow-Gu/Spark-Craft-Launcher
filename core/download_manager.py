@@ -9,6 +9,7 @@ from PySide6.QtCore import QObject, Signal
 class DownloadManager(QObject):
     changed = Signal()
     _instance: "Optional['DownloadManager']" = None
+    _creation_listeners = []
     def __init__(self):
         super().__init__()
         self._lock = threading.Lock()
@@ -31,9 +32,24 @@ class DownloadManager(QObject):
         self.changed.emit()
 
     @classmethod
+    def add_creation_listener(cls, callback):
+        """注册创建回调，但不提前创建单例（状态栏占位用）。"""
+
+        if callback not in cls._creation_listeners:
+            cls._creation_listeners.append(callback)
+        if cls._instance is not None:
+            callback(cls._instance)
+
+    @classmethod
     def instance(cls):
         if cls._instance is None:
             cls._instance = DownloadManager()
+            listeners, cls._creation_listeners = cls._creation_listeners, []
+            for callback in listeners:
+                try:
+                    callback(cls._instance)
+                except Exception:
+                    pass
         return cls._instance
 
     def start_task(self, task_id, title, steps=None, cancel_callback=None):

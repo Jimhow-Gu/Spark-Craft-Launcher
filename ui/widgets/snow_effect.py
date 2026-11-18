@@ -11,6 +11,8 @@ from PySide6.QtCore import QRectF, QTimer, Qt
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPalette, QPen
 from PySide6.QtWidgets import QWidget
 
+from ui.refresh_rate import MAX_FPS, RefreshRateWatcher, frame_interval_ms
+
 
 @dataclass
 class _Flake:
@@ -39,9 +41,11 @@ class SnowOverlay(QWidget):
         self._flakes = []
         self._last_time = time.monotonic()
         self._timer = QTimer(self)
-        self._timer.setInterval(33)
         self._timer.setTimerType(Qt.PreciseTimer)
+        self._timer.setInterval(frame_interval_ms(self, MAX_FPS))
         self._timer.timeout.connect(self._tick)
+        self._rate_watcher = RefreshRateWatcher(self, MAX_FPS, self)
+        self._rate_watcher.interval_changed.connect(self._on_frame_interval)
         self.hide()
 
     def set_active(self, active):
@@ -49,7 +53,7 @@ class SnowOverlay(QWidget):
         if active == self._active:
             if active and not self._paused:
                 self._ensure_flakes()
-                self._timer.start()
+                self._start_animation_timer()
                 self.show()
                 self.raise_()
             return
@@ -61,11 +65,11 @@ class SnowOverlay(QWidget):
             self.show()
             self.raise_()
             if not self._paused:
-                self._timer.start()
+                self._start_animation_timer()
         else:
             self._enabled = False
             self._flakes = []
-            self._timer.stop()
+            self._stop_animation_timer()
             self.hide()
 
     def set_enabled(self, enabled):
@@ -81,7 +85,7 @@ class SnowOverlay(QWidget):
             self.show()
             self.raise_()
             if not self._paused:
-                self._timer.start()
+                self._start_animation_timer()
             return
         self._enabled = False
         # 关闭瞬间移除还在画面上方的“待入场”雪花，只保留已经可见的粒子。
@@ -89,16 +93,16 @@ class SnowOverlay(QWidget):
         self._flakes = [flake for flake in self._flakes if flake.y >= 0.0]
         if not self._flakes:
             self._active = False
-            self._timer.stop()
+            self._stop_animation_timer()
             self.hide()
 
     def set_paused(self, paused):
         self._paused = bool(paused)
         if self._paused:
-            self._timer.stop()
+            self._stop_animation_timer()
         elif self._active and self.isVisible():
             self._last_time = time.monotonic()
-            self._timer.start()
+            self._start_animation_timer()
 
     def is_active(self):
         return self._active
@@ -108,10 +112,10 @@ class SnowOverlay(QWidget):
         if self._active and not self._paused:
             self._ensure_flakes()
             self._last_time = time.monotonic()
-            self._timer.start()
+            self._start_animation_timer()
 
     def hideEvent(self, event):
-        self._timer.stop()
+        self._stop_animation_timer()
         super().hideEvent(event)
 
     def resizeEvent(self, event):
@@ -150,9 +154,29 @@ class SnowOverlay(QWidget):
             )
         self._flakes = flakes
 
+    def _on_frame_interval(self, interval):
+        interval = max(4, int(interval))
+        if self._timer.interval() != interval:
+            self._timer.setInterval(interval)
+
+    def _start_animation_timer(self):
+        self._timer.setInterval(frame_interval_ms(self, MAX_FPS))
+        self._rate_watcher.start()
+        self._timer.start()
+
+    def _stop_animation_timer(self):
+        self._timer.stop()
+        self._rate_watcher.stop()
+
     def _tick(self):
         if not self._active or self._paused:
             return
+        try:
+            if not self.isVisible() or self.window().isMinimized():
+                self._stop_animation_timer()
+                return
+        except (RuntimeError, AttributeError):
+            pass
         now = time.monotonic()
         dt = max(0.0, min(0.12, now - self._last_time))
         self._last_time = now
@@ -174,7 +198,7 @@ class SnowOverlay(QWidget):
         self._flakes = alive
         if not self._enabled and not self._flakes:
             self._active = False
-            self._timer.stop()
+            self._stop_animation_timer()
             self.hide()
             return
         self.update()

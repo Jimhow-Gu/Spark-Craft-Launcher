@@ -1,22 +1,34 @@
-# Spark Craft Launcher V1.11.4 DLL39 构建说明
+# Spark Craft Launcher V1.11.4 DLL40 构建说明
 
 ## 结论
 
-当前正式发布恢复到 **V1.11.4 + DLL39 onefile**。1.11.5–1.11.7 的 onedir/安装包
-发布已转为草稿并撤回，以下保留内部构建与回滚说明。
-
-DLL34 起背景视频强制使用 FFmpeg 软件解码，关闭 Windows 硬件解码/纹理转换，
-用于规避 NVIDIA Overlay / DWM 在部分驱动版本下的崩溃路径。
+DLL40 已完成构建与冒烟测试。这一版把 Qt 自带的 FFmpeg 栈替换为 Windows
+Media Foundation，移除 PyInstaller 的 Tcl/Tk 闪屏和启动初始化页，直接进入
+主窗口；同时加入浅色、深色、中性三套图标，并完成窗口圆角/启动渐显/动画刷新率修复。
 
 | 产物 | 大小 | SHA256 |
 |---|---:|---|
-| 正式 onefile 便携 exe | 36,662,822 字节 | `289383100f2209b5d2105e1aa25d5f5e76c80ac5a0e24cf4bc2d66379f73455c` |
-| 正式 onefile 便携 zip | 36,339,165 字节 | `f1d9f441315095f75b080dfaed14cb03a6aa5cac4b21fb8d6fe4efc5216d5321` |
+| DLL40 正式 onefile | 29,882,773 字节 | `89c75da5a249e5a34d31e18fb1f46630a8bd9a3097b67fff7fa13ed3188895e8` |
+| DLL40 正式 zip | 29,586,183 字节 | `4eda92b698f76dd51e13cfa5ace2066cd081a568bcd777775c722b0bd558aabe` |
+| DLL39 onefile（历史基线） | 36,662,822 字节 | `289383100f2209b5d2105e1aa25d5f5e76c80ac5a0e24cf4bc2d66379f73455c` |
 
-- 构建号：`SCLREL1.11.4.R20261118.RP1.DLL39`
+- 构建号：`SCLREL1.11.4.R20261118.RP1.DLL40`
+- DLL40 起：WMF 媒体后端、无 Tcl/Tk 闪屏、浅/深/中性三套图标、窗口四角填充式 1px 边框、
+  启动不再整窗透明渐显；雪花/烟花最高 120 FPS，加载动画最高 60 FPS。
 - 构建入口：`python build_slim.py`（当前正式发布）；`python build_onedir.py` 仅保留内部/回滚构建
 - 安装包默认目录：`%LOCALAPPDATA%\Programs\SparkCraftLauncher`
 - 不使用 UPX，不删除静态图片解码插件，不改变 UI 布局与业务功能。
+
+## DLL40 更新
+
+- 媒体后端从 Qt FFmpeg 切换到 Windows Media Foundation，移除 FFmpeg 运行库和插件；Windows N/KN 缺少 Media Feature Pack 时媒体初始化失败会被捕获。
+- 移除 PyInstaller Tcl/Tk 闪屏和启动初始化页，窗口直接显示；不再使用整窗 `setWindowOpacity` 渐显，修复启动时透出其他应用文字和 DWM 合成卡顿。
+- 新增浅色、深色、中性三套图标；exe/安装器使用中性版，运行中任务栏/Alt-Tab/关于页随主题切换，HICON 替换时释放旧句柄。
+- 左上角 BrandLogo 恢复透明火花素材；窗口四角改为 outer 14/inner 13 的填充式 1px 圆角环，修正 border overlay 几何和窗口 mask 半像素裁切。
+- 雪花/烟花按屏幕刷新率动态限制到最高 120 FPS，加载动画最高 60 FPS；最小化/隐藏停止动画定时器，支持跨屏 `screenChanged` 与 1 秒轮询。
+- 保留 DLL39 的退出稳定性、.old 清理/重启删除、Win10 Fusion/Disabled 调色板、两位小数进度、更新窗口主题、设置间距、左键按钮等修复。
+- 新增新闻手动刷新可见反馈：刷新中按钮文案、已是最新提示、失败立即提示、手动刷新后回顶。
+- 未知大小下载使用 Content-Length 预检并每约 8MB 复查磁盘余量；最低保留 64MB。
 
 ## DLL36 / DLL37 / DLL38 / DLL39 更新
 
@@ -47,7 +59,8 @@ DLL34 起背景视频强制使用 FFmpeg 软件解码，关闭 Windows 硬件解
 |---|---:|---:|
 | 安装后首次启动（安装器已预热） | 1.10s | 1.29s |
 | 后续启动 | 1.03–1.06s | 1.03–1.24s |
-| onefile 便携版（旧兼容包） | 1.69–1.95s | - |
+| DLL40 onefile 冷启动（当前开发机实测） | 约 1.5s | - |
+| DLL40 `--prewarm` | 约 1.47s | - |
 
 启动优化做法：
 
@@ -114,33 +127,38 @@ onedir 更新流程：
 
 更新器只在 `SCL/update` 下工作，不会移动或覆盖 `SCL/` 用户数据。
 
-## 体积构成与 FFmpeg
+## 体积构成与媒体后端
 
-未使用 UPX 的 DLL27 onefile 基线为 39,449,405 字节。V1.11.7 onefile 为
-36,662,822 字节，减少 2,786,583 字节（7.06%）。
+DLL39 onefile 为 36,662,822 字节；DLL40 为 29,882,773 字节，减少
+6,780,049 字节（18.49%），落在 28–30 MB 目标区间。主要变化：
 
-主要占用：
+- 移除精简 FFmpeg 运行库（约 4.5 MB 压缩后）；
+- 移除 PyInstaller Tcl/Tk 闪屏（约 1.5 MB 压缩后）；
+- 保留 WMF 插件 `windowsmediaplugin.dll`；
+- 保留 `qgif/qico/qjpeg/qwebp` 四个静态图片插件；
+- 字体仍只打包 HarmonyOS Sans SC Medium/Black 两个字重；
+- 重复的 VC 运行时按文件名只保留一份。
 
-- Qt6/PySide6：约 16MB（压缩后）
-- 精简 FFmpeg：约 4.5MB（压缩后）
-- 字体：约 2.47MB（压缩后）
-- Python 运行时/PYZ：约 5MB（压缩后）
+媒体播放改走 Windows Media Foundation：
 
-基于 FFmpeg 7.1 自定义构建，保留：
+- MP4/H.264/AAC、MP3、WAV、M4A 等 Windows 自带格式正常播放；
+- WebM/OGG/Opus 等格式在未安装系统解码器时可能无法播放，播放器会报错但不会崩溃；
+- Windows N/KN 需要安装 Media Feature Pack；未安装时背景视频/音乐初始化失败会被捕获，
+  不影响启动器其他功能；
+- 必须在任何 `PySide6.QtMultimedia` 导入前设置 `QT_MEDIA_BACKEND=windows`。
 
-- 全部 decoders
-- 全部 demuxers / parsers
-- `avcodec`、`avformat`、`avutil`、`swscale`、`swresample`
-- x86 ASM、D3D11VA/DXVA2 硬件解码路径
+## 图标
 
-关闭：
+- `sparkler_neutral.ico`：编译进 PE，用于 exe 文件和固定到任务栏的快捷方式；
+- `sparkler_light.*` / `sparkler_dark.*`：运行中任务栏、标题栏、Alt-Tab、BrandLogo、关于页；
+- 运行时切换只替换 QIcon/HICON，不修改 exe、.lnk 或 Windows 图标缓存；
+- HICON 每次切换后销毁旧句柄，任务栏刷新使用 `WM_SETICON + SetClassLongPtrW + SetWindowPos(SWP_FRAMECHANGED)`。
 
-- encoders、muxers、avfilter、avdevice、programs、docs
-- `--enable-small -Os` 优化体积，不改变解码器集合
+## 启动流程
 
-静态图片插件 `qgif/qico/qjpeg/qwebp` 全部保留；`ffmpegmediaplugin.dll` 原样保留。
-源码、配置、哈希和 LGPL-2.1-or-later 许可见 `slim_ffmpeg/README.md` 和
-`slim_ffmpeg/COPYING.LGPLv2.1`。
+不显示额外的启动闪屏或初始化页。窗口创建后直接构建主页，目录迁移和游戏目录扫描
+仍在主窗口构造前完成；侧栏左上角 BrandLogo 继续使用原来的透明火花素材，不套用
+圆角底板图标。
 
 ## 构建
 
@@ -148,18 +166,21 @@ onedir 更新流程：
 
 ```powershell
 cd D:\PMGL
-python build_onedir.py                  # onedir + 更新 zip + 安装包
+python build_onedir.py                  # onedir + 更新 zip + 安装包（内部/回滚）
 python build_slim.py                    # onefile 便携版 + zip
 ```
 
 `build_onedir.py` 会：
 
-1. 校验 `slim_ffmpeg/` 哈希；
-2. 用 `SparkCraftLauncher.slim_onedir.spec` 构建；
-3. 校验 exe、`_internal/`、静态图片插件、无 UPX、无旧 CurseForge Key；
-4. 生成 `dist_installer/SparkCraftLauncher-V1.11.7-onedir.zip`；
-5. 调用 Inno Setup 生成 `dist_installer/V1.11.7-Setup-SparkCraftLauncher.exe`；
-6. 输出体积和 SHA256。
+1. 用 `SparkCraftLauncher.slim_onedir.spec` 构建；
+2. 校验 exe、`_internal/`、静态图片插件、WMF 插件、主题图标、无 FFmpeg、无 UPX、
+   无旧 CurseForge Key；
+3. 生成 `dist_installer/SparkCraftLauncher-V{版本}-onedir.zip`；
+4. 调用 Inno Setup 生成安装包；
+5. 输出体积和 SHA256。
+
+`build_slim.py` 会校验 onefile 中的 WMF 插件、图片插件、主题图标、VC 运行时去重、
+无 FFmpeg/Tcl-Tk、无 UPX 和旧 Key。
 
 `INNO_SETUP_ISCC` 可指定 `ISCC.exe` 路径；找不到时只跳过安装包生成。
 安装包语言文件为 `installer/ChineseSimplified.isl`。
@@ -175,9 +196,7 @@ python build_slim.py                    # onefile 便携版 + zip
 ## 风险说明
 
 - 未做 Authenticode 签名，SmartScreen/杀软提示不会因瘦身或 onedir 消失。
-- FFmpeg 为本地重新编译的未签名二进制；常见播放格式已实测，但极端编码覆盖范围
-  不等同于 Qt 官方全量构建的逐字节保证。
-- 移除了 FFmpeg 编码/复用/滤镜/设备模块；当前启动器只做本地播放。未来新增录制/
-  转码功能时需恢复对应模块。
+- WMF 的可用格式取决于 Windows 版本和系统解码器；Windows N/KN 未安装 Media
+  Feature Pack 时媒体功能不可用，但启动器其余功能不受影响。
 - 安装器预热只加载模块，不创建窗口、不读取账号配置；若在异常环境被安全软件拦截，
   仍可手动运行启动器，功能不受影响。

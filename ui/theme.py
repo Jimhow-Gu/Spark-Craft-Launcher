@@ -277,6 +277,12 @@ def _system_is_light() -> bool:
         return palette.color(QPalette.Window).lightness() > 128
 
 
+def system_is_light() -> bool:
+    """当前 Windows 应用主题是否为浅色；供启动阶段选择运行图标。"""
+
+    return _system_is_light()
+
+
 class ThemeManager(QObject):
     def __init__(self, window: QMainWindow):
         super().__init__(window)
@@ -301,6 +307,9 @@ class ThemeManager(QObject):
         self._system_timer.start()
 
     # ---------- 对外接口 ----------
+    def is_light(self) -> bool:
+        return bool(self._light)
+
     def apply(self, theme: str, origin_global=None, animate: bool = True):
         theme = str(theme or 'system').lower()
         if theme not in _THEMES:
@@ -405,6 +414,11 @@ class ThemeManager(QObject):
             stylesheet = app_stylesheet(light)
             if app.styleSheet() != stylesheet:
                 app.setStyleSheet(stylesheet)
+            try:
+                from ui.runtime_icons import apply_runtime_icon
+                apply_runtime_icon(light, self._window)
+            except Exception:
+                pass
         finally:
             self._theme_updating = False
         CheckBoxProxyStyle.set_light_mode(light)

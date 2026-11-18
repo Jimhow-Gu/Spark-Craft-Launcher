@@ -11,7 +11,8 @@ from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QPainter, QPalette, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+    QVBoxLayout, QWidget,
 )
 
 from core.app_font import ui_font
@@ -198,6 +199,11 @@ class AboutPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName('AboutPage')
+        self._light = (
+            QApplication.palette().color(QPalette.Window).lightness() > 128
+        )
+        self._scl_icon_label = None
+        self._hero_logo_label = None
         self._net = QNetworkAccessManager(self)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -231,11 +237,7 @@ class AboutPage(QWidget):
         deepseek = _icon_label()
         zhipu = _icon_label()
         scl = _icon_label()
-        scl_logo = _IMAGES_DIR / 'sparkler.png'
-        if scl_logo.is_file():
-            scl.setPixmap(rounded_pixmap(
-                hidpi_pixmap(trim_transparent(QPixmap(str(scl_logo))), 44, 44)
-            ))
+        self._scl_icon_label = scl
         gubwon_row = self._row(gubwon, 'Gubwon', 'Spark Craft Launcher 的开发者')
         self.sponsor_btn = QPushButton('赞助SCL！')
         self.sponsor_btn.setCursor(Qt.PointingHandCursor)
@@ -297,10 +299,7 @@ class AboutPage(QWidget):
         launcher_logo = QLabel()
         launcher_logo.setFixedSize(72, 72)
         launcher_logo.setAlignment(Qt.AlignCenter)
-        if scl_logo.is_file():
-            launcher_logo.setPixmap(rounded_pixmap(
-                hidpi_pixmap(trim_transparent(QPixmap(str(scl_logo))), 72, 72), 16
-            ))
+        self._hero_logo_label = launcher_logo
         logo_box.addWidget(launcher_logo, 0, Qt.AlignHCenter)
         launcher_name = QLabel('Spark Craft Launcher')
         launcher_name.setAlignment(Qt.AlignCenter)
@@ -314,6 +313,36 @@ class AboutPage(QWidget):
         self._load_deepseek(deepseek)
         self._load_zhipu(zhipu)
         self._load_gubwon(gubwon)
+        self._refresh_runtime_logos()
+
+    def _runtime_logo_path(self):
+        name = 'sparkler_light.png' if self._light else 'sparkler_dark.png'
+        path = _IMAGES_DIR / name
+        if path.is_file():
+            return path
+        fallback = _IMAGES_DIR / 'sparkler.png'
+        return fallback if fallback.is_file() else None
+
+    def _refresh_runtime_logos(self):
+        path = self._runtime_logo_path()
+        if path is None:
+            return
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            return
+        for label, size, radius in (
+            (self._scl_icon_label, 44, 10),
+            (self._hero_logo_label, 72, 16),
+        ):
+            if label is not None:
+                self._set_icon(label, pixmap, size, radius)
+
+    def set_light(self, light):
+        light = bool(light)
+        if light == self._light:
+            return
+        self._light = light
+        self._refresh_runtime_logos()
 
     def _row(self, icon_label, name, desc):
         row_widget = QWidget()
@@ -386,9 +415,9 @@ class AboutPage(QWidget):
         row.addLayout(text_col, 1)
         return row
 
-    def _set_icon(self, label, pixmap):
+    def _set_icon(self, label, pixmap, size=44, radius=10):
         pixmap = trim_transparent(pixmap)
-        label.setPixmap(rounded_pixmap(hidpi_pixmap(pixmap, 44, 44), 10))
+        label.setPixmap(rounded_pixmap(hidpi_pixmap(pixmap, size, size), radius))
 
     def _load_local(self, label, filename, fallback_text, fallback_color):
         path = _IMAGES_DIR / filename

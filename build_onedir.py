@@ -29,14 +29,6 @@ COLLECT = DIST / "SparkCraftLauncher"
 EXE = COLLECT / "Spark Craft Launcher.exe"
 INSTALLER_DIR = ROOT / "dist_installer"
 ISS = ROOT / "installer" / "SparkCraftLauncher.iss"
-SLIM_FFMPEG = ROOT / "slim_ffmpeg"
-FFMPEG_FILES = (
-    "avcodec-61.dll",
-    "avformat-61.dll",
-    "avutil-59.dll",
-    "swscale-8.dll",
-    "swresample-5.dll",
-)
 IMAGE_PLUGINS = ("qgif.dll", "qico.dll", "qjpeg.dll", "qwebp.dll")
 # 复用 onefile 构建脚本中的旧 Key 标记检查，避免在仓库里再复制一份。
 try:
@@ -65,24 +57,7 @@ def fail(message):
     raise SystemExit("ONEDIR BUILD FAILED: " + message)
 
 
-def check_inputs():
-    for name in FFMPEG_FILES:
-        if not (SLIM_FFMPEG / name).is_file():
-            fail(f"missing {SLIM_FFMPEG / name}")
-    sums = SLIM_FFMPEG / "SHA256SUMS"
-    if sums.is_file():
-        for line in sums.read_text(encoding="utf-8").splitlines():
-            parts = line.split()
-            if len(parts) < 2:
-                continue
-            expected, name = parts[0], parts[-1].lstrip("*")
-            path = SLIM_FFMPEG / name
-            if path.is_file() and sha256(path) != expected:
-                fail(f"FFmpeg checksum mismatch: {name}")
-
-
 def build():
-    check_inputs()
     cmd = [
         sys.executable, "-m", "PyInstaller", str(SPEC),
         "--noconfirm", "--clean",
@@ -105,11 +80,20 @@ def inspect():
     for name in IMAGE_PLUGINS:
         if not (image_dir / name).is_file():
             fail(f"image decoder plugin missing: {name}")
-    avcodec = COLLECT / "_internal" / "PySide6" / "avcodec-61.dll"
-    if not avcodec.is_file():
-        fail("slim avcodec-61.dll missing")
-    if avcodec.stat().st_size != (SLIM_FFMPEG / "avcodec-61.dll").stat().st_size:
-        fail("slim FFmpeg in output differs from slim_ffmpeg/")
+    media_dir = COLLECT / "_internal" / "PySide6" / "plugins" / "multimedia"
+    if not (media_dir / "windowsmediaplugin.dll").is_file():
+        fail("Windows Media Foundation plugin missing")
+    if (media_dir / "ffmpegmediaplugin.dll").exists():
+        fail("FFmpeg multimedia plugin should not be packaged")
+    for path in (COLLECT / "_internal" / "PySide6").glob("av*.dll"):
+        fail(f"FFmpeg DLL should not be packaged: {path.name}")
+    for icon in (
+        "sparkler_light.png", "sparkler_light.ico",
+        "sparkler_dark.png", "sparkler_dark.ico",
+        "sparkler_neutral.png", "sparkler_neutral.ico",
+    ):
+        if not (COLLECT / "_internal" / "ui" / "imgs" / icon).is_file():
+            fail(f"runtime theme icon missing: {icon}")
     return EXE
 
 

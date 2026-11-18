@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.app_font import ui_font
+from ui.refresh_rate import RefreshRateWatcher, frame_interval_ms
 from ui.widgets.toast import show_toast
 
 _IMAGES_DIR = Path(__file__).resolve().parent.parent / 'imgs'
@@ -53,9 +54,14 @@ class _SmoothIconLabel(QWidget):
         self._frames = self._load_frames()
         self._error = None
         self._clock = QElapsedTimer()
+        self._running = False
+        self._window = None
         self._timer = QTimer(self)
-        self._timer.setInterval(16)
-        self._timer.timeout.connect(self.update)
+        self._timer.setTimerType(Qt.PreciseTimer)
+        self._timer.setInterval(frame_interval_ms(self, 60))
+        self._timer.timeout.connect(self._frame_tick)
+        self._rate_watcher = RefreshRateWatcher(self, 60, self)
+        self._rate_watcher.interval_changed.connect(self._on_frame_interval)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.setFixedSize(84, 84)
 
@@ -76,20 +82,87 @@ class _SmoothIconLabel(QWidget):
         movie.stop()
         return frames
 
+    def _on_frame_interval(self, interval):
+        interval = max(4, int(interval))
+        if self._timer.interval() != interval:
+            self._timer.setInterval(interval)
+
+    def _start_animation(self):
+        if not self._frames:
+            return
+        self._timer.setInterval(frame_interval_ms(self, 60))
+        self._rate_watcher.start()
+        self._timer.start()
+
+    def _stop_animation(self):
+        self._timer.stop()
+        self._rate_watcher.stop()
+
+    def _frame_tick(self):
+        try:
+            if not self.isVisible() or self.window().isMinimized():
+                self._stop_animation()
+                return
+        except (RuntimeError, AttributeError):
+            pass
+        self.update()
+
+    def _watch_window(self):
+        try:
+            window = self.window()
+        except (RuntimeError, AttributeError):
+            return
+        if window is self._window:
+            return
+        old = self._window
+        if old is not None:
+            try:
+                old.removeEventFilter(self)
+            except (RuntimeError, AttributeError):
+                pass
+        self._window = window
+        if window is not None:
+            window.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if obj is self._window and event.type() == QEvent.WindowStateChange:
+            try:
+                minimized = obj.isMinimized()
+            except (RuntimeError, AttributeError):
+                minimized = False
+            if minimized:
+                self._stop_animation()
+            elif self._running:
+                self._start_animation()
+        return super().eventFilter(obj, event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._watch_window()
+        if self._running:
+            self._start_animation()
+
+    def hideEvent(self, event):
+        self._stop_animation()
+        super().hideEvent(event)
+
     def start(self):
         self._error = None
+        self._running = True
         if self._frames and not self._timer.isActive():
             self._clock.start()
-            self._timer.start()
+            self._start_animation()
         self.update()
 
     def stop(self):
-        self._timer.stop()
+        self._running = False
+        self._stop_animation()
         self._error = None
         self.update()
 
     def show_error(self, pixmap):
-        self._timer.stop()
+        self._running = False
+        self._stop_animation()
         self._error = pixmap
         self.update()
 

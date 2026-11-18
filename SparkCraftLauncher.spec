@@ -165,5 +165,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="ui/imgs/sparkler.ico",
+    icon="ui/imgs/sparkler_neutral.ico",
 )

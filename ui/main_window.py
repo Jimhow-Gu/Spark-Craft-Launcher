@@ -21,7 +21,6 @@ from ui.widgets.side_panel import SidePanel
 from ui.widgets.side_nav import SideNavList, NAV_HEADER_ROLE, NAV_ICON_ROLE
 from ui.widgets.brand_logo import BrandLogo
 from ui.theme import ThemeManager
-from core.download_manager import DownloadManager
 from core.build_info import BUILD_LABEL, RELEASE_BUILD, RESOURCE_PACK_SEQUENCE, EXECUTABLE_BUILD
 from core.update import CURRENT_VERSION
 from core.seasonal import is_fireworks_period, is_snow_period
@@ -31,6 +30,7 @@ _WINDOW_FILTER_EVENTS = frozenset((
     QEvent.Enter, QEvent.Leave, QEvent.DragEnter, QEvent.DragMove, QEvent.Drop,
     QEvent.ApplicationDeactivate, QEvent.ApplicationActivate, QEvent.Show,
 ))
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -44,7 +44,7 @@ class MainWindow(QMainWindow):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setAutoFillBackground(False)
-        self.setStyleSheet('QMainWindow { background: transparent; }')
+        self.setStyleSheet('QMainWindow { background: transparent; border: none; }')
         self.setWindowState(Qt.WindowNoState)
         screen = QApplication.primaryScreen()
         available = screen.availableGeometry() if screen is not None else None
@@ -74,7 +74,12 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None and not app.windowIcon().isNull():
             self.setWindowIcon(app.windowIcon())
-        self.download_manager = DownloadManager.instance()
+        self._download_manager = None
+        try:
+            from core.download_manager import DownloadManager
+            DownloadManager.add_creation_listener(self._bind_download_manager)
+        except Exception:
+            pass
         self._music_player = None
         self._music_initial_pause = False
         self._music_started = False
@@ -111,6 +116,7 @@ class MainWindow(QMainWindow):
         if app is not None:
             app.installEventFilter(self)
         self.central = BackgroundWidget()
+        self.central.setStyleSheet('background: transparent; border: none;')
         self.central.setAcceptDrops(True)
         self.setAcceptDrops(True)
         self.setCentralWidget(self.central)
@@ -252,7 +258,6 @@ class MainWindow(QMainWindow):
         self.page_stack.setStyleSheet('QStackedWidget { border: none; background: transparent; }')
         self.download_bar = DownloadStatusBar()
         self.download_bar.clicked.connect(self.show_download_manager_page)
-        self.download_manager.changed.connect(self._refresh_download_bar)
         self.right_panel = QWidget()
         self.right_panel.setStyleSheet('background:transparent; border:none;')
         self.right_layout = QVBoxLayout(self.right_panel)
@@ -282,6 +287,8 @@ class MainWindow(QMainWindow):
             self.theme_manager.apply(
                 ConfigManager().get('theme', 'system'), animate=False
             )
+            # BrandLogo 在 ThemeManager 之前创建；主题应用后立即同步初始素材。
+            self.brand_logo.set_light(self.theme_manager.is_light())
         except Exception:
             pass
         self.init_all_pages()
@@ -298,8 +305,7 @@ class MainWindow(QMainWindow):
         self._snow_check_timer.setInterval(30 * 60 * 1000)
         self._snow_check_timer.timeout.connect(self._refresh_snow_season)
         self._snow_check_timer.start()
-        self._fade_anim = None
-        self.start_fade_anim()
+        self._schedule_startup_tasks()
         QTimer.singleShot(800, self._apply_window_mask)
 
     def _refresh_account_card_startup(self):
@@ -314,10 +320,44 @@ class MainWindow(QMainWindow):
         if getattr(self, '_closing', False):
             return
         try:
+            from core.music import list_music_files
+            if not list_music_files():
+                self._update_media_buttons()
+                return
+        except Exception:
+            pass
+        try:
             self.music_player
         except Exception:
             pass
         self._update_media_buttons()
+
+    def _bind_download_manager(self, manager):
+        if getattr(self, '_download_manager', None) is manager:
+            return
+        old = getattr(self, '_download_manager', None)
+        if old is not None:
+            try:
+                old.changed.disconnect(self._refresh_download_bar)
+            except (RuntimeError, TypeError):
+                pass
+        manager.changed.connect(self._refresh_download_bar)
+        self._download_manager = manager
+        try:
+            self._refresh_download_bar()
+        except Exception:
+            pass
+
+    @property
+    def download_manager(self):
+        # 状态栏只是占位：第一次真正需要下载/查看下载页时才创建管理器。
+        manager = self._download_manager
+        if manager is None:
+            from core.download_manager import DownloadManager
+            manager = DownloadManager.instance()
+            if self._download_manager is not manager:
+                self._bind_download_manager(manager)
+        return self._download_manager
 
     @property
     def music_player(self):
@@ -1585,7 +1625,11 @@ class MainWindow(QMainWindow):
         overlay = QWidget(self.page_stack)
         overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         overlay.setAttribute(Qt.WA_StyledBackground, True)
-        overlay.setStyleSheet('background: rgba(18,23,23,225);')
+        overlay.setStyleSheet(
+            'background: rgba(18,23,23,225);'
+            ' border-top-right-radius: 14px;'
+            ' border-bottom-right-radius: 14px;'
+        )
         overlay.hide()
         effect = QGraphicsOpacityEffect(overlay)
         overlay.setGraphicsEffect(effect)
@@ -1600,6 +1644,10 @@ class MainWindow(QMainWindow):
         '''页面切换时用暗色遮罩淡出，避免页面半透明时透出背景视频。'''
 
         if not self.isVisible():
+            return
+        # 启动阶段默认导航页切换不播暗色遮罩：此时主页/页面仍在构造，
+        # 动画会卡在起始帧，把整个窗口压暗并拖慢首帧。
+        if not getattr(self, '_page_fade_ready', False):
             return
         if self.page_stack.widget(index) is None:
             return
@@ -1635,24 +1683,14 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-    def start_fade_anim(self):
-        self.setWindowOpacity(0)
-        self._fade_anim = QPropertyAnimation(self, b'windowOpacity')
-        self._fade_anim.setDuration(600)
-        self._fade_anim.setStartValue(0)
-        self._fade_anim.setEndValue(1)
-        self._fade_anim.setEasingCurve(QEasingCurve.OutCubic)
-        def anim_finish():
-            self.raise_()
-            self.activateWindow()
-            if self._fade_anim:
-                self._fade_anim.deleteLater()
-                self._fade_anim = None
-
-        self._fade_anim.finished.connect(anim_finish)
-        self._fade_anim.start()
+    def _schedule_startup_tasks(self):
+        # 启动不做整窗透明渐显，避免透出其他应用并减少 DWM 合成卡顿。
         QTimer.singleShot(2000, self.force_restore)
         QTimer.singleShot(1500, self._on_startup_update_notice)
+        QTimer.singleShot(1200, self._enable_page_fade)
+
+    def _enable_page_fade(self):
+        self._page_fade_ready = True
 
     def force_restore(self):
         if self.windowState() & Qt.WindowMinimized:
@@ -1665,7 +1703,13 @@ class MainWindow(QMainWindow):
 
         try:
             path = QPainterPath()
-            path.addRoundedRect(QRectF(self.rect()), 14.0, 14.0)
+            # 使用完整像素边界，避免 QRect.right()/bottom() 少 1px 导致
+            # 外圈被 QRegion 二值裁剪切掉半像素。
+            path.addRoundedRect(
+                QRectF(0.0, 0.0, float(self.width()), float(self.height())),
+                14.0,
+                14.0,
+            )
             self.setMask(QRegion(path.toFillPolygon().toPolygon()))
         except Exception:
             pass
@@ -1742,7 +1786,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         try:
-            self.border_overlay.setGeometry(self.central.rect())
+            self.border_overlay.setGeometry(self.rect())
             self.border_overlay.raise_()
         except Exception:
             pass
@@ -1764,6 +1808,12 @@ class MainWindow(QMainWindow):
 
     def showEvent(self, event):
         super().showEvent(event)
+        # 首帧就置顶/激活，避免启动布局期间被其他应用窗口压住。
+        try:
+            self.raise_()
+            self.activateWindow()
+        except Exception:
+            pass
         self._apply_window_mask()
         QTimer.singleShot(0, self._apply_window_mask)
         QTimer.singleShot(120, self._apply_window_mask)
@@ -1777,20 +1827,22 @@ class MainWindow(QMainWindow):
                 self._ui_scale_initialized = True
             except Exception:
                 pass
+        # 首帧先让主页完成绘制；其余页面、账号头像和音乐在用户能看到
+        # 界面之后再初始化，避免阻塞启动动画。
         if not getattr(self, '_deferred_started', False):
             self._deferred_started = True
-            QTimer.singleShot(40, self._build_deferred_pages)
+            QTimer.singleShot(600, self._build_deferred_pages)
         if not getattr(self, '_music_started', False):
             self._music_started = True
-            QTimer.singleShot(0, self._init_music_player)
+            QTimer.singleShot(300, self._init_music_player)
         if not getattr(self, '_account_card_started', False):
             self._account_card_started = True
-            QTimer.singleShot(0, self._refresh_account_card_startup)
-        if getattr(self, '_fade_in_done', False):
+            QTimer.singleShot(300, self._refresh_account_card_startup)
+        if getattr(self, '_startup_layout_done', False):
             return
-        self._fade_in_done = True
+        self._startup_layout_done = True
         try:
-            self.border_overlay.setGeometry(self.central.rect())
+            self.border_overlay.setGeometry(self.rect())
             self.border_overlay.raise_()
         except Exception:
             pass
@@ -1807,22 +1859,21 @@ class MainWindow(QMainWindow):
             self._music_auto_started = True
             QTimer.singleShot(800, self._auto_start_music)
         try:
-            self.setWindowOpacity(0.0)
-            animation = QPropertyAnimation(self, b'windowOpacity', self)
-            animation.setDuration(520)
-            animation.setStartValue(0.0)
-            animation.setEndValue(1.0)
-            animation.setEasingCurve(QEasingCurve.OutCubic)
-            animation.finished.connect(lambda: self.setWindowOpacity(1.0))
-            self._fade_in_animation = animation
-            animation.start()
-        except Exception:
+            # 不使用整窗透明度渐显：它会让其他应用文字透出，并触发 DWM
+            # 每帧整窗重组的卡顿。窗口直接以完全不透明状态显示。
             self.setWindowOpacity(1.0)
+            self.raise_()
+            self.activateWindow()
+        except Exception:
+            pass
 
     def _auto_start_music(self):
         '''进入启动器后自动播放背景音乐；视频音乐开启时让位给视频。'''
 
         try:
+            from core.music import list_music_files
+            if not list_music_files():
+                return
             if not self.music_player.autoplay_enabled():
                 return
             if not self.music_player.has_tracks():
@@ -2192,8 +2243,10 @@ class MainWindow(QMainWindow):
             timer.start()
             self.shutdown_media()
             try:
-                from core.java_scan import JavaScanService
-                JavaScanService.instance().shutdown()
+                from core import java_scan
+                service = getattr(java_scan.JavaScanService, '_instance', None)
+                if service is not None:
+                    service.shutdown()
             except Exception:
                 pass
             checker = self._update_checker

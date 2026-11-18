@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QEvent, QSize, Qt
 from PySide6.QtGui import QMovie, QPainter
 from PySide6.QtWidgets import QWidget
 
@@ -18,6 +18,7 @@ class FireworksLoader(QWidget):
         super().__init__(parent)
         self.setFixedSize(size, size)
         self._movie = None
+        self._window = None
         if _LOADING_GIF.is_file():
             self._movie = QMovie(str(_LOADING_GIF), parent=self)
             self._movie.setCacheMode(QMovie.CacheAll)
@@ -25,8 +26,38 @@ class FireworksLoader(QWidget):
             self._movie.start()
             self._movie.jumpToFrame(6)
 
+    def _watch_window(self):
+        try:
+            window = self.window()
+        except (RuntimeError, AttributeError):
+            return
+        if window is self._window:
+            return
+        old = self._window
+        if old is not None:
+            try:
+                old.removeEventFilter(self)
+            except (RuntimeError, AttributeError):
+                pass
+        self._window = window
+        if window is not None:
+            window.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if obj is self._window and event.type() == QEvent.WindowStateChange:
+            try:
+                minimized = obj.isMinimized()
+            except (RuntimeError, AttributeError):
+                minimized = False
+            if minimized:
+                self.stop()
+            elif self.isVisible() and self._movie is not None:
+                self._movie.start()
+        return super().eventFilter(obj, event)
+
     def showEvent(self, event):
         super().showEvent(event)
+        self._watch_window()
         if self._movie is not None and self._movie.state() != QMovie.Running:
             self._movie.start()
             self._movie.jumpToFrame(6)

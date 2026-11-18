@@ -1,10 +1,8 @@
 import os
 os.environ["QT_OPENGL"] = "software"   # 降低 OpenGL 栈冲突风险
-os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.ffmpeg.info=false")
-# NVIDIA Overlay / DWM 在部分驱动版本下会在 D3D11 视频解码路径崩溃。
-# 背景视频改用 FFmpeg 软件解码，避免把启动器接入硬件解码/Overlay 链路。
-os.environ.setdefault("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", "")
-os.environ.setdefault("QT_DISABLE_HW_TEXTURES_CONVERSION", "1")
+# 使用 Windows Media Foundation，避免打包 Qt 自带的 FFmpeg 运行库。
+# 必须在任何 PySide6.QtMultimedia 导入之前设置。
+os.environ["QT_MEDIA_BACKEND"] = "windows"
 
 import ctypes
 import logging
@@ -48,49 +46,23 @@ def resource_path(relative: str) -> Path:
     return base / relative
 
 
-def quiet_ffmpeg_logs():
-    '''关掉 FFmpeg 的 info 级元数据输出，避免控制台出现乱码和刷屏。'''
-
-    if sys.platform != 'win32':
-        return
-    roots = [
-        Path(getattr(sys, '_MEIPASS', PROJECT_ROOT)),
-        Path(sys.executable).resolve().parent,
-        PROJECT_ROOT,
-    ]
-    try:
-        import PySide6
-        roots.append(Path(PySide6.__file__).resolve().parent)
-    except Exception:
-        pass
-    seen = set()
-    for root in roots:
-        try:
-            candidates = sorted(root.glob('avutil-*.dll'))
-        except OSError:
-            continue
-        for path in candidates:
-            key = str(path).lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            try:
-                lib = ctypes.WinDLL(str(path))
-                set_level = lib.av_log_set_level
-                set_level.argtypes = [ctypes.c_int]
-                set_level.restype = None
-                set_level(16)  # AV_LOG_ERROR，保留真正错误
-                return
-            except Exception:
-                continue
-
 from core.paths import migrate_legacy_dirs, ensure_runtime_dirs
 from core.logging_setup import setup_logging
 setup_logging()
 
 from ui.main_window import MainWindow
 from core.config import ConfigManager
-from core.java_scan import JavaScanService
+
+
+def _shutdown_java_scan_service():
+    # 不在启动时导入/实例化扫描服务；只有它确实被用过才关闭后台线程。
+    try:
+        from core import java_scan
+        service = getattr(java_scan.JavaScanService, '_instance', None)
+        if service is not None:
+            service.shutdown()
+    except Exception:
+        pass
 
 
 class DialogIconFilter(QObject):
@@ -113,66 +85,6 @@ def set_taskbar_identity():
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
             "SparkCraft.Launcher.1"
         )
-    except Exception:
-        pass
-
-
-def apply_windows_window_icon(window, icon_path):
-    '''在窗口创建后显式写入任务栏大/小图标。'''
-
-    if sys.platform != "win32":
-        return
-    try:
-        import ctypes
-        path = str(icon_path)
-        if not path or not Path(path).is_file():
-            return
-        user32 = ctypes.windll.user32
-        IMAGE_ICON = 1
-        LR_LOADFROMFILE = 0x00000010
-        LR_DEFAULTSIZE = 0x00000040
-        WM_SETICON = 0x0080
-        user32.LoadImageW.restype = ctypes.c_void_p
-        user32.LoadImageW.argtypes = [
-            ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint,
-            ctypes.c_int, ctypes.c_int, ctypes.c_uint,
-        ]
-        hicon = user32.LoadImageW(
-            None, path, IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE
-        )
-        if hicon:
-            hwnd = int(window.winId())
-            user32.SendMessageW.restype = ctypes.c_void_p
-            user32.SendMessageW.argtypes = [
-                ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p,
-            ]
-            user32.SendMessageW(hwnd, WM_SETICON, 0, hicon)
-            user32.SendMessageW(hwnd, WM_SETICON, 1, hicon)
-            user32.SendMessageW(hwnd, WM_SETICON, 2, hicon)
-            try:
-                user32.SetClassLongPtrW.argtypes = [
-                    ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p,
-                ]
-                user32.SetClassLongPtrW.restype = ctypes.c_void_p
-                user32.SetClassLongPtrW(hwnd, -14, hicon)
-                user32.SetClassLongPtrW(hwnd, -34, hicon)
-            except Exception:
-                pass
-            try:
-                user32.GetWindowLongPtrW.restype = ctypes.c_longlong
-                ex_style = user32.GetWindowLongPtrW(hwnd, -20)
-                ex_style = (ex_style | 0x00040000) & ~0x00000080
-                user32.SetWindowLongPtrW.argtypes = [
-                    ctypes.c_void_p, ctypes.c_int, ctypes.c_longlong,
-                ]
-                user32.SetWindowLongPtrW(hwnd, -20, ex_style)
-                user32.SetWindowPos(
-                    hwnd, 0, 0, 0, 0, 0,
-                    0x0020 | 0x0001 | 0x0002 | 0x0004,
-                )
-            except Exception:
-                pass
-            window._taskbar_icon_handle = hicon
     except Exception:
         pass
 
@@ -340,7 +252,6 @@ def main():
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
     app = QApplication(sys.argv)
-    quiet_ffmpeg_logs()
     # 机房/校园网通常通过系统代理上网；QtNetwork 默认不读取 Windows 代理，
     # 会导致登录和下载正常、头像却一直空白。这里统一启用系统代理。
     try:
@@ -376,21 +287,37 @@ def main():
     app.installEventFilter(app._text_context_menu)
     from ui.widgets.themed_tooltip import install_themed_tooltips
     app._themed_tooltip_filter = install_themed_tooltips(app)
-    app.aboutToQuit.connect(JavaScanService.instance().shutdown)
+    app.aboutToQuit.connect(_shutdown_java_scan_service)
     app.aboutToQuit.connect(release_single_instance)
     app.setApplicationName("Spark Craft Launcher")
     app.setApplicationDisplayName("Spark Craft Launcher")
     from core.update import CURRENT_VERSION
     app.setApplicationVersion(CURRENT_VERSION)
-    app_icon = QIcon()
-    ico_path = resource_path("ui/imgs/sparkler.ico")
-    png_path = resource_path("ui/imgs/sparkler.png")
-    if ico_path.exists():
-        app_icon.addFile(str(ico_path))
-    if png_path.exists():
-        app_icon.addFile(str(png_path))
-    if not app_icon.isNull():
-        app.setWindowIcon(app_icon)
+    startup_light = False
+    # 启动图标跟随当前主题（配置优先，其次系统 AppsUseLightTheme）。
+    # exe/固定快捷方式仍是 neutral，由 PyInstaller 编译期写入。
+    try:
+        from ui.theme import system_is_light
+        try:
+            configured_theme = str(
+                ConfigManager().get('theme', 'system') or 'system'
+            ).lower()
+        except Exception:
+            configured_theme = 'system'
+        if configured_theme == 'light':
+            startup_light = True
+        elif configured_theme == 'dark':
+            startup_light = False
+        else:
+            startup_light = bool(system_is_light())
+        from ui.runtime_icons import apply_runtime_icon, runtime_icon_paths
+        apply_runtime_icon(startup_light)
+        ico_path = runtime_icon_paths(startup_light)[0]
+    except Exception:
+        # neutral 图标只编译进 PE，不随 onefile 解包；运行期回退到当前主题。
+        suffix = 'light' if startup_light else 'dark'
+        ico_path = resource_path(f'ui/imgs/sparkler_{suffix}.ico')
+        QApplication.instance().setWindowIcon(QIcon(str(ico_path)))
     from core.app_font import load_ui_fonts, ui_font
     load_ui_fonts()
     app.setFont(ui_font(10))
@@ -425,10 +352,11 @@ def main():
     # 更新时旧 exe 会被重命名为 .old。先同步快速尝试一次（旧进程通常
     # 已经退出），再交给后台线程按 1/2/4/8/15/30/60/120 秒继续重试，
     # 避免用户启动后很快关闭导致清零机会被错过。
+    leftover_old = []
     try:
         import threading
         from core.update import cleanup_old_executable
-        cleanup_old_executable(retries=4, retry_rounds=1)
+        leftover_old = cleanup_old_executable(retries=4, retry_rounds=1) or []
         threading.Thread(
             target=cleanup_old_executable,
             kwargs={'retry_rounds': 9},
@@ -497,12 +425,26 @@ def main():
             )
     except Exception:
         pass
+    if leftover_old:
+        def _show_old_backup_notice():
+            try:
+                if not any(Path(path).exists() for path in leftover_old):
+                    return
+                from ui.widgets.toast import show_toast
+                show_toast(
+                    '检测到旧版本回滚备份，将在下次启动清理',
+                    'info', window, 6500,
+                )
+            except Exception:
+                pass
+        QTimer.singleShot(2500, _show_old_backup_notice)
     window.setWindowIcon(app.windowIcon())
     try:
         window.windowHandle().setIcon(app.windowIcon())
     except Exception:
         pass
     if ico_path.exists():
+        from ui.runtime_icons import apply_windows_window_icon
         apply_windows_window_icon(window, ico_path)
         QTimer.singleShot(
             100, lambda: apply_windows_window_icon(window, ico_path)
@@ -525,6 +467,8 @@ def main():
         pass
     try:
         window.shutdown_media()
+        from ui.runtime_icons import release_windows_window_icon
+        release_windows_window_icon(window)
         window.deleteLater()
         app.processEvents()
     except Exception:

@@ -467,9 +467,7 @@ class NewsPage(QWidget):
         self._image_pending = {}
         self._cards = []
         self._news_signature = ''
-        self._error_notice_timer = QTimer(self)
-        self._error_notice_timer.setSingleShot(True)
-        self._error_notice_timer.timeout.connect(self._show_refresh_error_toast)
+        self._refresh_manual = False
         self._last_error_reason = ''
         self._cache_prune_scheduled = False
         self._last_request_at = 0.0
@@ -736,7 +734,6 @@ class NewsPage(QWidget):
         self._release_detail_pages()
 
     def shutdown(self):
-        self._error_notice_timer.stop()
         self._auto_refresh_timer.stop()
         self._stop_back_to_top_scroll()
         for detail in list(self._detail_pages.values()):
@@ -764,7 +761,14 @@ class NewsPage(QWidget):
         self.load()
 
     def load(self, force=False):
+        manual = bool(force)
         if self._reply is not None:
+            # 按钮在刷新期间已经显示“刷新中…”，这里再给程序化调用一个反馈。
+            if manual:
+                try:
+                    show_toast('正在刷新，请稍候...', 'info', self, 2200)
+                except Exception:
+                    pass
             return
         if (
             not force
@@ -783,12 +787,13 @@ class NewsPage(QWidget):
                     items = parse_news_page(cached)
                     if items:
                         self._news_signature = hashlib.sha1(cached.encode('utf-8')).hexdigest()[:16]
-                        self._error_notice_timer.stop()
                         self._render(items)
                 except Exception:
                     logger.warning('解析缓存的新闻内容失败', exc_info=True)
         self._loaded = True
+        self._refresh_manual = manual
         self.refresh_btn.setEnabled(False)
+        self.refresh_btn.setText('刷新中…')
         self._last_request_at = time.monotonic()
         self._request_news()
         if not self._cache_prune_scheduled:
@@ -818,6 +823,7 @@ class NewsPage(QWidget):
             return
         self._reply = None
         self.refresh_btn.setEnabled(True)
+        self.refresh_btn.setText('刷新')
         error = ''
         text = ''
         if reply.error() != QNetworkReply.NoError:
@@ -844,10 +850,17 @@ class NewsPage(QWidget):
             self._on_news_loaded(text)
 
     def _on_news_loaded(self, text):
+        manual = self._refresh_manual
         try:
             signature = hashlib.sha1(text.encode('utf-8')).hexdigest()[:16]
             if self._cards and signature == self._news_signature:
-                self._error_notice_timer.stop()
+                self._refresh_manual = False
+                if manual:
+                    self._scroll_to_top()
+                    try:
+                        show_toast('已是最新', 'info', self, 2400)
+                    except Exception:
+                        pass
                 return
             items = parse_news_page(text)
             if not items:
@@ -861,18 +874,22 @@ class NewsPage(QWidget):
             except OSError:
                 pass
             self._render(items)
+            self._refresh_manual = False
+            if manual:
+                QTimer.singleShot(0, self._scroll_to_top)
         except Exception as exc:
             logger.warning('渲染新闻内容失败', exc_info=True)
             reason = str(exc).strip() or type(exc).__name__
             self._on_news_error(f'新闻内容解析失败：{reason}')
 
     def _on_news_error(self, message):
-        # 保留已缓存的新闻卡片，只延迟提示刷新失败。
+        # 保留已缓存的新闻卡片，立即提示刷新失败。
         self._last_error_reason = str(message or '未知错误')
+        self._refresh_manual = False
         if not self._cards:
             self._show_error(message)
         if self.isVisible():
-            self._error_notice_timer.start(2500)
+            self._show_refresh_error_toast()
 
     def _show_refresh_error_toast(self):
         reason = str(getattr(self, '_last_error_reason', '') or '未知错误')[:220]
