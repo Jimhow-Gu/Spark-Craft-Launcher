@@ -6,6 +6,7 @@
 from __future__ import annotations
 import hashlib
 import os
+import shutil
 import socket
 import sys
 import threading
@@ -301,8 +302,28 @@ class HttpClient:
                     total = size
                 mode = 'ab' if resp.status_code == 206 and tmp.exists() else 'wb'
                 done = tmp.stat().st_size if mode == 'ab' and tmp.exists() else 0
+                # Content-Length 可能比调用方传入的 size 更准确；写入前
+                # 再检查一次目标盘，未知大小时保留最低安全余量。
+                free_now = None
+                try:
+                    free_now = shutil.disk_usage(str(dest.parent)).free
+                except OSError:
+                    pass
+                if free_now is not None:
+                    remaining = max(0, total - done) if total else 0
+                    if total and free_now < remaining:
+                        raise DownloadError(
+                            '磁盘空间不足：需要约 %.2f GB，当前剩余 %.2f GB'
+                            % (remaining / (1024 ** 3), free_now / (1024 ** 3))
+                        )
+                    if not total and free_now < 16 * 1024 * 1024:
+                        raise DownloadError(
+                            '磁盘空间不足：当前剩余 %.1f MB'
+                            % (free_now / (1024 ** 2))
+                        )
                 check_time = time.time()
                 check_done = done
+                disk_check_done = done
                 read_chunk = min(chunk_size, 16384) if slow_fallback else chunk_size
                 with open(tmp, mode) as fh:
                     for chunk in resp.iter_content(chunk_size=read_chunk):
@@ -312,6 +333,17 @@ class HttpClient:
                             continue
                         fh.write(chunk)
                         done += len(chunk)
+                        if not total and done - disk_check_done >= 8 * 1024 * 1024:
+                            disk_check_done = done
+                            try:
+                                free_after = shutil.disk_usage(str(dest.parent)).free
+                            except OSError:
+                                free_after = None
+                            if free_after is not None and free_after < 8 * 1024 * 1024:
+                                raise DownloadError(
+                                    '磁盘空间不足：当前剩余 %.1f MB'
+                                    % (free_after / (1024 ** 2))
+                                )
                         DownloadSpeedLimiter.throttle(len(chunk), cancel)
                         if progress:
                             progress(done, total)

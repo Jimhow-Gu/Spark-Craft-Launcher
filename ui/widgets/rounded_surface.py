@@ -72,6 +72,22 @@ class RoundedGroupBox(_RoundedSurface, QGroupBox):
     def __init__(self, parent=None, *, radius=12):
         super().__init__(parent)
         self._init_surface(radius)
+        # QGroupBox 即使没有标题也会预留标题区；这里关闭该保留空间，
+        # 让无标题设置卡片的标题从卡片顶部按内边距正常排列。
+        self._apply_title_space('')
+
+    def _apply_title_space(self, title):
+        if str(title or '').strip():
+            # 有标题的卡片（游戏设置）需要保留标题区域，恢复全局样式。
+            self.setStyleSheet('')
+        else:
+            self.setStyleSheet(
+                'QGroupBox { margin-top: 0px; padding-top: 0px; }'
+            )
+
+    def setTitle(self, title):
+        super().setTitle(title)
+        self._apply_title_space(title)
 
 
 __all__ = ['RoundedFrame', 'RoundedGroupBox']

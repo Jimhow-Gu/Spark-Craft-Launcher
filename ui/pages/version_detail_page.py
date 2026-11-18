@@ -464,6 +464,7 @@ class VersionDetailPage(QWidget):
             arrow.hide()
             container.setCursor(Qt.ArrowCursor)
         btn = QPushButton()
+        btn.setFocusPolicy(Qt.NoFocus)
         btn.hide()
         self._loader_buttons[loader_id] = btn
         container.clicked.connect((lambda lid=loader_id: self._on_loader_card_clicked(lid)))

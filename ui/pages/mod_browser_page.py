@@ -2842,10 +2842,10 @@ class ModBrowserPage(QWidget):
         if total > 0:
             text = (
                 f'下载中... {done / 1024 / 1024:.1f} / '
-                f'{total / 1024 / 1024:.1f} MB'
+                f'{total / 1024 / 1024:.1f} MB · {percent:.2f}%'
             )
         else:
-            text = f'下载中... {done / 1024 / 1024:.1f} MB'
+            text = f'下载中... {done / 1024 / 1024:.1f} MB · {percent:.2f}%'
         speed_text = context.get('speed_text') or ''
         if speed_text:
             text += f' · {speed_text}'

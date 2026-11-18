@@ -32,7 +32,7 @@ def _prepare_qt_runtime():
 
 _prepare_qt_runtime()
 
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QStyleFactory
 from PySide6.QtCore import Qt, QObject, QEvent, QTimer
 from PySide6.QtGui import QFont, QIcon
 
@@ -356,7 +356,15 @@ def main():
     except Exception:
         pass
     from ui.widgets.checkbox_style import CheckBoxProxyStyle
-    app.setStyle(CheckBoxProxyStyle())
+    # Windows 10 的 Vista 原生样式会忽略自定义暗色 QPalette，导致勾选框/
+    # 单选框文字仍使用系统深浅色。Fusion 样式完全按调色板绘制，Win10/11
+    # 主题表现一致；勾选框和滑条仍由 CheckBoxProxyStyle 自绘。
+    fusion_style = QStyleFactory.create('Fusion')
+    app._base_ui_style = fusion_style
+    app.setStyle(
+        CheckBoxProxyStyle(fusion_style) if fusion_style is not None
+        else CheckBoxProxyStyle()
+    )
     from ui.widgets.smooth_scroll import SmoothScroller
     app._smooth_scroller = SmoothScroller(app)
     app.installEventFilter(app._smooth_scroller)
@@ -414,13 +422,16 @@ def main():
     except Exception:
         pass
 
-    # 更新时旧 exe 会被重命名为 .old；等旧进程退出后由后台线程清理。
+    # 更新时旧 exe 会被重命名为 .old。先同步快速尝试一次（旧进程通常
+    # 已经退出），再交给后台线程按 1/2/4/8/15/30/60/120 秒继续重试，
+    # 避免用户启动后很快关闭导致清零机会被错过。
     try:
         import threading
         from core.update import cleanup_old_executable
+        cleanup_old_executable(retries=4, retry_rounds=1)
         threading.Thread(
             target=cleanup_old_executable,
-            kwargs={'retry_rounds': 6},
+            kwargs={'retry_rounds': 9},
             daemon=True,
         ).start()
     except Exception:
@@ -501,8 +512,12 @@ def main():
 
     exit_code = int(app.exec() or 0)
     # 正常退出优先走 Qt/Python 的析构流程：先停媒体设备和 worker，
-    # 再让窗口 deleteLater 并在事件循环中真正销毁。只有析构被残留
-    # 线程卡住时才由下面的超时线程 os._exit 兜底。
+    # 再让窗口 deleteLater 并在事件循环中真正销毁。媒体析构可能卡住，
+    # 所以 watchdog 必须先启动；只有超时才由 os._exit 兜底。
+    import threading
+    fallback = threading.Timer(8.0, lambda: os._exit(exit_code))
+    fallback.daemon = True
+    fallback.start()
     try:
         from core.thread_guard import shutdown_threads
         shutdown_threads()
@@ -514,14 +529,17 @@ def main():
         app.processEvents()
     except Exception:
         pass
+    # 退出前旧进程通常已经释放 .old 句柄；再快速清理一次，避免下次启动
+    # 才看到残留文件。
+    try:
+        from core.update import cleanup_old_executable
+        cleanup_old_executable(retries=3, retry_rounds=1)
+    except Exception:
+        pass
     try:
         logging.shutdown()
     except Exception:
         pass
-    import threading
-    fallback = threading.Timer(8.0, lambda: os._exit(exit_code))
-    fallback.daemon = True
-    fallback.start()
     sys.exit(exit_code)
 
 if __name__ == "__main__":

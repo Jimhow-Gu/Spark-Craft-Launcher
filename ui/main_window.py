@@ -2022,6 +2022,12 @@ class MainWindow(QMainWindow):
             )
         except Exception:
             pass
+        dialog = self._update_dialog
+        if dialog is not None:
+            try:
+                dialog.begin_restart()
+            except Exception:
+                pass
         try:
             from ui.widgets.toast import show_toast
             show_toast('更新已下载，正在自动重启安装...', 'update', self, 4000)
@@ -2170,6 +2176,20 @@ class MainWindow(QMainWindow):
                 pass
             from core.single_instance import release_single_instance
             release_single_instance()
+            # 媒体后端在部分驱动上会卡在 setSource/析构；watchdog 必须在
+            # shutdown_media() 之前启动，否则卡死时永远走不到兜底。
+            import threading
+            def _force_exit():
+                try:
+                    from core.thread_guard import shutdown_threads
+                    shutdown_threads()
+                except Exception:
+                    pass
+                self._flush_exit_state()
+                os._exit(0)
+            timer = threading.Timer(15.0, _force_exit)
+            timer.daemon = True
+            timer.start()
             self.shutdown_media()
             try:
                 from core.java_scan import JavaScanService
@@ -2186,20 +2206,6 @@ class MainWindow(QMainWindow):
                 except RuntimeError:
                     pass
                 self._update_checker = None
-            import threading
-            # 给各页面 worker 留出 quit/wait 的时间；1 秒会抢在
-            # account_page 的 5 秒等待之前 os._exit，导致线程被销毁告警。
-            def _force_exit():
-                try:
-                    from core.thread_guard import shutdown_threads
-                    shutdown_threads()
-                except Exception:
-                    pass
-                self._flush_exit_state()
-                os._exit(0)
-            timer = threading.Timer(15.0, _force_exit)
-            timer.daemon = True
-            timer.start()
             for name in (
                 'version_page', 'account_page', 'settings_page', 'news_page'
             ):

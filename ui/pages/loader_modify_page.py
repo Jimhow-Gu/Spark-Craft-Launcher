@@ -1131,7 +1131,7 @@ class LoaderModifyPage(QWidget):
         scroll.setStyleSheet('QScrollArea { background:transparent; border:none; }')
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(0, 0, 0, 30)
+        layout.setContentsMargins(0, 24, 0, 30)
         layout.setSpacing(12)
 
         name_block = QWidget()

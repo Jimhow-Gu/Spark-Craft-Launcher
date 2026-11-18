@@ -193,7 +193,7 @@ class _TaskCard(QFrame):
                      )
             icon.setText(mark)
             icon.setStyleSheet(f'color:{color}; font-size:15px; font-weight:900;')
-            text.setText(f'{step.get("text", "")}    {float(step.get("percent", 0)):.0f}%')
+            text.setText(f'{step.get("text", "")}    {float(step.get("percent", 0)):.2f}%')
             text.setStyleSheet(
                 f'color:{active_text if state in ("done", "active") else pending_text};'
                 'font-size:13px;'

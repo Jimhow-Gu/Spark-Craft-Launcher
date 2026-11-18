@@ -539,7 +539,7 @@ class ModManagerPage(QWidget):
         self.setAcceptDrops(True)
         self.setStyleSheet('background:transparent; color:#f0f0f0;')
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0 if self._embedded else 18, 0 if self._embedded else 14, 0 if self._embedded else 18, 10 if self._embedded else 14)
+        layout.setContentsMargins(0 if self._embedded else 18, 24 if self._embedded else 14, 0 if self._embedded else 18, 10 if self._embedded else 14)
         layout.setSpacing(8)
         if not self._embedded:
             top_bar = QHBoxLayout()

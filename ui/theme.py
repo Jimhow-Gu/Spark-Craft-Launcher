@@ -547,8 +547,16 @@ class ThemeManager(QObject):
         palette.setColor(QPalette.Highlight, QColor(ACCENT))
         palette.setColor(QPalette.HighlightedText, QColor(ON_ACCENT))
         palette.setColor(QPalette.Link, QColor(link))
-        palette.setColor(QPalette.Disabled, QPalette.Text, QColor(disabled))
-        palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor(disabled))
+        # Disabled 组在 Windows 10 会继承系统灰/黑色；显式统一，避免
+        # 暗色主题里出现黑字、浅色主题里出现白字。
+        for role in (
+            QPalette.WindowText,
+            QPalette.Text,
+            QPalette.ButtonText,
+            QPalette.PlaceholderText,
+            QPalette.ToolTipText,
+        ):
+            palette.setColor(QPalette.Disabled, role, QColor(disabled))
         return palette
 
     def _style_widget(self, widget: QWidget, light: bool):

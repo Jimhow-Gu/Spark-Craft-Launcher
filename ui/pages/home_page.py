@@ -510,6 +510,7 @@ class HomePage(QWidget):
         self.selector_dir_combo.customContextMenuRequested.connect(self._show_selector_dir_menu)
         top_bar.addWidget(self.selector_dir_combo)
         self.selector_dir_add_btn = QPushButton('添加')
+        self.selector_dir_add_btn.setFocusPolicy(Qt.NoFocus)
         self.selector_dir_add_btn.setFixedSize(56, 32)
         self.selector_dir_add_btn.setStyleSheet(
             'QPushButton { background: #90D9D9; color: #122828; border: none;'

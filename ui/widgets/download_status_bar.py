@@ -39,7 +39,7 @@ class DownloadStatusBar(QFrame):
         self._progress_anim = QPropertyAnimation(self.progress, b'value', self)
         self._progress_anim.setDuration(160)
         self._progress_anim.setEasingCurve(QEasingCurve.OutCubic)
-        self.percent_label = QLabel('0%')
+        self.percent_label = QLabel('0.00%')
         self.percent_label.setFixedWidth(56)
         self.percent_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         layout.addWidget(self.percent_label)

@@ -385,6 +385,7 @@ class VersionPage(QWidget):
         self.game_dir_combo.customContextMenuRequested.connect(self._show_game_dir_menu)
         header.addWidget(self.game_dir_combo)
         self.add_game_dir_btn = QPushButton('+')
+        self.add_game_dir_btn.setFocusPolicy(Qt.NoFocus)
         self.add_game_dir_btn.setToolTip('添加游戏文件夹')
         self.add_game_dir_btn.setFixedSize(34, 32)
         self.add_game_dir_btn.setStyleSheet('QPushButton { background:#3a3a3a; color:white; border:none; border-radius:6px; padding:0; font-size:18px; font-weight:900; } QPushButton:hover { background:#4a4a4a; }')

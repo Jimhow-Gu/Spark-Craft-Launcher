@@ -169,8 +169,9 @@ class BackgroundMusicPlayer(QObject):
         """释放媒体播放器与音频设备，供启动器退出时调用。"""
 
         try:
+            # 关闭时同步 setSource(QUrl()) 可能卡住媒体后端；
+            # 停止后交给 deleteLater 释放即可。
             self._player.stop()
-            self._player.setSource(QUrl())
         except Exception:
             pass
         try:

@@ -232,8 +232,9 @@ class BackgroundWidget(QWidget):
                 pass
         if player is not None:
             try:
+                # 关闭时同步 setSource(QUrl()) 可能卡住媒体后端；
+                # stop + deleteLater 已足够释放播放器。
                 player.stop()
-                player.setSource(QUrl())
                 player.deleteLater()
             except RuntimeError:
                 pass

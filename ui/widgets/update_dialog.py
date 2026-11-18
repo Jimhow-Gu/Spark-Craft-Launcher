@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import re
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QTextBrowser, QVBoxLayout, QWidget)
+from PySide6.QtGui import QPalette
+from PySide6.QtWidgets import (QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QTextBrowser, QVBoxLayout, QWidget)
 
 from core.update import UpdateDownloadWorker
 from core.paths import scl_dir
@@ -20,18 +21,16 @@ class UpdateDialog(QDialog):
         self.asset_path = ''
         self.error = ''
         self._worker = None
+        self._primary_state = 'download'
+        try:
+            self._light = (
+                QApplication.palette().color(QPalette.Window).lightness() > 128
+            )
+        except Exception:
+            self._light = False
         self.setWindowTitle('发现修复更新' if self.update_kind == 'dll' else '发现新版本')
         self.setModal(True)
         self.setMinimumWidth(520)
-        self.setStyleSheet(
-            'QDialog { background:#1f2229; }'
-            'QLabel { color:#f0f0f0; background:transparent; }'
-            'QProgressBar { background:rgba(255,255,255,0.12); border:none; border-radius:6px; height:12px; }'
-            'QProgressBar::chunk { background:#88DDDD; border-radius:6px; }'
-            'QPushButton { background:#3a3d47; color:#f0f0f0; border:none; border-radius:7px; padding:7px 18px; }'
-            'QPushButton:hover { background:#4a4d57; }'
-            'QPushButton:disabled { background:#30333b; color:#858a94; }'
-        )
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
@@ -45,30 +44,31 @@ class UpdateDialog(QDialog):
         )
         title.setStyleSheet('font-size:17px; font-weight:900;')
         top_layout.addWidget(title)
-        name = QLabel(str(self.info.get('name') or ''))
-        name.setStyleSheet('color:rgba(255,255,255,0.72); font-size:13px;')
-        top_layout.addWidget(name)
+        self.name_label = QLabel(str(self.info.get('name') or ''))
+        self.name_label.setStyleSheet('font-size:13px;')
+        top_layout.addWidget(self.name_label)
         outer.addWidget(top)
         notes = str(self.info.get('body') or '').strip()
         notes = re.sub(r'(?im)^\s*(?:DLL[\s_-]*BUILD|DLL版号)\s*[:=：].*$', '', notes).strip()
+        self.body = None
         if notes:
-            body = QTextBrowser()
-            body.setPlainText(notes)
-            body.setOpenExternalLinks(False)
-            body.setFrameShape(QFrame.NoFrame)
-            body.setMinimumHeight(90)
-            body.setMaximumHeight(190)
-            body.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            body.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-            body.setStyleSheet(
+            self.body = QTextBrowser()
+            self.body.setPlainText(notes)
+            self.body.setOpenExternalLinks(False)
+            self.body.setFrameShape(QFrame.NoFrame)
+            self.body.setMinimumHeight(90)
+            self.body.setMaximumHeight(190)
+            self.body.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.body.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            self.body.setStyleSheet(
                 'QTextBrowser { background:transparent; border:none;'
-                ' color:rgba(255,255,255,0.58); font-size:12px; }'
+                ' font-size:12px; }'
             )
             notes_row = QHBoxLayout()
             # 右侧不留边距，让更新说明的滚动条贴到窗口最右侧。
             notes_row.setContentsMargins(24, 12, 0, 0)
             notes_row.setSpacing(0)
-            notes_row.addWidget(body)
+            notes_row.addWidget(self.body)
             outer.addLayout(notes_row)
         bottom = QWidget()
         bottom_layout = QVBoxLayout(bottom)
@@ -79,7 +79,7 @@ class UpdateDialog(QDialog):
             else '是否下载并安装此更新？'
         )
         self.status_label.setWordWrap(True)
-        self.status_label.setStyleSheet('color:rgba(255,255,255,0.62); font-size:12px;')
+        self.status_label.setStyleSheet('font-size:12px;')
         bottom_layout.addWidget(self.status_label)
         self.progress = RoundedProgressBar()
         self.progress.setRange(0, 1000)
@@ -89,7 +89,7 @@ class UpdateDialog(QDialog):
         bottom_layout.addWidget(self.progress)
         self.error_label = QLabel('')
         self.error_label.setWordWrap(True)
-        self.error_label.setStyleSheet('color:#ff8a8a; font-size:12px;')
+        self.error_label.setStyleSheet('font-size:12px;')
         self.error_label.hide()
         bottom_layout.addWidget(self.error_label)
         row = QHBoxLayout()
@@ -97,15 +97,105 @@ class UpdateDialog(QDialog):
         self.later_btn = QPushButton('稍后更新')
         self.later_btn.clicked.connect(self.reject)
         self.download_btn = QPushButton('下载更新')
-        self.download_btn.setStyleSheet('QPushButton { background:#90D9D9; color:#122828; }')
         self.download_btn.clicked.connect(self._on_primary_clicked)
         row.addWidget(self.later_btn)
         row.addWidget(self.download_btn)
         bottom_layout.addLayout(row)
         outer.addWidget(bottom)
+        # 本对话框自己处理明暗主题，避免 ThemeManager 再对已适配的
+        # 浅色样式做二次反转。
+        for widget in [self, *self.findChildren(QWidget)]:
+            widget.setProperty('_theme_ignore', True)
+        self._apply_theme()
         cached = self._find_cached_asset()
         if cached:
             self._set_ready(cached)
+
+    def _apply_primary_button(self):
+        state = self._primary_state
+        light = bool(self._light)
+        if state in ('download', 'retry'):
+            background, foreground = '#90D9D9', '#122828'
+        elif state == 'ready':
+            background, foreground = '#2e7d32', '#ffffff'
+        else:
+            background = '#edf1f1' if light else '#30333b'
+            foreground = '#8a9494' if light else '#858a94'
+        labels = {
+            'download': '下载更新',
+            'retry': '重试下载',
+            'downloading': '下载中',
+            'ready': '重启安装',
+            'restarting': '正在重启...',
+        }
+        self.download_btn.setText(labels.get(state, '下载更新'))
+        self.download_btn.setEnabled(state not in ('downloading', 'restarting'))
+        self.download_btn.setStyleSheet(
+            f'QPushButton {{ background:{background}; color:{foreground};'
+            ' border:none; border-radius:7px; padding:7px 18px; }'
+        )
+
+    def _apply_theme(self):
+        light = bool(self._light)
+        background = '#f7fbfb' if light else '#1f2229'
+        text = '#1b1b1b' if light else '#f0f0f0'
+        muted = 'rgba(0,0,0,0.58)' if light else 'rgba(255,255,255,0.72)'
+        body_color = 'rgba(0,0,0,0.66)' if light else 'rgba(255,255,255,0.58)'
+        status_color = 'rgba(0,0,0,0.58)' if light else 'rgba(255,255,255,0.62)'
+        error_color = '#B42318' if light else '#ff8a8a'
+        button_bg = '#e8efef' if light else '#3a3d47'
+        button_hover = '#dbe7e7' if light else '#4a4d57'
+        disabled_bg = '#edf1f1' if light else '#30333b'
+        disabled_text = '#8a9494' if light else '#858a94'
+        track = 'rgba(0,0,0,0.10)' if light else 'rgba(255,255,255,0.12)'
+        chunk = '#409999' if light else '#88DDDD'
+        self.setStyleSheet(
+            f'QDialog {{ background:{background}; }}'
+            f'QLabel {{ color:{text}; background:transparent; }}'
+            f'QProgressBar {{ background:{track}; border:none; border-radius:6px; height:12px; }}'
+            f'QProgressBar::chunk {{ background:{chunk}; border-radius:6px; }}'
+            f'QPushButton {{ background:{button_bg}; color:{text}; border:1px solid '
+            + ('rgba(0,0,0,0.12)' if light else 'rgba(255,255,255,0.10)')
+            + '; border-radius:7px; padding:7px 18px; }'
+            f'QPushButton:hover {{ background:{button_hover}; }}'
+            f'QPushButton:disabled {{ background:{disabled_bg}; color:{disabled_text}; }}'
+        )
+        self.name_label.setStyleSheet(f'color:{muted}; font-size:13px;')
+        self.status_label.setStyleSheet(f'color:{status_color}; font-size:12px;')
+        self.error_label.setStyleSheet(f'color:{error_color}; font-size:12px;')
+        if self.body is not None:
+            self.body.setStyleSheet(
+                'QTextBrowser { background:transparent; border:none;'
+                f' color:{body_color}; font-size:12px; }}'
+            )
+        self.progress.set_fill_color(chunk)
+        self._apply_primary_button()
+
+    def set_light(self, light):
+        light = bool(light)
+        if light == getattr(self, '_light', None):
+            return
+        self._light = light
+        self._apply_theme()
+
+    def showEvent(self, event):
+        try:
+            light = (
+                QApplication.palette().color(QPalette.Window).lightness() > 128
+            )
+            if light != self._light:
+                self._light = light
+                self._apply_theme()
+        except Exception:
+            pass
+        super().showEvent(event)
+
+    def begin_restart(self):
+        # 自动下载完成后立刻锁定重启按钮，避免用户重复触发更新。
+        self._primary_state = 'restarting'
+        self.later_btn.setEnabled(False)
+        self.status_label.setText('更新已下载，正在重启安装...')
+        self._apply_primary_button()
 
     def _find_cached_asset(self):
         name = str(self.info.get('asset_name') or '').strip()
@@ -126,10 +216,10 @@ class UpdateDialog(QDialog):
         self.progress.setValue(1000)
         self.error_label.hide()
         self.status_label.setText('更新已下载，点击“重启安装”完成更新。也可以关闭窗口稍后更新。')
-        self.download_btn.setEnabled(True)
-        self.download_btn.setText('重启安装')
-        self.download_btn.setStyleSheet('QPushButton { background:#2e7d32; color:white; }')
+        self._primary_state = 'ready'
         self.later_btn.setText('稍后更新')
+        self.later_btn.setEnabled(True)
+        self._apply_primary_button()
 
     def _on_primary_clicked(self):
         if self.asset_path:
@@ -143,10 +233,10 @@ class UpdateDialog(QDialog):
             return
         if self._worker is not None and self._worker.isRunning():
             return
-        self.download_btn.setEnabled(False)
-        self.download_btn.setText('下载中')
-        self.download_btn.setStyleSheet('QPushButton { background:#30333b; color:#858a94; }')
+        self._primary_state = 'downloading'
         self.later_btn.setText('取消')
+        self.later_btn.setEnabled(True)
+        self._apply_primary_button()
         self.status_label.setText('正在连接中国大陆加速线路...')
         self.progress.show()
         self.progress.setValue(0)
@@ -180,10 +270,10 @@ class UpdateDialog(QDialog):
         self.error_label.setText(str(message))
         self.error_label.show()
         self.progress.hide()
-        self.download_btn.setEnabled(True)
-        self.download_btn.setText('重试下载')
-        self.download_btn.setStyleSheet('QPushButton { background:#90D9D9; color:#122828; }')
+        self._primary_state = 'retry'
         self.later_btn.setText('关闭')
+        self.later_btn.setEnabled(True)
+        self._apply_primary_button()
 
     def _on_finished(self):
         self._worker = None

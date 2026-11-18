@@ -191,7 +191,7 @@ class GameSettingsPage(QWidget):
             page_content = QWidget()
             page_layout = QVBoxLayout(page_content)
             # 内容紧跟标签栏，去掉每个 TAB 顶部空出来的第一行。
-            page_layout.setContentsMargins(0, 0, 0, 30)
+            page_layout.setContentsMargins(0, 24, 0, 30)
             page_layout.setSpacing(20)
             page_scroll.setWidget(page_content)
             return page_scroll, page_layout
@@ -664,7 +664,7 @@ class GameSettingsPage(QWidget):
         scroll.setStyleSheet('QScrollArea { background:transparent; border:none; }')
         content = QWidget()
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(24, 0, 24, 16)
+        content_layout.setContentsMargins(24, 24, 24, 16)
         content_layout.setSpacing(14)
 
         # 顶部：整合包名称 / 版本

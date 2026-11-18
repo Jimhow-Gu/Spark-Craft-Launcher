@@ -22,7 +22,7 @@ from core.paths import safe_rmtree, scl_dir
 CURRENT_VERSION = '1.11.4'
 VERSION_DISPLAY = 'V1.11.4（正式版）'
 # DLL 构建号在同一版本内递增；每次发布新大版本时重置为 1。
-EXECUTABLE_BUILD = '38'
+EXECUTABLE_BUILD = '39'
 REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
 API_KGGITHUB = f'https://api.kkgithub.com/repos/{REPO}/releases/latest'
@@ -958,11 +958,18 @@ def cleanup_old_executable(retries=20, retry_rounds=1):
         # 一次清理尝试最多等待约 5 秒；多轮之间给杀软/旧进程留出释放时间。
         for round_index in range(max(1, int(retry_rounds))):
             if round_index:
-                time.sleep((5, 15, 30, 60, 120)[min(round_index - 1, 4)])
+                time.sleep(
+                    (1, 2, 4, 8, 15, 30, 60, 120)[
+                        min(round_index - 1, 7)
+                    ]
+                )
             candidates = list(target.parent.glob(target.name + '*.old'))
             for old_exe in candidates:
+                last_error = None
                 for _ in range(max(1, int(retries))):
                     try:
+                        if not old_exe.exists():
+                            break
                         try:
                             os.chmod(old_exe, 0o666)
                         except OSError:
@@ -970,11 +977,12 @@ def cleanup_old_executable(retries=20, retry_rounds=1):
                         old_exe.unlink()
                         write_update_log(f'cleaned old executable {old_exe.name}')
                         break
-                    except OSError:
+                    except OSError as exc:
+                        last_error = exc
                         time.sleep(0.25)
                 else:
                     write_update_log(
-                        f'old executable still locked: {old_exe.name}'
+                        f'old executable still locked: {old_exe.name}: {last_error}'
                     )
             for _ in range(max(1, int(retries))):
                 if not old_internal.exists():
