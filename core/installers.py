@@ -22,6 +22,7 @@ from core.paths import safe_rmtree
 from core.downloading import (DownloadClient, RemoteFile, fabric_profile_urls, forge_installer_urls as build_forge_installer_urls, maven_path_urls, neoforge_installer_urls as build_neoforge_installer_urls, quilt_profile_urls)
 from core.logging_setup import LOG_DIR
 from core.net import (DownloadCancelled, DownloadError, DownloadGate, HttpClient)
+from core.staged import staged_download
 from core.paths import scl_dir
 from core.repair import RepairEngine, _rewrite_mojang_url
 logger = logging.getLogger('Installers')
@@ -183,30 +184,61 @@ def _is_zip_archive(path):
     except (OSError, zipfile.BadZipFile):
         return False
 
-def _download_installer(candidates, dest, *, http=None, status_cb=(lambda _s: None), progress_cb=None, cancel=(lambda: False)):
-    '''依次尝试镜像/官方源，避免单一下载地址失效导致安装失败。'''
+def _installer_sha1(candidates, http):
+    """尝试读取 Forge/NeoForge Maven 的 .sha1 兄弟文件。"""
 
-    http = http or HttpClient(timeout=60)
-    last_error = None
-    for index, url in enumerate(candidates):
-        if cancel():
-            raise InstallCancelled()
-        if index:
-            status_cb('下载源不可用，正在切换备用源...')
+    for url in candidates or []:
+        url = str(url or '')
+        if not url or '.sha1' in url:
+            continue
+        if not any(
+            host in url
+            for host in (
+                'maven.minecraftforge.net',
+                'maven.neoforged.net',
+                'maven.fabricmc.net',
+            )
+        ):
+            continue
+        sha_url = url + '.sha1'
         try:
-            if dest.exists():
-                dest.unlink(missing_ok=True)
-            http.download(url, dest, cancel=cancel, allow_slow_fallback=False, progress=(lambda done, total: progress_cb(int(done * 100 / total)) if total else 0) if progress_cb else None)
-            if _is_zip_archive(dest):
-                return dest
-            last_error = DownloadError('安装器文件无效')
-        except (InstallCancelled, DownloadCancelled):
-            raise
-        except Exception as exc:
-            last_error = exc
-        if dest.exists():
-            dest.unlink(missing_ok=True)
-    raise DownloadError(f'安装器下载失败：{last_error}')
+            resp = http.get(sha_url, timeout=15)
+            token = (resp.text or '').strip().split()[0] if resp.text else ''
+        except Exception:
+            continue
+        if re.fullmatch(r'[0-9a-fA-F]{40}', token or ''):
+            return token.lower()
+    return ''
+
+
+def _download_installer(candidates, dest, *, http=None, status_cb=(lambda _s: None), progress_cb=None, cancel=(lambda: False), sha1='', log_cb=None):
+    """下载安装器到临时文件，校验后原子替换；绝不再先删旧安装器。"""
+
+    candidates = list(candidates or [])
+    if not candidates:
+        raise DownloadError('没有可用的安装器下载地址')
+    owns_http = http is None
+    http = http or HttpClient(timeout=60)
+    digest = str(sha1 or '')
+    if not digest:
+        digest = _installer_sha1(candidates, http)
+    try:
+        return staged_download(
+            candidates,
+            dest,
+            http=http,
+            sha1=digest,
+            check_zip=True,
+            progress=(lambda done, total: progress_cb(int(done * 100 / total)) if progress_cb and total else 0) if progress_cb else None,
+            cancel=cancel,
+            status_cb=status_cb,
+            log=log_cb,
+            error_label='安装器下载',
+        )
+    finally:
+        if owns_http:
+            http.close()
+
 
 def retarget_launcher_profile(mc_dir, old_id, new_id):
     '''安装器生成的版本目录被改名后，同步修正 launcher_profiles.json。'''
@@ -929,7 +961,7 @@ def install_forge(mc_version, forge_version, mc_dir, custom_name, *, method='aut
         http = HttpClient(timeout=60)
         status_cb(f'正在下载 Forge {forge_version} 安装器...')
         emit('loader_file', 0)
-        _download_installer(_forge_installer_urls(mc_version, forge_version, official_first=mode == 'B'), installer, http=http, status_cb=status_cb, cancel=cancel, progress_cb=(lambda p: emit('loader_file', p * 0.2)))
+        _download_installer(_forge_installer_urls(mc_version, forge_version, official_first=mode == 'B'), installer, http=http, status_cb=status_cb, cancel=cancel, progress_cb=(lambda p: emit('loader_file', p * 0.2)), log_cb=log_cb)
         emit('loader_file', 20)
         update_progress('prepare', 15)
         profile = _read_forge_profile(installer)
@@ -978,7 +1010,7 @@ def install_forge(mc_version, forge_version, mc_dir, custom_name, *, method='aut
                 raise
             status_cb(f'安装方式 A 失败（{exc}），正在尝试安装方式 B：官方安装器...')
             log_cb(f'Forge 旧版安装方式 A 失败: {exc}')
-            _download_installer(_forge_installer_urls(mc_version, forge_version, official_first=True), installer, http=http, status_cb=status_cb, cancel=cancel)
+            _download_installer(_forge_installer_urls(mc_version, forge_version, official_first=True), installer, http=http, status_cb=status_cb, cancel=cancel, log_cb=log_cb)
             profile = _read_forge_profile(installer)
             if not _profile_is_legacy_forge(profile):
                 raise DownloadError('官方 Forge 安装器格式与镜像不一致，无法继续旧版兼容安装')
@@ -1138,7 +1170,7 @@ def install_neoforge(mc_version, neoforge_version, mc_dir, custom_name, *, metho
         nonlocal neoforge_version, installer
         status_cb(f'正在下载 NeoForge {neoforge_version} 安装器...')
         emit('loader_file', 0)
-        _download_installer(_neoforge_installer_urls(mc_version, neoforge_version, official_first=mode == 'B'), installer, http=http, status_cb=status_cb, cancel=cancel, progress_cb=(lambda p: emit('loader_file', p * 0.15)))
+        _download_installer(_neoforge_installer_urls(mc_version, neoforge_version, official_first=mode == 'B'), installer, http=http, status_cb=status_cb, cancel=cancel, progress_cb=(lambda p: emit('loader_file', p * 0.15)), log_cb=log_cb)
         emit('loader_file', 15)
         update_progress('prepare', 15)
         if not _neoforge_installer_supports_client(installer):
