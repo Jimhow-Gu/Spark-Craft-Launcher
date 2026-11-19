@@ -376,6 +376,14 @@ def main():
     # 只有首个实例才整理 SCL 运行目录，避免第二个实例移动正在使用的文件
     migrate_legacy_dirs()
     ensure_runtime_dirs()
+    try:
+        from core.java_download import cleanup_old_java_runtimes
+        import threading as _startup_threading
+        _startup_threading.Thread(
+            target=cleanup_old_java_runtimes, daemon=True
+        ).start()
+    except Exception:
+        pass
 
     from ui.widgets.dark_dialog import install_dark_message_boxes
     install_dark_message_boxes()
