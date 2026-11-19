@@ -200,16 +200,20 @@ def _format_speed(bytes_per_second):
 
 
 def _forgecdn_candidates(url):
-    if 'forgecdn.net' not in url:
-        return [url]
-    path = url.split('forgecdn.net', 1)[1]
+    if not url:
+        return []
     result = []
-    for host in ('https://mediafilez.forgecdn.net', 'https://edge.forgecdn.net'):
-        candidate = host + path
-        if candidate not in result:
-            result.append(candidate)
+    if 'forgecdn.net' in url:
+        path = url.split('forgecdn.net', 1)[1]
+        for host in ('https://mediafilez.forgecdn.net', 'https://edge.forgecdn.net'):
+            candidate = host + path
+            if candidate not in result:
+                result.append(candidate)
+    if url not in result:
+        result.append(url)
+    # Modrinth CDN 也生成 mcimirror 候选；此前只有 ForgeCDN 会走镜像。
     mirrored = pcl_mod_mirror(url)
-    if mirrored != url and mirrored not in result:
+    if mirrored and mirrored != url and mirrored not in result:
         result.append(mirrored)
     return result
 
@@ -828,7 +832,9 @@ class ModpackImportWorker(QThread):
             try:
                 _safe_join(self.mc_dir if root == 'mc' else alias_dir, rel)
             except DownloadError:
-                self.log_message.emit(f'跳过非法路径: {rel}')
+                if item.required:
+                    raise DownloadError(f'整合包文件路径非法，已中止导入: {rel}')
+                self.log_message.emit(f'跳过可选非法路径: {rel}')
                 continue
             records.append({
                 'path': rel.replace('\\', '/'),

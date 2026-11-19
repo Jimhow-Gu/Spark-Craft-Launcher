@@ -500,6 +500,9 @@ class VersionManager:
             return False
         try:
             safe_rmtree(ver_dir, ignore_errors=True)
+            if ver_dir.exists():
+                logger.error(f'删除版本 {version_id} 失败: 目录仍存在（可能被占用）')
+                return False
             return True
         except Exception as e:
             logger.error(f'删除版本 {version_id} 失败: {e}')

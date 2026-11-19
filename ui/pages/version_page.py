@@ -878,7 +878,26 @@ class VersionPage(QWidget):
     def _on_version_delete_failed(self, version_id, error):
         self.delete_btn.setText('删除')
         self.delete_btn.setEnabled(self.installed_list.currentItem() is not None)
-        QMessageBox.critical(self, '删除失败', f'无法删除版本 {version_id}：{error}\n\n如果游戏正在运行，请先退出游戏后重试。')
+        try:
+            version_dir = Path(self.config.get_mc_dir()) / 'versions' / version_id
+            partial = version_dir.exists()
+        except Exception:
+            partial = False
+        if partial:
+            QMessageBox.critical(
+                self,
+                '删除未完成',
+                f'版本 {version_id} 只删除了部分文件，当前目录可能已不完整。\n\n'
+                f'原因：{error}\n\n'
+                '请关闭正在运行的游戏后再次点击“删除”清理残留目录。',
+            )
+        else:
+            QMessageBox.critical(
+                self,
+                '删除失败',
+                f'无法删除版本 {version_id}：{error}\n\n'
+                '如果游戏正在运行，请先退出游戏后重试。',
+            )
 
     def _on_version_delete_finished(self, worker):
         if self._delete_worker is worker:
