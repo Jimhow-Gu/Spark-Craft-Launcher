@@ -826,24 +826,15 @@ class VersionPage(QWidget):
         new_name = rename_dialog.value.strip()
         if new_name == version_id:
             return
-        if not self.version_mgr.rename_version(version_id, new_name):
-            QMessageBox.critical(self, '重命名失败', '无法重命名版本文件夹，请检查权限或目录状态')
+        if not self.version_mgr.rename_version(
+            version_id, new_name, running_check=self._version_running
+        ):
+            reason = (
+                getattr(self.version_mgr, 'last_rename_error', '')
+                or '无法重命名版本，请检查权限或目录状态'
+            )
+            QMessageBox.critical(self, '重命名失败', reason)
             return
-        version_settings = self.config.get('version_settings', {})
-        if version_id in version_settings:
-            version_settings[new_name] = version_settings.pop(version_id)
-            self.config.set('version_settings', version_settings)
-        if self.config.get('selected_version') == version_id:
-            self.config.set('selected_version', new_name)
-        favorites = self.config.get('favorited_versions', [])
-        if version_id in favorites:
-            favorites = [new_name if v == version_id else v for v in favorites]
-            self.config.set('favorited_versions', favorites)
-        nicknames = self.config.get('version_nicknames', {}) or {}
-        if version_id in nicknames:
-            nicknames[new_name] = nicknames.pop(version_id)
-            self.config.set('version_nicknames', nicknames)
-        self.config.save()
         self._refresh_renamed_item(version_id, new_name)
         self.version_installed.emit(new_name)
         QMessageBox.information(self, '成功', f'版本已重命名为：{new_name}')

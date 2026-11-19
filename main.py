@@ -385,6 +385,15 @@ def main():
     except Exception:
         pass
 
+    rename_recovery_error = ''
+    try:
+        from core.version_rename import recover_pending_version_rename
+        rename_recovery_error = recover_pending_version_rename(
+            ConfigManager().get_mc_dir()
+        )
+    except Exception as exc:
+        rename_recovery_error = f'版本重命名恢复失败：{exc}'
+
     from ui.widgets.dark_dialog import install_dark_message_boxes
     install_dark_message_boxes()
     dialog_icon_filter = DialogIconFilter(app)
@@ -421,6 +430,17 @@ def main():
     except Exception:
         pass
     window.show()
+    if rename_recovery_error:
+        try:
+            from ui.widgets.toast import show_toast
+            QTimer.singleShot(
+                2500,
+                lambda: show_toast(
+                    rename_recovery_error, 'warning', window, 8000
+                ),
+            )
+        except Exception:
+            pass
     try:
         from core.update import consume_manual_update_notice
         manual_update_notice = consume_manual_update_notice()

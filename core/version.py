@@ -239,6 +239,7 @@ class VersionManager:
         self.versions_dir = Path(self.mc_dir) / 'versions'
         self.config = ConfigManager()
         self.dl_helper = DownloadHelper(self.config.get_mirror_list())
+        self.last_rename_error = ''
 
     def _dependency_version_ids(self) -> set[str]:
         '''被其他实例继承的原版/加载器版本只作为依赖，不在列表中重复显示。'''
@@ -341,6 +342,8 @@ class VersionManager:
             return result
         for ver_dir in entries:
             if not ver_dir.is_dir() or ver_dir.name in active_hidden:
+                continue
+            if ver_dir.name.startswith('.rename-'):
                 continue
             if (ver_dir / DEPENDENCY_MARKER).exists() or ver_dir.name in dependency_ids:
                 continue
@@ -533,68 +536,29 @@ class VersionManager:
             logger.error(f'删除版本 {version_id} 失败: {e}')
             return False
 
-    def rename_version(self, old_id, new_id):
-        '''重命名版本目录，并同步修正 JSON id 与 JAR 文件名。
+    def rename_version(self, old_id, new_id, running_check=None):
+        '''预检后通过 journal 两阶段重命名；失败自动回滚。'''
 
-        目标名称必须不与 versions 目录中的任何文件夹/文件重名
-        （Windows 下大小写不敏感），并拒绝非法与保留名称。
-        '''
-
+        self.last_rename_error = ''
         old_id = str(old_id or '').strip()
         new_id = str(new_id or '').strip()
-        if not old_id or not new_id or new_id in ('.', '..'):
-            return False
-        if re.search('[<>:"/\\\\|?*\\x00-\\x1f]', new_id):
-            return False
-        if new_id.endswith((' ', '.')):
-            return False
-        reserved = {'CON', 'PRN', 'AUX', 'NUL', *{f'COM{i}' for i in range(1, 10)}, *{f'LPT{i}' for i in range(1, 10)}}
-        if new_id.split('.', 1)[0].strip().upper() in reserved:
-            return False
-        old_dir = self.versions_dir / old_id
-        new_dir = self.versions_dir / new_id
-        if not old_dir.is_dir():
-            return False
-        try:
-            for item in self.versions_dir.iterdir():
-                if item.name.casefold() == new_id.casefold():
-                    return False
-        except OSError:
-            return False
-        if new_dir.exists():
-            return False
-        try:
-            old_dir.rename(new_dir)
-            json_files = list(new_dir.glob('*.json'))
-            if json_files:
-                json_path = json_files[0]
-                try:
-                    with open(json_path, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                    data['id'] = new_id
-                    if data.get('jar') == old_id:
-                        data['jar'] = new_id
-                    with open(json_path, 'w', encoding='utf-8') as f:
-                        json.dump(data, f, indent=2, ensure_ascii=False)
-                except Exception as e:
-                    logger.warning(f'修正重命名后的 JSON 失败: {e}')
-                expected_json = new_dir / f'{new_id}.json'
-                if json_path != expected_json:
-                    if expected_json.exists():
-                        expected_json.unlink()
-                    json_path.rename(expected_json)
-            old_jar = new_dir / f'{old_id}.jar'
-            if old_jar.exists():
-                old_jar.rename(new_dir / f'{new_id}.jar')
-                return True
-            if not (new_dir / f'{new_id}.jar').exists():
-                for jar in new_dir.glob('*.jar'):
-                    if jar.stem != new_id:
-                        jar.rename(new_dir / f'{new_id}.jar')
-                        return True
+        if old_id == new_id:
             return True
-        except Exception as e:
-            logger.error(f'重命名版本 {old_id} -> {new_id} 失败: {e}')
+        try:
+            from core.version_rename import build_rename_plan, execute_rename
+            plan = build_rename_plan(
+                old_id,
+                new_id,
+                self.versions_dir,
+                Path(self.mc_dir),
+                self.config,
+                running_check=running_check,
+            )
+            execute_rename(plan)
+            return True
+        except Exception as exc:
+            self.last_rename_error = str(exc)
+            logger.error(f'重命名版本 {old_id} -> {new_id} 失败: {exc}')
             return False
 
     def get_available_versions(self, version_type='release'):
