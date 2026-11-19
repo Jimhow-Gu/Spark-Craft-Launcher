@@ -38,7 +38,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.single_instance import acquire_single_instance, release_single_instance
+from core.single_instance import (acquire_single_instance, release_single_instance, send_activation_request, start_activation_server, stop_activation_server)
 
 
 def resource_path(relative: str) -> Path:
@@ -288,6 +288,7 @@ def main():
     from ui.widgets.themed_tooltip import install_themed_tooltips
     app._themed_tooltip_filter = install_themed_tooltips(app)
     app.aboutToQuit.connect(_shutdown_java_scan_service)
+    app.aboutToQuit.connect(stop_activation_server)
     app.aboutToQuit.connect(release_single_instance)
     app.setApplicationName("Spark Craft Launcher")
     app.setApplicationDisplayName("Spark Craft Launcher")
@@ -323,7 +324,10 @@ def main():
     app.setFont(ui_font(10))
 
     if not acquire_single_instance():
-        logging.getLogger("Startup").warning("检测到启动器已有实例，显示提示并退出当前实例")
+        logging.getLogger("Startup").info("检测到已有启动器，尝试激活已有窗口")
+        if send_activation_request():
+            sys.exit(0)
+        logging.getLogger("Startup").warning("已有实例但激活请求失败，显示提示")
         from ui.widgets.dark_dialog import DarkQuestionDialog
         DarkQuestionDialog(
             None, "提示",
@@ -333,6 +337,27 @@ def main():
         logging.getLogger("Startup").warning("已确认重复启动，当前实例退出")
         sys.exit(0)
     logging.getLogger("Startup").info("单实例锁已获取")
+    activation_state = {'window': None, 'pending': False}
+
+    def activate_existing_window():
+        target = activation_state.get('window')
+        if target is None:
+            activation_state['pending'] = True
+            return
+        try:
+            if target.isMinimized():
+                target.setWindowState(
+                    target.windowState() & ~Qt.WindowMinimized
+                )
+            target.show()
+            target.raise_()
+            target.activateWindow()
+        except Exception:
+            pass
+
+    activation_server = start_activation_server()
+    if activation_server is not None:
+        activation_server.activation_requested.connect(activate_existing_window)
 
     # 兜底：如果上次下载完更新但重启按钮没有生效，下次启动直接安装。
     try:
@@ -430,6 +455,9 @@ def main():
     except Exception:
         pass
     window.show()
+    activation_state['window'] = window
+    if activation_server is not None and activation_server.consume_pending():
+        QTimer.singleShot(0, activate_existing_window)
     if rename_recovery_error:
         try:
             from ui.widgets.toast import show_toast
