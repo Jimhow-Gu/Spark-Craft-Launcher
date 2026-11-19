@@ -281,7 +281,10 @@ class ModrinthSource(BaseSource):
         ident = idents[0]
         for candidate in idents:
             try:
-                data = self._get_json(f'{MODRINTH_API}/project/{quote(candidate)}/version', params=params)
+                data = self._get_json(
+                    f'{MODRINTH_API}/project/{quote(candidate)}/version',
+                    params=dict(params, offset=0),
+                )
                 ident = candidate
                 break
             except DownloadError as exc:
@@ -293,8 +296,26 @@ class ModrinthSource(BaseSource):
             return []
         if not isinstance(data, list):
             return []
-        if not isinstance(data, list):
+        if not data:
             return []
+        all_versions = list(data)
+        # Modrinth 版本接口支持 limit/offset；limit=100 会截断大项目的旧版本。
+        offset = 100
+        for _ in range(19):
+            if len(data) < 100:
+                break
+            page = self._get_json(
+                f'{MODRINTH_API}/project/{quote(ident)}/version',
+                params=dict(params, offset=offset),
+            )
+            if not isinstance(page, list) or not page:
+                break
+            all_versions.extend(page)
+            data = page
+            if len(page) < 100:
+                break
+            offset += 100
+        data = all_versions
         files = []
         for version in data:
             if not isinstance(version, dict):
