@@ -3,9 +3,11 @@
 from __future__ import annotations
 import html
 import json
+import os
 import re
 import shutil
 import time
+import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -383,6 +385,7 @@ class ModUpdateDownloadWorker(QThread):
                         http.download(
                             candidate, dest,
                             sha1=latest.get('sha1') or None,
+                            sha512=latest.get('sha512') or None,
                             size=latest.get('size') or None,
                             progress=on_download,
                             cancel=(lambda: self._cancelled),
@@ -722,20 +725,52 @@ class ModManagerPage(QWidget):
         errors = []
         copied = 0
         skipped = 0
+        plans = []
+        conflicts = []
         for file_path in files:
             src = Path(file_path)
             if not src.is_file() or not self._is_mod_filename(src.name):
                 errors.append(f'{src.name}: 不是有效的 Mod 文件')
                 continue
             dest = self.mods_dir / self._enabled_mod_name(src.name)
+            plans.append((src, dest))
+            if dest.exists() and src.resolve() != dest.resolve():
+                conflicts.append(dest.name)
+        if conflicts:
+            preview = chr(10).join(f'- {name}' for name in conflicts[:10])
+            if len(conflicts) > 10:
+                preview += f'{chr(10)}... 以及另外 {len(conflicts) - 10} 个'
+            reply = QMessageBox.question(
+                self,
+                '覆盖同名 Mod',
+                f'发现 {len(conflicts)} 个同名 Mod：{chr(10)}{chr(10)}{preview}'
+                f'{chr(10)}{chr(10)}覆盖前会把旧文件备份为 .bak-时间戳。是否继续？',
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                conflicts = []
+                plans = [pair for pair in plans if not pair[1].exists()]
+        for src, dest in plans:
             try:
                 if dest.exists() and src.resolve() == dest.resolve():
                     skipped += 1
                     continue
-                # 与 PCL 的拖入安装一致：同名文件覆盖，不保留旧 jar。
                 if dest.exists():
-                    dest.unlink()
-                shutil.copy2(src, dest)
+                    stamp = time.strftime('%Y%m%d-%H%M%S')
+                    backup = dest.with_name(
+                        f'{dest.name}.bak-{stamp}-{uuid.uuid4().hex[:6]}'
+                    )
+                    shutil.copy2(dest, backup)
+                temp = dest.with_name(f'.{dest.name}.{uuid.uuid4().hex}.new')
+                try:
+                    shutil.copy2(src, temp)
+                    os.replace(temp, dest)
+                finally:
+                    try:
+                        temp.unlink(missing_ok=True)
+                    except OSError:
+                        pass
                 copied += 1
             except OSError as exc:
                 errors.append(f'{src.name}: {exc}')
