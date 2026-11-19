@@ -22,7 +22,7 @@ from core.config import ConfigManager
 from core.download_manager import DownloadManager
 from core.launch import LaunchManager
 from core.modpack import (ModpackImportWorker, inspect_modpack, sanitize_version_name, is_windows_reserved_name)
-from core.version import (FullInstallWorker, VersionManager, VersionDeleteWorker, cleanup_deleted_version, detect_version_loader)
+from core.version import (FullInstallWorker, VersionManager, VersionDeleteWorker, VersionResidualCleanupWorker, cleanup_deleted_version, detect_version_loader)
 from core.net import HttpClient, is_network_error_text, network_available
 from core.paths import scl_dir
 from ui.widgets.toast import notify_network_failure
@@ -420,7 +420,12 @@ class VersionPage(QWidget):
         self.open_folder_btn.setEnabled(False)
         self.open_folder_btn.clicked.connect(self._on_open_version_folder)
         self.open_folder_btn.setStyleSheet(self._secondary_btn_style())
+        self.cleanup_residual_btn = QPushButton('清理残留')
+        self.cleanup_residual_btn.setToolTip('清理删除失败后没有版本 JSON 的残留目录')
+        self.cleanup_residual_btn.clicked.connect(self._on_cleanup_residual_versions)
+        self.cleanup_residual_btn.setStyleSheet(self._secondary_btn_style())
         btn_row.addStretch(1)
+        btn_row.addWidget(self.cleanup_residual_btn)
         btn_row.addWidget(self.open_folder_btn)
         btn_row.addWidget(self.rename_btn)
         btn_row.addWidget(self.delete_btn)
@@ -898,6 +903,49 @@ class VersionPage(QWidget):
                 f'无法删除版本 {version_id}：{error}\n\n'
                 '如果游戏正在运行，请先退出游戏后重试。',
             )
+
+    def _on_cleanup_residual_versions(self):
+        try:
+            paths = self.version_mgr.get_residual_version_dirs()
+        except Exception as exc:
+            QMessageBox.critical(self, '清理残留失败', str(exc))
+            return
+        if not paths:
+            QMessageBox.information(self, '清理残留', '没有发现残留版本目录。')
+            return
+        names = chr(10).join(f'- {path.name}' for path in paths[:12])
+        if len(paths) > 12:
+            names += f'{chr(10)}... 以及另外 {len(paths) - 12} 个目录'
+        reply = QMessageBox.question(
+            self,
+            '确认清理残留',
+            f'发现 {len(paths)} 个没有完整版本信息的残留目录：{chr(10)}{chr(10)}{names}'
+            f'{chr(10)}{chr(10)}这些目录无法正常启动，清理后不可恢复。确定继续吗？',
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self.cleanup_residual_btn.setEnabled(False)
+        self.cleanup_residual_btn.setText('清理中...')
+        worker = VersionResidualCleanupWorker(paths, self)
+        self._cleanup_residual_worker = worker
+        worker.done.connect(self._on_residual_cleanup_done)
+        worker.finished.connect(lambda w=worker: w.deleteLater())
+        worker.start()
+
+    def _on_residual_cleanup_done(self, removed, failed):
+        self.cleanup_residual_btn.setEnabled(True)
+        self.cleanup_residual_btn.setText('清理残留')
+        self._cleanup_residual_worker = None
+        self._load_installed_versions()
+        if failed:
+            QMessageBox.warning(
+                self, '清理残留',
+                f'已清理 {removed} 个目录，仍有 {failed} 个目录被占用，请关闭游戏后重试。',
+            )
+        else:
+            QMessageBox.information(self, '清理残留', f'已清理 {removed} 个残留目录。')
 
     def _on_version_delete_finished(self, worker):
         if self._delete_worker is worker:

@@ -324,6 +324,31 @@ class VersionManager:
         ver_dir = self.versions_dir / version_id
         return ver_dir.exists() and not (ver_dir / INCOMPLETE_MARKER).exists() and (ver_dir / f'{version_id}.json').exists()
 
+    def get_residual_version_dirs(self):
+        """返回残留版本目录：没有 JSON，或带有未完成标记。
+
+        这些目录不会出现在正常版本列表里，删除失败后需要单独的清理入口。
+        """
+
+        if not self.versions_dir.exists():
+            return []
+        dependency_ids = self._dependency_version_ids()
+        active_hidden = _active_install_hidden(self.versions_dir)
+        result = []
+        try:
+            entries = list(self.versions_dir.iterdir())
+        except OSError:
+            return result
+        for ver_dir in entries:
+            if not ver_dir.is_dir() or ver_dir.name in active_hidden:
+                continue
+            if (ver_dir / DEPENDENCY_MARKER).exists() or ver_dir.name in dependency_ids:
+                continue
+            expected_json = ver_dir / f'{ver_dir.name}.json'
+            if (ver_dir / INCOMPLETE_MARKER).exists() or not expected_json.is_file():
+                result.append(ver_dir)
+        return result
+
     def get_modded_versions(self):
         '''返回已安装的非原版实例，按最近安装/修改时间倒序。'''
 
@@ -1354,6 +1379,29 @@ class FullInstallWorker(QThread):
         except Exception as e:
             logger.error(f'修正 JSON 失败: {e}')
             return False
+
+
+class VersionResidualCleanupWorker(QThread):
+    """后台清理没有 JSON / 带未完成标记的残留版本目录。"""
+
+    done = Signal(int, int)
+
+    def __init__(self, paths, parent=None):
+        super().__init__(parent)
+        self.paths = [Path(path) for path in paths]
+
+    def run(self):
+        removed = 0
+        failed = 0
+        for path in self.paths:
+            if not path.exists():
+                continue
+            safe_rmtree(path, ignore_errors=True)
+            if path.exists():
+                failed += 1
+            else:
+                removed += 1
+        self.done.emit(removed, failed)
 
 
 class VersionDeleteWorker(QThread):

@@ -748,14 +748,40 @@ def _downloaded_marker_path():
 _MANUAL_UPDATE_NOTICE = ''
 
 
+def _manual_notice_path():
+    return scl_dir() / 'update' / 'manual_update_notice.json'
+
+
 def _set_manual_update_notice(message):
     global _MANUAL_UPDATE_NOTICE
-    _MANUAL_UPDATE_NOTICE = str(message or '')
+    message = str(message or '')
+    _MANUAL_UPDATE_NOTICE = message
+    try:
+        path = _manual_notice_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({'message': message, 'time': time.time()}, ensure_ascii=False),
+            encoding='utf-8',
+        )
+    except OSError:
+        pass
 
 
 def consume_manual_update_notice():
+    """读取并清除一次性提示；文件保证重启后仍能提示一次。"""
+
     global _MANUAL_UPDATE_NOTICE
-    message = _MANUAL_UPDATE_NOTICE
+    message = ''
+    try:
+        path = _manual_notice_path()
+        if path.is_file():
+            data = json.loads(path.read_text(encoding='utf-8'))
+            message = str(data.get('message') or '')
+            path.unlink(missing_ok=True)
+    except (OSError, ValueError, TypeError):
+        pass
+    if not message:
+        message = _MANUAL_UPDATE_NOTICE
     _MANUAL_UPDATE_NOTICE = ''
     return message
 
@@ -863,6 +889,10 @@ def downloaded_update_available():
 def clear_downloaded_update():
     try:
         _downloaded_marker_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+    try:
+        _manual_notice_path().unlink(missing_ok=True)
     except OSError:
         pass
 
