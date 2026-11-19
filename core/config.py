@@ -151,7 +151,7 @@ class ConfigManager:
             'background_music_index': 0,
             'background_music_paused': False,
             'background_music_autoplay': True,
-            'community_source_pref': 'official',
+            'community_source_pref': 'mirror',
             'mod_filename_format': 'bracket_title',
             'mod_manage_style': 'title_translated',
             'theme': 'system',
@@ -754,7 +754,57 @@ class ConfigManager:
 
     def set(self, key: str, value: Any, auto_save: bool = True):
         with self._save_lock:
-            self.config[key] = value
+            normalized = value
+            if key in ('memory_min', 'memory_max'):
+                normalized = self._valid_memory_text(value)
+                if normalized is None:
+                    logger.warning('拒绝非法内存值 %s=%r', key, value)
+                    return False
+                candidate = dict(self.config)
+                candidate[key] = normalized
+                self._clamp_memory_pair(candidate)
+                self.config['memory_min'] = candidate.get('memory_min', self.config.get('memory_min'))
+                self.config['memory_max'] = candidate.get('memory_max', self.config.get('memory_max'))
+            elif key == 'download_threads':
+                if isinstance(value, bool):
+                    return False
+                try:
+                    normalized = int(value)
+                except (TypeError, ValueError):
+                    return False
+                normalized = max(1, min(100, normalized))
+                self.config[key] = normalized
+            elif key == 'download_speed_limit':
+                if isinstance(value, bool):
+                    return False
+                try:
+                    normalized = float(value)
+                except (TypeError, ValueError):
+                    return False
+                if not math.isfinite(normalized) or normalized < 0:
+                    return False
+                self.config[key] = normalized
+            elif key in (
+                'background_music_volume', 'background_video_volume',
+                'background_opacity', 'background_ui_depth', 'ui_depth',
+            ):
+                if isinstance(value, bool):
+                    return False
+                try:
+                    normalized = int(value)
+                except (TypeError, ValueError):
+                    return False
+                self.config[key] = max(0, min(100, normalized))
+            elif key in ('launcher_window_width', 'launcher_window_height'):
+                if isinstance(value, bool):
+                    return False
+                try:
+                    normalized = int(value)
+                except (TypeError, ValueError):
+                    return False
+                self.config[key] = max(320, min(10000, normalized))
+            else:
+                self.config[key] = value
             if auto_save:
                 return self.save()
         return True

@@ -11,6 +11,7 @@ import shutil
 import sys
 import json
 import base64
+import math
 import logging
 import threading
 import time
@@ -1084,14 +1085,22 @@ class LaunchManager:
             mem_max = self._format_mem(version_settings.get('memory_max') or self.config.get('memory_max', '4G'))
         mem_min = self._format_mem(version_settings.get('memory_min') or self.config.get('memory_min', '512M'))
         def parse_mem_to_mb(mem_str):
-            match = re.match('^(\\d+)([GMK])$', mem_str)
+            match = re.match(
+                r'^\s*(\d+(?:\.\d+)?)\s*([GMK]?)\s*$',
+                str(mem_str or ''),
+                re.I,
+            )
             if not match:
                 return 2048
-            val, unit = int(match.group(1)), match.group(2)
+            try:
+                val = float(match.group(1))
+            except (TypeError, ValueError):
+                return 2048
+            if not math.isfinite(val) or val <= 0:
+                return 2048
+            unit = match.group(2).upper()
             if unit == 'G':
                 return val * 1024
-            if unit == 'M':
-                return val
             if unit == 'K':
                 return val / 1024
             return val
