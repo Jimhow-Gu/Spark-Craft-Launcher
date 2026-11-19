@@ -282,12 +282,13 @@ class DownloadWorker(QThread):
     status = Signal(str)
     done = Signal(str)
     error = Signal(str)
-    def __init__(self, url, dest, sha1='', size=0, urls=None):
+    def __init__(self, url, dest, sha1='', size=0, urls=None, sha512=''):
         super().__init__()
         self.url = url
         self.urls = list(urls) if urls else download_candidates(url)
         self.dest = Path(dest)
         self.sha1 = sha1
+        self.sha512 = sha512
         self.size = size
         self._cancelled = False
 
@@ -306,7 +307,14 @@ class DownloadWorker(QThread):
                 def progress(done, total):
                     self.progress.emit(int(done), int(total))
                 try:
-                    http.download(url, self.dest, sha1=self.sha1 or None, size=self.size or None, progress=progress, cancel=(lambda: self._cancelled))
+                    http.download(
+                        url, self.dest,
+                        sha1=self.sha1 or None,
+                        sha512=self.sha512 or None,
+                        size=self.size or None,
+                        progress=progress,
+                        cancel=(lambda: self._cancelled),
+                    )
                     if self._cancelled:
                         return
                     self.done.emit(str(self.dest))
@@ -2729,7 +2737,10 @@ class ModBrowserPage(QWidget):
                 )
                 return
             dest = unique_path(dest_dir, self._formatted_filename(project, mod_file))
-        worker = DownloadWorker(mod_file.download_url, dest, mod_file.sha1, mod_file.size)
+        worker = DownloadWorker(
+            mod_file.download_url, dest, mod_file.sha1, mod_file.size,
+            sha512=getattr(mod_file, 'sha512', ''),
+        )
         task_id = f'community-{self.project_type}-{id(self)}-{time.monotonic_ns()}'
         context = {
             'task_id': task_id,

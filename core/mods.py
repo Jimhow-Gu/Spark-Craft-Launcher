@@ -131,6 +131,9 @@ def download_candidates(url):
         ])
     elif 'mediafilez.forgecdn.net' in url or 'media.forgecdn.net' in url:
         official.append(url)
+        if 'forgecdn.net' in url:
+            path = url.split('forgecdn.net', 1)[1]
+            official.append('https://edge.forgecdn.net' + path)
     mirrored = pcl_mod_mirror(url)
     if mirrored and mirrored != url:
         mirror.append(mirrored)
@@ -138,11 +141,11 @@ def download_candidates(url):
         official.append(url)
     try:
         preference = str(
-            ConfigManager().get('community_source_pref', 'official') or 'official'
+            ConfigManager().get('community_source_pref', 'mirror') or 'mirror'
         ).lower()
     except Exception:
         preference = 'official'
-    candidates = mirror + official if preference == 'mirror' else official + mirror
+    candidates = mirror + official if preference in ('mirror', 'auto') else official + mirror
     if url not in candidates:
         candidates.append(url)
     return list(dict.fromkeys(candidates))
@@ -409,7 +412,7 @@ class ModrinthSource(BaseSource):
             if not primary or not primary.get('url'):
                 continue
             hashes = primary.get('hashes') or {}
-            candidate = {'version_id': str(row.get('id') or ''), 'version': str(row.get('version_number') or primary.get('filename') or ''), 'filename': str(primary.get('filename') or ''), 'url': str(primary.get('url') or ''), 'size': int(primary.get('size') or 0), 'sha1': str(hashes.get('sha1') or ''), 'date': str(row.get('date_published') or ''), 'release_type': str(row.get('version_type') or 'release')}
+            candidate = {'version_id': str(row.get('id') or ''), 'version': str(row.get('version_number') or primary.get('filename') or ''), 'filename': str(primary.get('filename') or ''), 'url': str(primary.get('url') or ''), 'size': int(primary.get('size') or 0), 'sha1': str(hashes.get('sha1') or ''), 'sha512': str(hashes.get('sha512') or ''), 'date': str(row.get('date_published') or ''), 'release_type': str(row.get('version_type') or 'release')}
             if latest is None:
                 latest = candidate
             elif candidate['release_type'] == 'release' and latest['release_type'] != 'release':

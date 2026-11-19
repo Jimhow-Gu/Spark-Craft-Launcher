@@ -211,10 +211,20 @@ def _forgecdn_candidates(url):
                 result.append(candidate)
     if url not in result:
         result.append(url)
-    # Modrinth CDN 也生成 mcimirror 候选；此前只有 ForgeCDN 会走镜像。
+    # Modrinth/ForgeCDN 都生成 mcimirror 候选；镜像优先由社区源设置决定。
     mirrored = pcl_mod_mirror(url)
     if mirrored and mirrored != url and mirrored not in result:
-        result.append(mirrored)
+        try:
+            from core.config import ConfigManager
+            pref = str(
+                ConfigManager().get('community_source_pref', 'mirror') or 'mirror'
+            ).lower()
+        except Exception:
+            pref = 'mirror'
+        if pref in ('mirror', 'auto'):
+            result.insert(0, mirrored)
+        else:
+            result.append(mirrored)
     return result
 
 

@@ -59,7 +59,7 @@ def ordered_candidates(official, mirrors, source=None):
     official_values = unique([official] if isinstance(official, str) else list(official or []))
     mirror_values = unique(list(mirrors or []))
     source = (source or current_source() or 'auto').lower()
-    if source == 'bmclapi':
+    if source in ('bmclapi', 'auto'):
         return unique(mirror_values + official_values)
     if source == 'official':
         return unique(official_values + mirror_values)
@@ -359,6 +359,7 @@ class RemoteFile:
     dest: Path
     urls: List[str] = field(default_factory=list)
     sha1: str = ''
+    sha512: str = ''
     size: Optional[int] = None
     optional: bool = False
     category: str = 'other'
@@ -381,6 +382,9 @@ class RemoteFile:
                 return True
             if self.sha1:
                 if hash_file(self.dest, 'sha1') != self.sha1.lower():
+                    return False
+            if self.sha512:
+                if hash_file(self.dest, 'sha512') != self.sha512.lower():
                     return False
             if self.check_zip and self.dest.suffix.lower() in ('.jar', '.zip'):
                 if not zipfile.is_zipfile(self.dest):
@@ -495,6 +499,9 @@ class DownloadClient:
                 if mode == 'full' and remote.sha1:
                     if hash_file(source, 'sha1') != remote.sha1.lower():
                         continue
+                if mode == 'full' and remote.sha512:
+                    if hash_file(source, 'sha512') != remote.sha512.lower():
+                        continue
                 remote.dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, remote.dest)
                 return True
@@ -595,7 +602,10 @@ class DownloadClient:
 
                 try:
                     self.client().download(
-                        url, remote.dest, sha1=remote.sha1 or None, size=remote.size,
+                        url, remote.dest,
+                        sha1=remote.sha1 or None,
+                        sha512=remote.sha512 or None,
+                        size=remote.size,
                         progress=progress, cancel=file_cancel,
                     )
                 except DownloadCancelled:

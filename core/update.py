@@ -81,6 +81,57 @@ def _download_candidates(info):
     return candidates
 
 
+def _probe_update_candidates(candidates, timeout=4):
+    """用 Range 读取一小段测吞吐，按速度排序；失败候选保留原顺序垫底。"""
+
+    candidates = list(candidates or [])
+    if len(candidates) <= 2:
+        return candidates
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def probe(item):
+        url, headers = item
+        client = None
+        try:
+            client = HttpClient(timeout=timeout, retries=1)
+            request_headers = dict(headers or {})
+            request_headers['Range'] = 'bytes=0-262143'
+            start = time.monotonic()
+            resp = client.session.get(
+                url,
+                headers=request_headers,
+                stream=True,
+                timeout=(3, 5),
+                verify=client._verify_certs,
+                allow_redirects=True,
+            )
+            if resp.status_code >= 400:
+                return item, 0.0
+            data = resp.raw.read(262144, decode_content=True) or b''
+            elapsed = max(0.001, time.monotonic() - start)
+            return item, len(data) / elapsed
+        except Exception:
+            return item, 0.0
+        finally:
+            if client is not None:
+                client.close()
+
+    ranked = []
+    with ThreadPoolExecutor(max_workers=max(1, min(4, len(candidates)))) as pool:
+        futures = [pool.submit(probe, item) for item in candidates]
+        for future in as_completed(futures):
+            try:
+                ranked.append(future.result())
+            except Exception:
+                continue
+    if not ranked:
+        return candidates
+    ranked.sort(key=lambda pair: pair[1], reverse=True)
+    return [item for item, speed in ranked if speed > 0] + [
+        item for item, speed in ranked if speed <= 0
+    ]
+
+
 def _download_urls(url):
     '''兼容旧调用：仅返回 URL，保留官方源作为最后回退。'''
 
@@ -153,9 +204,11 @@ def is_unpublished_build(info, current=CURRENT_VERSION, current_dll=EXECUTABLE_B
     return remote_dll > 0 and local_dll > remote_dll
 
 
-def _fetch_release_api(api_url, timeout, results):
+def _fetch_release_api(api_url, timeout, results, stop=None):
     http = None
     try:
+        if stop is not None and stop.is_set():
+            return
         http = HttpClient(timeout=timeout, retries=1)
         data = http.get_json(
             api_url,
@@ -164,6 +217,8 @@ def _fetch_release_api(api_url, timeout, results):
                 'User-Agent': 'Spark-Craft-Launcher-Updater',
             },
         )
+        if stop is not None and stop.is_set():
+            return
         if isinstance(data, dict) and data.get('tag_name'):
             results.put((api_url, data, None))
             return
@@ -226,24 +281,28 @@ def _asset_priority(assets, prefer_onedir):
 
 
 def fetch_latest_release(timeout=12, prefer_onedir=None):
-    '''并发读取最新 Release；哪个官方接口或镜像先返回就用哪个。'''
+    """并发读取 Release，取版本最高/构建号最大的结果，避免镜像旧缓存抢先。"""
 
     sources = list(dict.fromkeys(API_SOURCES))
     results = queue.Queue()
+    stop = threading.Event()
     for api_url in sources:
         threading.Thread(
             target=_fetch_release_api,
-            args=(api_url, timeout, results),
+            args=(api_url, timeout, results, stop),
             daemon=True,
             name='SCL-UpdateMeta',
         ).start()
 
-    data = None
+    payloads = []
     last_error = None
     deadline = time.monotonic() + max(6.0, float(timeout) + 2.0)
+    first_valid_at = None
     pending = len(sources)
     while pending > 0:
         remaining = deadline - time.monotonic()
+        if first_valid_at is not None:
+            remaining = min(remaining, first_valid_at + 1.5 - time.monotonic())
         if remaining <= 0:
             break
         try:
@@ -252,15 +311,26 @@ def fetch_latest_release(timeout=12, prefer_onedir=None):
             break
         pending -= 1
         if isinstance(payload, dict) and payload.get('tag_name'):
-            data = payload
-            break
+            payloads.append(payload)
+            if first_valid_at is None:
+                first_valid_at = time.monotonic()
+            continue
         if error is not None:
             last_error = error
-    if not isinstance(data, dict):
+    stop.set()
+    if not payloads:
         if last_error is not None:
             raise last_error
         return None
 
+    def rank(payload):
+        tag = str(payload.get('tag_name') or '')
+        return (
+            _version_tuple(tag),
+            _parse_dll_build(payload.get('body')),
+        )
+
+    data = max(payloads, key=rank)
     assets = data.get('assets') or []
     if prefer_onedir is None:
         prefer_onedir = is_onedir_install()
@@ -337,6 +407,9 @@ class UpdateDownloadWorker(QThread):
         if not candidates:
             self.failed.emit('该 Release 没有可下载的 exe/zip 附件')
             return
+        if len(candidates) > 2:
+            self.status.emit('正在测试更新源速度...')
+            candidates = _probe_update_candidates(candidates)
         update_dir = scl_dir() / 'update' / 'downloads'
         update_dir.mkdir(parents=True, exist_ok=True)
         dest = update_dir / re.sub(r'[^A-Za-z0-9._-]', '_', name)
@@ -430,13 +503,29 @@ class UpdateDownloadWorker(QThread):
         )
 
 
+def _looks_like_pe(path):
+    try:
+        with open(path, 'rb') as fh:
+            head = fh.read(4096)
+        if len(head) < 64 or head[:2] != b'MZ':
+            return False
+        pe_offset = int.from_bytes(head[0x3C:0x40], 'little')
+        if pe_offset < 0 or pe_offset + 24 > len(head):
+            return False
+        if head[pe_offset:pe_offset + 4] != b'PE' + bytes(2):
+            return False
+        machine = int.from_bytes(head[pe_offset + 4:pe_offset + 6], 'little')
+        return machine in (0x014c, 0x8664, 0xAA64)
+    except OSError:
+        return False
+
+
 def _extract_exe(asset_path):
     path = Path(asset_path)
     target = scl_dir() / 'update' / 'Spark Craft Launcher.exe.new'
     target.parent.mkdir(parents=True, exist_ok=True)
     if path.suffix.lower() == '.exe':
-        data = path.read_bytes()[:2]
-        if data != b'MZ':
+        if not _looks_like_pe(path):
             raise DownloadError('下载的更新文件不是有效的 exe')
         shutil.copy2(path, target)
         return target
@@ -456,7 +545,7 @@ def _extract_exe(asset_path):
         if not member:
             raise DownloadError('更新 zip 中没有可用的启动器 exe')
         target.write_bytes(zf.read(member))
-    if target.read_bytes()[:2] != b'MZ':
+    if not _looks_like_pe(target):
         raise DownloadError('更新文件不是有效的 exe')
     return target
 
