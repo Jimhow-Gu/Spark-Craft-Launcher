@@ -34,7 +34,7 @@ FORGE_MAVEN = 'https://maven.minecraftforge.net'
 NEOFORGE_MAVEN = 'https://maven.neoforged.net/releases'
 FABRIC_MAVEN = 'https://maven.fabricmc.net'
 QUILT_MAVEN = 'https://maven.quiltmc.org/repository/release'
-FORGE_MAVEN_MIRRORS = ('https://repo.cleanroommc.com/releases', 'https://maven.creeperhost.net')
+FORGE_MAVEN_MIRRORS = ()  # PCL2/PCL2-CE/HMCL 默认不使用额外第三方 Maven
 FORGE_VERSION_MANIFEST = 'https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml'
 
 
@@ -272,13 +272,19 @@ def maven_path_urls(path, official='', source=None):
     elif host == 'maven.neoforged.net':
         mirrors = [f'{base_mirror}/{path}' for base_mirror in FORGE_MAVEN_MIRRORS]
         mirrors += [f'{BMCLAPI}/maven/{path}', f'{OPENBMCLAPI}/maven/{path}']
-    elif host in ('maven.fabricmc.net', 'maven.quiltmc.org', 'libraries.minecraft.net'):
+    elif host == 'libraries.minecraft.net':
+        # PCL/HMCL 对 Mojang libraries 同时使用 /maven 与 /libraries 路径。
+        mirrors = [
+            f'{BMCLAPI}/maven/{path}', f'{BMCLAPI}/libraries/{path}',
+            f'{OPENBMCLAPI}/maven/{path}', f'{OPENBMCLAPI}/libraries/{path}',
+        ]
+    elif host in ('maven.fabricmc.net', 'maven.quiltmc.org'):
         mirrors = [f'{BMCLAPI}/maven/{path}', f'{OPENBMCLAPI}/maven/{path}']
     else:
+        # 未知 Maven 主机不能凭空拼 BMCL/maven 路径，只用可推导的官方镜像。
         mirrors = [
             rewrite_mojang_url(official),
             rewrite_mojang_url(official, OPENBMCLAPI),
-            f'{BMCLAPI}/maven/{path}',
         ]
     return ordered_candidates(official, mirrors, source)
 
@@ -286,7 +292,11 @@ def maven_path_urls(path, official='', source=None):
 def forge_companion_urls(forge_version, artifact):
     path = f'net/minecraftforge/{artifact}/{forge_version}/{artifact}-{forge_version}.jar'
     official = f'{FORGE_MAVEN}/{path}'
-    return ordered_candidates(official, [f'{base}/{path}' for base in FORGE_MAVEN_MIRRORS] + [f'{BMCLAPI}/maven/{path}'])
+    return ordered_candidates(
+        official,
+        [f'{base}/{path}' for base in FORGE_MAVEN_MIRRORS]
+        + [f'{BMCLAPI}/maven/{path}', f'{OPENBMCLAPI}/maven/{path}'],
+    )
 
 
 def forge_universal_urls(full_version):
@@ -314,11 +324,13 @@ def neoforge_installer_urls(mc_version, neoforge_version, prefer_official=False)
     path = f'net/neoforged/neoforge/{version}/neoforge-{version}-installer.jar'
     official = f'{NEOFORGE_MAVEN}/{path}'
     mirrors = [f'{base}/{path}' for base in FORGE_MAVEN_MIRRORS]
+    mirrors += [f'{BMCLAPI}/maven/{path}', f'{OPENBMCLAPI}/maven/{path}']
     if str(mc_version).startswith('1.20.1'):
         old = f'net/neoforged/forge/{mc_version}-{version}/forge-{mc_version}-{version}-installer.jar'
         official = f'{NEOFORGE_MAVEN}/{old}'
         mirrors = [f'{base}/{old}' for base in FORGE_MAVEN_MIRRORS]
-    return ordered_candidates(official, mirrors, 'official' if prefer_official else 'auto')
+        mirrors += [f'{BMCLAPI}/maven/{old}', f'{OPENBMCLAPI}/maven/{old}']
+    return ordered_candidates(official, mirrors, 'official' if prefer_official else 'bmclapi')
 
 
 def fabric_profile_urls(mc_version, loader_version):
@@ -357,6 +369,8 @@ class RemoteFile:
             if not self.dest.is_file():
                 return False
             stat = self.dest.stat()
+            if self.size == 0:
+                return stat.st_size == 0
             if mode == 'missing':
                 return stat.st_size > 0
             if self.size is not None and stat.st_size != self.size:
@@ -533,6 +547,12 @@ class DownloadClient:
         except OSError:
             return
         needed = max(0, int(remote.size or 0))
+        part = remote.dest.with_name(remote.dest.name + '.part')
+        try:
+            existing = part.stat().st_size if part.is_file() else 0
+        except OSError:
+            existing = 0
+        needed = max(0, needed - existing)
         if needed and free < needed:
             raise DownloadError(
                 f'{remote.label}: 磁盘空间不足（需要约 '
@@ -560,9 +580,9 @@ class DownloadClient:
             deadline = time.time() + self.file_deadline
         last_error = ''
         for round_index in range(self.rounds):
+            # 每轮保持相同优先级；失败由 _mark_host_failure 调整，不能奇偶反转，
+            # 否则镜像/官方会来回跳，重试行为不可预测。
             urls = self._candidate_order(remote.urls)
-            if round_index % 2 == 1:
-                urls = list(reversed(urls))
             for url in urls:
                 if cancel and cancel():
                     raise DownloadCancelled()
@@ -588,8 +608,11 @@ class DownloadClient:
                     self._mark_host_failure(url, exc)
                     continue
                 self._mark_host_success(url)
-                if remote.dest.is_file() and remote.dest.stat().st_size > 0:
-                    return True
+                if remote.dest.is_file():
+                    expected = remote.size
+                    actual = remote.dest.stat().st_size
+                    if expected is None or actual == expected:
+                        return True
                 last_error = '下载结果为空'
             if round_index + 1 < self.rounds:
                 if cancel and cancel():

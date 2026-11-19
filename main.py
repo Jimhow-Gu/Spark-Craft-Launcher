@@ -414,6 +414,19 @@ def main():
         pass
     window.show()
     try:
+        from core.update import consume_manual_update_notice
+        manual_update_notice = consume_manual_update_notice()
+        if manual_update_notice:
+            from ui.widgets.toast import show_toast
+            QTimer.singleShot(
+                2500,
+                lambda: show_toast(
+                    manual_update_notice, 'warning', window, 8000
+                ),
+            )
+    except Exception:
+        pass
+    try:
         if ConfigManager().recovered_bad_config:
             from ui.widgets.toast import show_toast
             QTimer.singleShot(

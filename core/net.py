@@ -6,6 +6,7 @@
 from __future__ import annotations
 import hashlib
 import os
+import re
 import shutil
 import socket
 import sys
@@ -296,8 +297,29 @@ class HttpClient:
                     continue
                 resp.raise_for_status()
                 total = int(resp.headers.get('Content-Length') or 0)
-                if resp.status_code == 206 and total:
-                    total += tmp.stat().st_size if tmp.exists() else 0
+                content_range = str(resp.headers.get('Content-Range') or '')
+                if resp.status_code == 206:
+                    # 服务器必须从 .part 现有长度继续；否则会把错误偏移的数据
+                    # 追加到文件里。Content-Range 缺失时保留旧兼容行为。
+                    match = re.match(
+                        r'bytes\s+(\d+)-(\d+)/(\d+|\*)',
+                        content_range.strip(),
+                        re.I,
+                    )
+                    if match:
+                        start = int(match.group(1))
+                        if start != resume_from:
+                            tmp.unlink(missing_ok=True)
+                            raise DownloadError(
+                                f'续传位置不匹配：期望 {resume_from}，'
+                                f'服务器返回 {start}'
+                            )
+                        if match.group(3) != '*':
+                            total = int(match.group(3))
+                        elif total:
+                            total += resume_from
+                    elif total:
+                        total += resume_from
                 elif not total and size:
                     total = size
                 mode = 'ab' if resp.status_code == 206 and tmp.exists() else 'wb'
@@ -356,9 +378,13 @@ class HttpClient:
                                     raise SlowDownloadError('官方源下载速度过慢，已切换到镜像源')
                                 check_time = now
                                 check_done = done
-                if done <= 0 or (total == 0 and tmp.stat().st_size == 0):
-                    tmp.unlink(missing_ok=True)
-                    raise DownloadError('下载结果为空')
+                actual_size = tmp.stat().st_size
+                # 0 字节是合法文件（例如空的 marker/占位文件）；只有服务器
+                # 明确返回失败或调用方期望非空时才拒绝。
+                if actual_size == 0 and (size is None or int(size) != 0):
+                    if total not in (0, None):
+                        tmp.unlink(missing_ok=True)
+                        raise DownloadError('下载结果为空')
                 if not self._verify(tmp, sha1=sha1, sha256=sha256, sha512=sha512, size=size):
                     tmp.unlink(missing_ok=True)
                     raise DownloadError('文件校验失败（哈希或大小不匹配）')
@@ -386,8 +412,11 @@ class HttpClient:
         try:
             if not path.is_file():
                 return False
-            if size is not None and path.stat().st_size != size:
-                return False
+            if size is not None:
+                if path.stat().st_size != size:
+                    return False
+                if size == 0 and not (sha1 or sha256 or sha512):
+                    return True
             if sha1:
                 return _hash_file(path, 'sha1') == sha1.lower()
             if sha256:

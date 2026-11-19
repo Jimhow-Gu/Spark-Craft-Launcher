@@ -16,7 +16,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
-from core.net import DownloadCancelled, DownloadError, HttpClient
+from core.net import DownloadCancelled, DownloadError, HttpClient, hash_file
 from core.paths import safe_rmtree, scl_dir
 
 CURRENT_VERSION = '1.11.4'
@@ -370,27 +370,45 @@ class UpdateDownloadWorker(QThread):
                     except Exception:
                         pass
                     # 下载完成后直接启动外部更新器并强制退出，完全不依赖界面按钮/定时器。
+                    version = str(self.info.get('version') or self.info.get('tag') or '')
                     try:
-                        version = str(self.info.get('version') or self.info.get('tag') or '')
                         prepare_update(dest, version)
-                        # 退出前让 GUI 线程释放 QMediaPlayer/音频设备，避免
-                        # 更新替换 exe 时仍有 D3D/WASAPI 句柄。
-                        try:
-                            from PySide6.QtCore import QMetaObject, Qt
-                            from PySide6.QtWidgets import QApplication
-                            app = QApplication.instance()
-                            if app is not None:
-                                for widget in app.topLevelWidgets():
-                                    if hasattr(widget, 'shutdown_media'):
-                                        QMetaObject.invokeMethod(
-                                            widget, 'shutdown_media', Qt.QueuedConnection
-                                        )
-                        except Exception:
-                            pass
-                        threading.Timer(2.0, lambda: os._exit(0)).start()
-                        write_update_log('download: external updater armed; exiting in 2s')
                     except Exception as exc:
-                        write_update_log(f'download: external updater failed: {exc}')
+                        write_update_log(
+                            f'download: external updater failed: {exc}'
+                        )
+                        # 不要报 done：文件下载成功但 exe 没有被替换，界面必须
+                        # 显示失败并保留已下载文件供下次启动重试。
+                        data = _read_downloaded_update()
+                        attempts = _bump_downloaded_attempts(data) if data else 0
+                        if attempts >= 3:
+                            clear_downloaded_update()
+                            _set_manual_update_notice(
+                                '更新安装连续失败 3 次，请手动下载新版或清理 SCL/update 后重试'
+                            )
+                            detail = '，已连续失败 3 次，请手动下载新版或清理 SCL/update'
+                        else:
+                            detail = f'，已记录第 {attempts} 次失败，下次启动会重试'
+                        self.failed.emit(
+                            f'更新已下载，但启动安装失败：{exc}{detail}'
+                        )
+                        return
+                    # 退出前让 GUI 线程释放 QMediaPlayer/音频设备，避免
+                    # 更新替换 exe 时仍有 D3D/WASAPI 句柄。
+                    try:
+                        from PySide6.QtCore import QMetaObject, Qt
+                        from PySide6.QtWidgets import QApplication
+                        app = QApplication.instance()
+                        if app is not None:
+                            for widget in app.topLevelWidgets():
+                                if hasattr(widget, 'shutdown_media'):
+                                    QMetaObject.invokeMethod(
+                                        widget, 'shutdown_media', Qt.QueuedConnection
+                                    )
+                    except Exception:
+                        pass
+                    threading.Timer(2.0, lambda: os._exit(0)).start()
+                    write_update_log('download: external updater armed; exiting in 2s')
                     self.done.emit(str(dest))
                     return
                 except DownloadCancelled:
@@ -727,6 +745,41 @@ def _downloaded_marker_path():
     return scl_dir() / 'update' / DOWNLOADED_MARKER
 
 
+_MANUAL_UPDATE_NOTICE = ''
+
+
+def _set_manual_update_notice(message):
+    global _MANUAL_UPDATE_NOTICE
+    _MANUAL_UPDATE_NOTICE = str(message or '')
+
+
+def consume_manual_update_notice():
+    global _MANUAL_UPDATE_NOTICE
+    message = _MANUAL_UPDATE_NOTICE
+    _MANUAL_UPDATE_NOTICE = ''
+    return message
+
+
+def _bump_downloaded_attempts(data):
+    """记录一次安装尝试；返回尝试次数。"""
+
+    try:
+        attempts = int(data.get('attempts') or 0) + 1
+    except (TypeError, ValueError):
+        attempts = 1
+    data = dict(data or {})
+    data['attempts'] = attempts
+    try:
+        marker = _downloaded_marker_path()
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(
+            json.dumps(data, ensure_ascii=False), encoding='utf-8'
+        )
+    except OSError:
+        pass
+    return attempts
+
+
 def write_downloaded_update(info, asset_path):
     '''记录已下载完成的更新，供下次启动兜底自动安装。'''
 
@@ -736,13 +789,26 @@ def write_downloaded_update(info, asset_path):
         return
     marker = _downloaded_marker_path()
     marker.parent.mkdir(parents=True, exist_ok=True)
+    actual_size = path.stat().st_size
+    expected_size = int(info.get('asset_size') or 0)
+    digest = str(info.get('asset_digest') or '').strip()
+    local_sha256 = ''
+    try:
+        local_sha256 = hash_file(path, 'sha256')
+    except Exception:
+        pass
     marker.write_text(
         json.dumps({
+            'schema': 2,
             'version': str(info.get('version') or info.get('tag') or '').lstrip('vV'),
             'tag': str(info.get('tag') or ''),
             'dll_build': int(info.get('dll_build') or 0),
             'asset_path': str(path),
-            'asset_size': path.stat().st_size,
+            # Release 声明的目标大小；缺失时才退回本地大小。
+            'asset_size': expected_size or actual_size,
+            'asset_digest': digest,
+            'asset_sha256': local_sha256,
+            'attempts': 0,
             'time': time.time(),
         }, ensure_ascii=False),
         encoding='utf-8',
@@ -755,12 +821,36 @@ def _read_downloaded_update():
         return None
     try:
         data = json.loads(marker.read_text(encoding='utf-8'))
+        # DLL40 及更早的 marker 没有 schema/digest，asset_size 还是本地大小；
+        # 不能套用新规则，直接作废并让下载器重新获取。
+        if int(data.get('schema') or 0) < 2:
+            marker.unlink(missing_ok=True)
+            return None
         path = Path(str(data.get('asset_path') or ''))
         if not path.is_file():
             return None
         expected = int(data.get('asset_size') or 0)
         if expected and path.stat().st_size != expected:
+            marker.unlink(missing_ok=True)
             return None
+        digest = str(data.get('asset_digest') or '').strip().lower()
+        local_sha = str(data.get('asset_sha256') or '').strip().lower()
+        if not digest and not local_sha:
+            marker.unlink(missing_ok=True)
+            return None
+        expected_sha = ''
+        if digest.startswith('sha256:'):
+            expected_sha = digest.split(':', 1)[1].strip()
+        elif local_sha:
+            expected_sha = local_sha
+        if expected_sha:
+            try:
+                actual_sha = hash_file(path, 'sha256')
+            except Exception:
+                actual_sha = ''
+            if actual_sha != expected_sha:
+                marker.unlink(missing_ok=True)
+                return None
         return data
     except (OSError, ValueError, TypeError):
         return None
@@ -790,9 +880,20 @@ def apply_downloaded_update_on_startup():
     except Exception:
         clear_downloaded_update()
         return False
+    attempts = int(data.get('attempts') or 0)
+    if attempts >= 3:
+        clear_downloaded_update()
+        _set_manual_update_notice(
+            '更新安装连续失败 3 次，请手动下载新版或清理 SCL/update 后重试'
+        )
+        return False
     asset = Path(str(data.get('asset_path') or ''))
     version = str(data.get('version') or data.get('tag') or '')
-    write_update_log(f'startup: applying downloaded update {version} from {asset}')
+    attempts = _bump_downloaded_attempts(data)
+    write_update_log(
+        f'startup: applying downloaded update {version} from {asset} '
+        f'(attempt {attempts}/3)'
+    )
     try:
         if is_onedir_install():
             # onedir 不能只换 exe；外部脚本会等待本进程退出后整体替换。
@@ -804,7 +905,11 @@ def apply_downloaded_update_on_startup():
             return True
     except Exception as exc:
         write_update_log(f'startup: apply downloaded update failed: {exc}')
-        clear_downloaded_update()
+        if attempts >= 3:
+            clear_downloaded_update()
+            _set_manual_update_notice(
+                '更新安装连续失败 3 次，请手动下载新版或清理 SCL/update 后重试'
+            )
     return False
 
 
@@ -1123,4 +1228,5 @@ __all__ = [
     'pending_update_exists', 'clear_launcher_caches',
     'fetch_latest_release', 'is_newer', 'is_onedir_install', 'is_unpublished_build',
     'prepare_update', 'update_kind', 'write_downloaded_update', 'write_update_log',
+    'consume_manual_update_notice',
 ]
