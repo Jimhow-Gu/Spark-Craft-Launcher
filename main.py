@@ -522,38 +522,19 @@ def main():
     # 首帧绘制后再后台扫描 Java，避免启动卡顿
 
     exit_code = int(app.exec() or 0)
-    # 正常退出优先走 Qt/Python 的析构流程：先停媒体设备和 worker，
-    # 再让窗口 deleteLater 并在事件循环中真正销毁。媒体析构可能卡住，
-    # 所以 watchdog 必须先启动；只有超时才由 os._exit 兜底。
-    import threading
-    fallback = threading.Timer(8.0, lambda: os._exit(exit_code))
-    fallback.daemon = True
-    fallback.start()
+    # 打包版的 Qt/WMF 在 deleteLater/processEvents 阶段可能卡死并持有 GIL，
+    # 连 threading.Timer 的 os._exit 兜底也无法执行，进程会残留成无窗口后台
+    # 进程。正常关闭已在 closeEvent() 中保存窗口状态并释放单实例锁；这里只
+    # 同步落盘配置/日志，然后立即结束进程，由系统回收窗口和媒体内核句柄。
     try:
-        from core.thread_guard import shutdown_threads
-        shutdown_threads()
-    except Exception:
-        pass
-    try:
-        window.shutdown_media()
-        from ui.runtime_icons import release_windows_window_icon
-        release_windows_window_icon(window)
-        window.deleteLater()
-        app.processEvents()
-    except Exception:
-        pass
-    # 退出前旧进程通常已经释放 .old 句柄；再快速清理一次，避免下次启动
-    # 才看到残留文件。
-    try:
-        from core.update import cleanup_old_executable
-        cleanup_old_executable(retries=3, retry_rounds=1)
+        window._flush_exit_state()
     except Exception:
         pass
     try:
         logging.shutdown()
     except Exception:
         pass
-    sys.exit(exit_code)
+    os._exit(exit_code)
 
 if __name__ == "__main__":
     main()

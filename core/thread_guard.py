@@ -23,7 +23,12 @@ def _running_threads():
 
 
 def shutdown_threads(timeout_ms=700):
-    '''取消并等待所有仍运行的 QThread，最后才对无响应线程 terminate。'''
+    '''取消并有限等待仍运行的 QThread；不调用 terminate()。
+
+    QThread.terminate() 在打包版退出时可能与 Qt 媒体/网络线程互相等待，
+    且调用期间持有 GIL，连 os._exit 兜底都无法执行。未及时退出的线程
+    随进程结束由系统回收，比卡住整个退出流程安全。
+    '''
 
     for _ in range(2):
         threads = _running_threads()
@@ -40,9 +45,6 @@ def shutdown_threads(timeout_ms=700):
             try:
                 if worker.isRunning():
                     worker.wait(timeout_ms)
-                    if worker.isRunning():
-                        worker.terminate()
-                        worker.wait(200)
             except (RuntimeError, ReferenceError):
                 continue
         gc.collect()

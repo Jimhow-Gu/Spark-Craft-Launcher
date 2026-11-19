@@ -2150,14 +2150,9 @@ class MainWindow(QMainWindow):
             try:
                 from core.update import apply_update_inplace, is_onedir_install
                 if not is_onedir_install() and apply_update_inplace(asset_path, version):
-                    # 新进程已经创建；立即退出，避免旧进程继续占用 exe / 单实例锁。
-                    self.shutdown_media()
+                    # 新进程已经创建；落盘后立即退出，避免旧进程继续占用
+                    # exe / 单实例锁，也避免 Qt/WMF 析构卡住更新流程。
                     self._flush_exit_state()
-                    try:
-                        from core.thread_guard import shutdown_threads
-                        shutdown_threads()
-                    except Exception:
-                        pass
                     os._exit(0)
             except Exception as exc:
                 self._update_prepare_error = str(exc)
@@ -2183,15 +2178,9 @@ class MainWindow(QMainWindow):
                     pass
                 QMessageBox.critical(self, '更新失败', f'无法启动更新程序：{exc}')
                 return False
-        # 外部更新脚本正在等待本进程退出；先落盘再结束进程，
-        # 避免配置/日志缓冲被 os._exit 截断。
-        self.shutdown_media()
+        # 外部更新脚本正在等待本进程退出；只落盘状态后结束进程，
+        # 避免配置/日志缓冲被截断，也避免媒体析构阻塞更新。
         self._flush_exit_state()
-        try:
-            from core.thread_guard import shutdown_threads
-            shutdown_threads()
-        except Exception:
-            pass
         os._exit(0)
 
     def closeEvent(self, event):
@@ -2227,55 +2216,12 @@ class MainWindow(QMainWindow):
                 pass
             from core.single_instance import release_single_instance
             release_single_instance()
-            # 媒体后端在部分驱动上会卡在 setSource/析构；watchdog 必须在
-            # shutdown_media() 之前启动，否则卡死时永远走不到兜底。
-            import threading
-            def _force_exit():
-                try:
-                    from core.thread_guard import shutdown_threads
-                    shutdown_threads()
-                except Exception:
-                    pass
-                self._flush_exit_state()
-                os._exit(0)
-            timer = threading.Timer(15.0, _force_exit)
-            timer.daemon = True
-            timer.start()
-            self.shutdown_media()
-            try:
-                from core import java_scan
-                service = getattr(java_scan.JavaScanService, '_instance', None)
-                if service is not None:
-                    service.shutdown()
-            except Exception:
-                pass
-            checker = self._update_checker
-            if checker is not None:
-                try:
-                    if checker.isRunning():
-                        if not checker.wait(2500):
-                            checker.terminate()
-                            checker.wait(300)
-                except RuntimeError:
-                    pass
-                self._update_checker = None
-            for name in (
-                'version_page', 'account_page', 'settings_page', 'news_page'
-            ):
-                page = self.__dict__.get(name)
-                if page is not None:
-                    try:
-                        page.shutdown()
-                    except Exception:
-                        pass
-            home_page = self.__dict__.get('home_page')
-            if home_page is not None:
-                home_page.shutdown()
-            if self.game_settings_page:
-                self.game_settings_page.close()
-            app = QApplication.instance()
-            if app is not None:
-                app.quit()
+            # Qt/WMF 的 stop/deleteLater/processEvents 在部分机器上会卡死并
+            # 持有 GIL，任何 Python 线程 watchdog 都无法执行，最终留下无窗口
+            # 后台进程。关闭时只同步落盘配置和日志，然后立即结束进程；窗口、
+            # 媒体设备和网络线程由系统回收。
+            self._flush_exit_state()
+            os._exit(0)
         except Exception:
             pass
         super().closeEvent(event)
