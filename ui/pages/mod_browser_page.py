@@ -26,6 +26,7 @@ from ui.widgets.back_button import BackButton
 from ui.widgets.dark_dialog import DarkQuestionDialog
 from ui.widgets.height_animation import HeightAnimation
 from ui.widgets.loading_overlay import LoadingOverlay
+from ui.widgets.toast import show_toast
 from ui.widgets.rotating_chevron import RotatingChevronButton
 from ui.widgets.smooth_progress import SmoothProgressBar
 from ui.design import IMAGE_PLACEHOLDER_DARK, IMAGE_PLACEHOLDER_LIGHT, MUTED_DARK, MUTED_LIGHT
@@ -269,16 +270,6 @@ class FilesWorker(QThread):
         except Exception as exc:
             if not self._cancelled:
                 text = str(exc)
-                # 某些资源不支持当前版本/加载器过滤时会返回 404；去过滤重试一次。
-                if source is not None and '404' in text and (self.mc_version or self.loader):
-                    try:
-                        files = source.get_files(self.project, '', '')
-                    except Exception as retry_exc:
-                        text = str(retry_exc)
-                    else:
-                        if not self._cancelled:
-                            self.done.emit(files)
-                        return
                 if 'getaddrinfo failed' in text or 'NameResolutionError' in text:
                     text = '网络解析失败（DNS），请检查网络连接后重试。'
                 self.error.emit(f'获取文件列表失败：{text}')
@@ -368,6 +359,7 @@ class VersionsWorker(QThread):
 
 class CategoriesWorker(QThread):
     done = Signal(str, str, object)
+    error = Signal(str, str, str)
     def __init__(self, source_name, project_type):
         super().__init__()
         self.source_name = source_name
@@ -378,8 +370,8 @@ class CategoriesWorker(QThread):
             source = get_source(self.source_name)
             categories = source.get_categories(self.project_type)
             self.done.emit(self.source_name, self.project_type, categories)
-        except Exception:
-            self.done.emit(self.source_name, self.project_type, [])
+        except Exception as exc:
+            self.error.emit(self.source_name, self.project_type, str(exc))
 
 
 class IconLoader(QObject):
@@ -2202,6 +2194,7 @@ class ModBrowserPage(QWidget):
         _CATEGORY_LOADING.add(key)
         worker = CategoriesWorker(source_name, self.project_type)
         worker.done.connect(self._on_categories)
+        worker.error.connect(self._on_categories_error)
         worker.finished.connect(
             (lambda k=key: _CATEGORY_LOADING.discard(k))
         )
@@ -2216,6 +2209,17 @@ class ModBrowserPage(QWidget):
         _CATEGORY_LOADING.discard(key)
         if source_name == self.source_combo.currentText() and project_type == self.project_type:
             self._populate_categories()
+
+    def _on_categories_error(self, source_name, project_type, message):
+        key = source_name, project_type
+        self._categories_loading.discard(key)
+        _CATEGORY_LOADING.discard(key)
+        if source_name != self.source_combo.currentText() or project_type != self.project_type:
+            return
+        self._categories[key] = []
+        self._populate_categories()
+        text = str(message or '').strip() or '请稍后重试'
+        show_toast(f'分类加载失败：{text}', 'error', self, 4500)
 
     def _populate_categories(self):
         source_name = self.source_combo.currentText()

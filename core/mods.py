@@ -218,33 +218,26 @@ class ModrinthSource(BaseSource):
             targets.append(url.replace(MODRINTH_API, 'https://mod.mcimirror.top/modrinth/v2', 1))
         if len(targets) == 1:
             return self.http.get_json(url, params=params)
-        # 官方源与镜像并发请求，谁先成功用谁；避免坏网络下依次等满超时。
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        def fetch(target):
-            client = HttpClient(timeout=8, retries=1)
-            try:
-                return client.get_json(target, params=params)
-            finally:
-                client.close()
-
-        pool = ThreadPoolExecutor(max_workers=len(targets))
         try:
-            futures = [pool.submit(fetch, target) for target in targets]
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    last = exc
-                    # 不要因为官方源或镜像其中一个返回 404 就立刻取消另一个：
-                    # 两边收录情况不同，先等另一个结果，全部失败再抛错。
-                    continue
-                for pending in futures:
-                    pending.cancel()
-                return result
-        finally:
-            pool.shutdown(wait=False, cancel_futures=True)
-        raise last
+            preference = str(
+                ConfigManager().get('community_source_pref', 'mirror') or 'mirror'
+            ).lower()
+        except Exception:
+            preference = 'mirror'
+        # 按社区源偏好顺序请求，不再让官方/镜像竞速决定结果。
+        if preference == 'official':
+            targets = [url, targets[1]]
+        else:
+            targets = [targets[1], url]
+        for target in targets:
+            try:
+                return self.http.get_json(target, params=params)
+            except DownloadError as exc:
+                last = exc
+                continue
+        if last is not None:
+            raise last
+        raise DownloadError('Modrinth 请求失败')
 
     def search(self, query, project_type, mc_version='', loader='', category='', sort='relevance', offset=0, limit=20):
         facets = [[f'project_type:{project_type}']]
@@ -300,15 +293,6 @@ class ModrinthSource(BaseSource):
             return []
         if not isinstance(data, list):
             return []
-        if not data:
-            if loader:
-                params.pop('loaders', None)
-                data = self._get_json(f'{MODRINTH_API}/project/{quote(ident)}/version', params=params)
-        if not data:
-            if mc_version:
-                params.pop('game_versions', None)
-                params.pop('loaders', None)
-                data = self._get_json(f'{MODRINTH_API}/project/{quote(ident)}/version', params=params)
         if not isinstance(data, list):
             return []
         files = []
@@ -329,8 +313,10 @@ class ModrinthSource(BaseSource):
     def get_project(self, project_id):
         try:
             data = self._get_json(f'{MODRINTH_API}/project/{quote(project_id)}')
-        except Exception:
-            return
+        except DownloadError as exc:
+            if getattr(exc, 'status_code', None) == 404:
+                return
+            raise
         if not isinstance(data, dict):
             return
         slug = data.get('slug') or project_id
@@ -429,10 +415,7 @@ class ModrinthSource(BaseSource):
         return ModProject(source=self.name, project_id=str(version_id or name), slug='', title=name, description='未获取到前置模组详情，可尝试手动搜索', project_type='mod')
 
     def get_categories(self, project_type):
-        try:
-            data = self._get_json(f'{MODRINTH_API}/tag/category')
-        except DownloadError:
-            return []
+        data = self._get_json(f'{MODRINTH_API}/tag/category')
         result = []
         for item in data or []:
             if not isinstance(item, dict):
@@ -473,12 +456,49 @@ class CurseForgeSource(BaseSource):
             headers['x-api-key'] = self.api_key
         return headers
 
-    def _check(self):
-        if self.api_base == CURSEFORGE_API and not self.api_key:
-            raise SourceUnavailable('CurseForge 需要 API Key。请到 https://console.curseforge.com/ 申请后，在“设置 → 高级选项 → CurseForge API Key”中填写。')
+    def _request_bases(self):
+        """官方优先（有 Key），否则直接走无 Key 镜像。"""
+
+        bases = []
+        if self.api_base == CURSEFORGE_API:
+            if self.api_key:
+                bases.append(self.api_base)
+            if self.mirror_base not in bases:
+                bases.append(self.mirror_base)
+        else:
+            bases.append(self.api_base)
+        return [base for base in bases if base]
+
+    @staticmethod
+    def _mirror_headers():
+        # 镜像只接受公开请求，绝不能带官方 x-api-key。
+        return {'Accept': 'application/json'}
+
+    def _get_json(self, path, params=None):
+        bases = self._request_bases()
+        if not bases:
+            raise SourceUnavailable(
+                'CurseForge 没有可用源。请填写 API Key，或检查镜像网络。'
+            )
+        last_error = None
+        for base in bases:
+            headers = (
+                self._headers()
+                if base != self.mirror_base
+                else self._mirror_headers()
+            )
+            try:
+                return self.http.get_json(
+                    f'{base}{path}', params=params, headers=headers
+                )
+            except DownloadError as exc:
+                last_error = exc
+                continue
+        if last_error is not None:
+            raise last_error
+        raise DownloadError('CurseForge 请求失败')
 
     def search(self, query, project_type, mc_version='', loader='', category='', sort='relevance', offset=0, limit=20):
-        self._check()
         class_id = CF_CLASS_IDS.get(project_type, 6)
         sort_field = {'relevance': 2, 'downloads': 6, 'updated': 3, 'newest': 11}.get(sort, 2)
         params = {'gameId': 432, 'classId': class_id, 'index': max(0, offset), 'pageSize': max(1, min(limit, 50)), 'sortField': sort_field, 'sortOrder': 'desc'}
@@ -493,7 +513,7 @@ class CurseForgeSource(BaseSource):
                 params['categoryId'] = int(category)
             except ValueError:
                 pass
-        data = self.http.get_json(f'{self.api_base}/mods/search', params=params, headers=self._headers())
+        data = self._get_json('/mods/search', params=params)
         rows = data.get('data') or []
         pagination = data.get('pagination') or {}
         projects = []
@@ -513,36 +533,72 @@ class CurseForgeSource(BaseSource):
         return SearchResult(projects, total, offset, limit)
 
     def get_files(self, project, mc_version='', loader=''):
-        self._check()
-        params = {'index': 0, 'pageSize': 50, 'sortField': 2, 'sortOrder': 'desc'}
+        params = {'pageSize': 50, 'sortField': 2, 'sortOrder': 'desc'}
         if mc_version:
             params['gameVersion'] = mc_version
         if loader and loader in CF_LOADER_IDS:
             params['modLoaderType'] = CF_LOADER_IDS[loader]
-        try:
-            bases = [self.api_base]
-            if self.api_base == CURSEFORGE_API and self.mirror_base not in bases:
-                bases.append(self.mirror_base)
-            data = None
-            last_error = None
-            for base in bases:
-                try:
-                    data = self.http.get_json(
-                        f'{base}/mods/{project.project_id}/files',
-                        params=params, headers=self._headers(),
-                    )
-                    break
-                except DownloadError as exc:
-                    last_error = exc
-                    continue
-            if data is None and last_error is not None:
-                raise last_error
-        except DownloadError:
-            raise
-        rows = data.get('data') or []
-        if not rows and (mc_version or loader):
-            data = self.http.get_json(f'{self.api_base}/mods/{project.project_id}/files', params={'index': 0, 'pageSize': 50}, headers=self._headers())
-            rows = data.get('data') or []
+
+        # 官方返回 200 但为空时也要试镜像；不要去掉筛选条件把不兼容版本塞给用户。
+        bases = self._request_bases()
+        selected = None
+        first_data = None
+        last_error = None
+        for base in bases:
+            headers = (
+                self._headers()
+                if base != self.mirror_base
+                else self._mirror_headers()
+            )
+            page_params = dict(params, index=0)
+            try:
+                data = self.http.get_json(
+                    f'{base}/mods/{project.project_id}/files',
+                    params=page_params,
+                    headers=headers,
+                )
+            except DownloadError as exc:
+                last_error = exc
+                continue
+            first_data = data
+            if data.get('data'):
+                selected = (base, headers)
+                break
+        if first_data is None and last_error is not None:
+            raise last_error
+        if selected is None:
+            return []
+
+        base, headers = selected
+        rows = []
+        first_rows = first_data.get('data') or []
+        rows.extend(first_rows)
+        pagination = first_data.get('pagination') or {}
+        total = int(pagination.get('totalCount') or len(first_rows) or 0)
+        page_size = max(1, int(pagination.get('pageSize') or params['pageSize']))
+        index = page_size
+        max_pages = 20
+        for _ in range(1, max_pages):
+            if total and len(rows) >= total:
+                break
+            if len(first_rows) < page_size:
+                break
+            try:
+                data = self.http.get_json(
+                    f'{base}/mods/{project.project_id}/files',
+                    params=dict(params, index=index, pageSize=page_size),
+                    headers=headers,
+                )
+            except DownloadError:
+                break
+            page_rows = data.get('data') or []
+            if not page_rows:
+                break
+            rows.extend(page_rows)
+            if len(page_rows) < page_size:
+                break
+            index += page_size
+
         files = []
         for row in rows:
             item = self._row_to_file(row, project)
@@ -653,11 +709,12 @@ class CurseForgeSource(BaseSource):
         return ModFile(source=self.name, project_id=project.project_id, file_id=file_id, filename=filename, display_name=row.get('displayName') or filename, download_url=url, size=int(row.get('fileLength') or 0), date=_fmt_date(row.get('fileDate') or ''), release_type=release, game_versions=row.get('gameVersions') or [], loaders=[], sha1=hashes.get('sha1', ''), dependencies=dependencies)
 
     def get_project(self, project_id):
-        self._check()
         try:
-            data = self.http.get_json(f'{self.api_base}/mods/{project_id}', headers=self._headers())
-        except Exception:
-            return
+            data = self._get_json(f'/mods/{project_id}')
+        except DownloadError as exc:
+            if getattr(exc, 'status_code', None) == 404:
+                return
+            raise
         row = data.get('data') if isinstance(data, dict) else None
         if not isinstance(row, dict):
             return
@@ -681,13 +738,15 @@ class CurseForgeSource(BaseSource):
             return ''
 
     def get_categories(self, project_type):
-        self._check()
         if project_type in self._category_cache:
             return self._category_cache[project_type]
-        try:
-            data = self.http.get_json(f'{self.api_base}/categories', params={'gameId': 432, 'classId': CF_CLASS_IDS.get(project_type, 6)}, headers=self._headers())
-        except DownloadError:
-            return []
+        data = self._get_json(
+            '/categories',
+            params={
+                'gameId': 432,
+                'classId': CF_CLASS_IDS.get(project_type, 6),
+            },
+        )
         result = []
         for item in data.get('data') or []:
             if not isinstance(item, dict):
