@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -175,6 +176,43 @@ class DownloadSpeedLimiter:
             time.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
 
 
+def _part_meta_path(part):
+    return Path(str(part) + '.meta')
+
+
+def _read_part_meta(part):
+    path = _part_meta_path(part)
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _write_part_meta(part, data):
+    path = _part_meta_path(part)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(data, ensure_ascii=False), encoding='utf-8'
+        )
+    except OSError:
+        pass
+
+
+def _remove_part_files(part):
+    try:
+        Path(part).unlink(missing_ok=True)
+    except OSError:
+        pass
+    try:
+        _part_meta_path(part).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 class HttpClient:
     def __init__(self, timeout=20, retries=3, user_agent=USER_AGENT, verify=True):
         self.timeout = timeout
@@ -260,6 +298,7 @@ class HttpClient:
 
         dest = Path(dest)
         if dest.exists() and self._verify(dest, sha1=sha1, sha256=sha256, sha512=sha512, size=size):
+            _remove_part_files(dest.with_name(dest.name + '.part'))
             return False
         try:
             from core.config import ConfigManager
@@ -280,6 +319,7 @@ class HttpClient:
         dest = Path(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
         if dest.exists() and self._verify(dest, sha1=sha1, sha256=sha256, sha512=sha512, size=size):
+            _remove_part_files(dest.with_name(dest.name + '.part'))
             return False
         tmp = dest.with_name(dest.name + '.part')
         last_error = None
@@ -287,13 +327,46 @@ class HttpClient:
             if cancel and cancel():
                 raise DownloadCancelled()
             resume_from = tmp.stat().st_size if tmp.exists() else 0
+            part_meta = _read_part_meta(tmp) if resume_from else {}
+            if resume_from:
+                # .part 必须绑定到同一个 URL / 版本；没有任何校验依据时
+                # 禁止续传，直接全量重下，避免复用其它文件的半包。
+                expected_hashes = {
+                    key: str(value or '').lower()
+                    for key, value in (
+                        ('sha1', sha1), ('sha256', sha256), ('sha512', sha512)
+                    )
+                    if value
+                }
+                meta_hashes = {
+                    key: str(part_meta.get(key) or '').lower()
+                    for key in ('sha1', 'sha256', 'sha512')
+                    if part_meta.get(key)
+                }
+                validators = bool(
+                    part_meta.get('etag') or part_meta.get('last_modified')
+                )
+                if (
+                    not part_meta
+                    or str(part_meta.get('url') or '') != url
+                    or any(
+                        expected_hashes.get(key)
+                        and meta_hashes.get(key)
+                        and expected_hashes[key] != meta_hashes[key]
+                        for key in ('sha1', 'sha256', 'sha512')
+                    )
+                    or (not validators and not expected_hashes and not meta_hashes)
+                ):
+                    _remove_part_files(tmp)
+                    resume_from = 0
+                    part_meta = {}
             request_headers = {'Range': f'bytes={resume_from}-'} if resume_from else {}
             if extra_headers:
                 request_headers.update(extra_headers)
             try:
                 resp = self.session.get(url, headers=request_headers or None, stream=True, timeout=(8, 12) if slow_fallback else self.timeout, verify=self._verify_certs, allow_redirects=True)
                 if resp.status_code == 416 and tmp.exists():
-                    tmp.unlink(missing_ok=True)
+                    _remove_part_files(tmp)
                     continue
                 resp.raise_for_status()
                 total = int(resp.headers.get('Content-Length') or 0)
@@ -309,7 +382,7 @@ class HttpClient:
                     if match:
                         start = int(match.group(1))
                         if start != resume_from:
-                            tmp.unlink(missing_ok=True)
+                            _remove_part_files(tmp)
                             raise DownloadError(
                                 f'续传位置不匹配：期望 {resume_from}，'
                                 f'服务器返回 {start}'
@@ -322,6 +395,27 @@ class HttpClient:
                         total += resume_from
                 elif not total and size:
                     total = size
+                response_etag = str(resp.headers.get('ETag') or '')
+                response_last_modified = str(resp.headers.get('Last-Modified') or '')
+                if resume_from and resp.status_code == 206 and part_meta:
+                    old_etag = str(part_meta.get('etag') or '')
+                    old_modified = str(part_meta.get('last_modified') or '')
+                    if (
+                        (old_etag and response_etag and old_etag != response_etag)
+                        or (old_modified and response_last_modified
+                            and old_modified != response_last_modified)
+                    ):
+                        _remove_part_files(tmp)
+                        raise DownloadError('远端文件已变化，已放弃旧 .part 并重新下载')
+                _write_part_meta(tmp, {
+                    'url': url,
+                    'etag': response_etag,
+                    'last_modified': response_last_modified,
+                    'total_size': total,
+                    'sha1': str(sha1 or ''),
+                    'sha256': str(sha256 or ''),
+                    'sha512': str(sha512 or ''),
+                })
                 mode = 'ab' if resp.status_code == 206 and tmp.exists() else 'wb'
                 done = tmp.stat().st_size if mode == 'ab' and tmp.exists() else 0
                 # Content-Length 可能比调用方传入的 size 更准确；写入前
@@ -386,15 +480,19 @@ class HttpClient:
                         tmp.unlink(missing_ok=True)
                         raise DownloadError('下载结果为空')
                 if not self._verify(tmp, sha1=sha1, sha256=sha256, sha512=sha512, size=size):
-                    tmp.unlink(missing_ok=True)
+                    _remove_part_files(tmp)
                     raise DownloadError('文件校验失败（哈希或大小不匹配）')
                 os.replace(tmp, dest)
+                try:
+                    _part_meta_path(tmp).unlink(missing_ok=True)
+                except OSError:
+                    pass
                 if progress:
                     final_total = total or (dest.stat().st_size if dest.exists() else 0)
                     progress(final_total, final_total)
                 return True
             except DownloadCancelled:
-                tmp.unlink(missing_ok=True)
+                _remove_part_files(tmp)
                 raise
             except SlowDownloadError:
                 raise
@@ -402,7 +500,7 @@ class HttpClient:
                 last_error = exc
                 if attempt < self.retries - 1:
                     time.sleep(1.0 * (attempt + 1))
-        tmp.unlink(missing_ok=True)
+        _remove_part_files(tmp)
         if last_error:
             raise DownloadError(str(last_error))
         raise DownloadError('下载失败')
