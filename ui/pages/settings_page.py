@@ -940,7 +940,7 @@ class SettingsPage(QWidget):
     def _create_group(self, title):
         group = RoundedGroupBox(radius=12)
         group_layout = QVBoxLayout(group)
-        group_layout.setContentsMargins(24, 0, 24, 18)
+        group_layout.setContentsMargins(24, 16, 24, 18)
         group_layout.setSpacing(12)
         title_label = QLabel(title)
         title_label.setStyleSheet('color: rgba(255,255,255,0.85); font-size: 15px; font-weight:900;')
