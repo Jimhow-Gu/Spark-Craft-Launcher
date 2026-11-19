@@ -116,3 +116,7 @@ dist_lazy/
 dist_slim/
 _slim_tools/
 _backup_main_window.py
+
+# Internal test build (not for release)
+build_internal/
+dist_internal/
