@@ -373,7 +373,23 @@ class RemoteFile:
             if self.size == 0:
                 return stat.st_size == 0
             if mode == 'missing':
-                return stat.st_size > 0
+                # 快速修复不仅要补缺失文件，也要识别明显损坏的 JAR/ZIP：
+                # 至少校验已知大小，并对 jar/zip 做结构检查。完整 SHA1
+                # 校验仍留给 full 模式，避免每次启动都哈希整个 libraries。
+                if stat.st_size <= 0:
+                    return False
+                if (
+                    self.size is not None and int(self.size) > 0
+                    and stat.st_size != int(self.size)
+                ):
+                    return False
+                if (
+                    self.check_zip
+                    and self.dest.suffix.lower() in ('.jar', '.zip')
+                    and not zipfile.is_zipfile(self.dest)
+                ):
+                    return False
+                return True
             if self.size is not None and stat.st_size != self.size:
                 return False
             if stat.st_size <= 0:
@@ -502,6 +518,13 @@ class DownloadClient:
                 if mode == 'full' and remote.sha512:
                     if hash_file(source, 'sha512') != remote.sha512.lower():
                         continue
+                if (
+                    mode == 'missing'
+                    and remote.check_zip
+                    and remote.dest.suffix.lower() in ('.jar', '.zip')
+                    and not zipfile.is_zipfile(source)
+                ):
+                    continue
                 remote.dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, remote.dest)
                 return True

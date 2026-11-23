@@ -22,7 +22,8 @@ from ui.widgets.side_nav import SideNavList, NAV_HEADER_ROLE, NAV_ICON_ROLE
 from ui.widgets.brand_logo import BrandLogo
 from ui.theme import ThemeManager
 from core.build_info import BUILD_LABEL, RELEASE_BUILD, RESOURCE_PACK_SEQUENCE, EXECUTABLE_BUILD
-from core.update import CURRENT_VERSION
+from core.release_info import CURRENT_VERSION
+from core.taskbar_progress import taskbar_progress
 from core.seasonal import is_fireworks_period, is_snow_period
 from ui.scaling import apply_control_scale, apply_widget_scale, control_scale
 
@@ -292,8 +293,9 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self.init_all_pages()
+        # 只保留 currentItemChanged：鼠标点击、键盘导航和程序化选中都走同一
+        # 入口，避免 itemClicked 再触发一次页面切换/扫描。
         self.nav_list.currentItemChanged.connect(self._on_page_changed)
-        self.nav_list.itemClicked.connect(self._on_nav_clicked)
         self.snow_overlay = SnowOverlay(self.central)
         self.snow_overlay.setGeometry(self.central.rect())
         self.snow_overlay.set_active(self._snow_available and self._snow_enabled)
@@ -382,9 +384,6 @@ class MainWindow(QMainWindow):
         item.setData(Qt.UserRole, (page_index, section))
         item.setData(NAV_ICON_ROLE, icon_name or '')
         self.nav_list.addItem(item)
-
-    def _on_nav_clicked(self, item):
-        self._on_page_changed(item)
 
     def _is_sidebar_widget(self, widget):
         try:
@@ -805,14 +804,14 @@ class MainWindow(QMainWindow):
             placeholder.setStyleSheet('background:transparent;')
             self.page_stack.addWidget(placeholder)
             self._page_placeholders[index] = placeholder
-        self._deferred_started = False
-        self._deferred_queue = [1, 2, 3, 4, 5, 6]
         self._page_animation = None
         self._page_fade_overlay = None
+        self._first_show_done = False
+        self._delayed_background_started = False
+        self._last_page_data = None
         self.page_stack.currentChanged.connect(self._animate_page_change)
         self.page_stack.currentChanged.connect(self._style_current_page)
         QTimer.singleShot(0, self._build_home_page)
-        self.central.reload()
         self._apply_ui_depth()
         self._apply_title()
         # 默认导航页延后到首帧之后，避免启动阶段同步创建新闻页。
@@ -954,17 +953,6 @@ class MainWindow(QMainWindow):
         from ui.pages.news_page import NewsPage
         return NewsPage(self)
 
-    def _build_deferred_pages(self):
-        if getattr(self, '_closing', False):
-            return
-        if not getattr(self, '_deferred_queue', None):
-            return
-        index = self._deferred_queue.pop(0)
-        if index in self._page_placeholders:
-            self._ensure_page_index(index)
-        if self._deferred_queue:
-            QTimer.singleShot(35, self._build_deferred_pages)
-
     def _on_theme_changed(self, theme):
         try:
             self.theme_manager.apply(theme, QCursor.pos(), animate=True)
@@ -972,6 +960,18 @@ class MainWindow(QMainWindow):
             pass
         try:
             self.border_overlay.update()
+        except Exception:
+            pass
+
+    def _delayed_background_reload(self):
+        '''首帧显示后再解码背景，避免启动时同步解码大图阻塞主线程。'''
+
+        if getattr(self, '_closing', False):
+            return
+        try:
+            self.central.reload()
+            self._apply_ui_depth()
+            self._update_media_buttons()
         except Exception:
             pass
 
@@ -1572,7 +1572,9 @@ class MainWindow(QMainWindow):
             self.page_stack.setCurrentWidget(self.home_page)
 
     def _refresh_download_bar(self):
-        self.download_bar.set_snapshot(self.download_manager.snapshot())
+        snapshot = self.download_manager.snapshot()
+        self.download_bar.set_snapshot(snapshot)
+        taskbar_progress.sync_download(snapshot)
 
     def show_download_manager_page(self):
         if not hasattr(self, 'download_manager_page'):
@@ -1599,7 +1601,14 @@ class MainWindow(QMainWindow):
         if not data:
             return
         page_index, section = data
+        if (
+            data == getattr(self, '_last_page_data', None)
+            and self.page_stack.currentIndex() == page_index
+        ):
+            # 重复点击/重复选中同一导航项：不重建页面，也不触发版本扫描。
+            return
         self._ensure_page_index(page_index)
+        self._last_page_data = data
         self.page_stack.setCurrentIndex(page_index)
         if page_index == 6:
             self.news_page.show_news_home()
@@ -1808,6 +1817,9 @@ class MainWindow(QMainWindow):
 
     def showEvent(self, event):
         super().showEvent(event)
+        if not getattr(self, '_taskbar_progress_attached', False):
+            if taskbar_progress.attach(self):
+                self._taskbar_progress_attached = True
         # 首帧就置顶/激活，避免启动布局期间被其他应用窗口压住。
         try:
             self.raise_()
@@ -1821,26 +1833,16 @@ class MainWindow(QMainWindow):
             self.resize_overlay.update_geometry()
         except Exception:
             pass
+        # 激活/重复显示不再做缩放、背景解码和页面构建；只执行一次首帧初始化。
+        if getattr(self, '_first_show_done', False):
+            return
+        self._first_show_done = True
         if not getattr(self, '_ui_scale_initialized', False):
             try:
                 self._apply_ui_scale(force=True)
                 self._ui_scale_initialized = True
             except Exception:
                 pass
-        # 首帧先让主页完成绘制；其余页面、账号头像和音乐在用户能看到
-        # 界面之后再初始化，避免阻塞启动动画。
-        if not getattr(self, '_deferred_started', False):
-            self._deferred_started = True
-            QTimer.singleShot(600, self._build_deferred_pages)
-        if not getattr(self, '_music_started', False):
-            self._music_started = True
-            QTimer.singleShot(300, self._init_music_player)
-        if not getattr(self, '_account_card_started', False):
-            self._account_card_started = True
-            QTimer.singleShot(300, self._refresh_account_card_startup)
-        if getattr(self, '_startup_layout_done', False):
-            return
-        self._startup_layout_done = True
         try:
             self.border_overlay.setGeometry(self.rect())
             self.border_overlay.raise_()
@@ -1855,6 +1857,16 @@ class MainWindow(QMainWindow):
         self._update_sidebar_geometry()
         if hasattr(self, 'theme_manager'):
             QTimer.singleShot(0, self.theme_manager.style_visible_widgets)
+        # 背景图在首帧之后解码，避免启动同步读取/缩放大图。
+        if not getattr(self, '_delayed_background_started', False):
+            self._delayed_background_started = True
+            QTimer.singleShot(220, self._delayed_background_reload)
+        if not getattr(self, '_music_started', False):
+            self._music_started = True
+            QTimer.singleShot(300, self._init_music_player)
+        if not getattr(self, '_account_card_started', False):
+            self._account_card_started = True
+            QTimer.singleShot(300, self._refresh_account_card_startup)
         if not self._music_auto_started:
             self._music_auto_started = True
             QTimer.singleShot(800, self._auto_start_music)
@@ -2216,10 +2228,17 @@ class MainWindow(QMainWindow):
                 pass
             from core.single_instance import release_single_instance
             release_single_instance()
-            # Qt/WMF 的 stop/deleteLater/processEvents 在部分机器上会卡死并
-            # 持有 GIL，任何 Python 线程 watchdog 都无法执行，最终留下无窗口
-            # 后台进程。关闭时只同步落盘配置和日志，然后立即结束进程；窗口、
-            # 媒体设备和网络线程由系统回收。
+            # 先停止并释放背景视频/音乐设备，再落盘退出。这里只做
+            # stop/deleteLater，不再走 app.quit/processEvents/线程 terminate，
+            # 避免 Qt/WMF 析构在部分驱动上卡住整个进程。
+            try:
+                self.shutdown_media()
+            except Exception:
+                pass
+            try:
+                taskbar_progress.shutdown()
+            except Exception:
+                pass
             self._flush_exit_state()
             os._exit(0)
         except Exception:

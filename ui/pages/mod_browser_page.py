@@ -692,6 +692,11 @@ class ProjectCard(QFrame):
         self.title_label.setText(themed_bilingual_html(
             self.project.translated_title, self.project.english_title, 13, 11
         ))
+        self.title_label.setToolTip(
+            bilingual_plain(
+                self.project.translated_title, self.project.english_title
+            )
+        )
 
     def _apply_icon_placeholder(self):
         if not hasattr(self, 'icon_label'):
@@ -1026,6 +1031,7 @@ class FileRow(QWidget):
         if mod_file.size:
             meta += f'  ·  {mod_file.size / 1024 / 1024:.1f} MB'
         self.meta_label = QLabel(meta)
+        self.meta_label.setToolTip(meta)
         self.meta_label.setStyleSheet('color: rgba(255,255,255,0.45); font-size: 11px; background: transparent;')
         self.meta_label.setWordWrap(True)
         box.addWidget(self.meta_label)
@@ -1041,12 +1047,18 @@ class FileRow(QWidget):
                 f'<span style="font-size:13px;color:{themed_color()};">'
                 f'{html.escape(str(self._row_main_title))}</span>'
             )
+            self.title.setToolTip(str(self._row_main_title))
             return
+        full_title = bilingual_plain(
+            self._row_project_translated,
+            self._row_project_title or self._row_detail_title,
+        )
         self.title.setText(themed_bilingual_html(
             self._row_project_translated,
             self._row_project_title or self._row_detail_title,
             13, 11,
         ))
+        self.title.setToolTip(full_title)
 
     def set_light(self, light):
         self._refresh_title()
@@ -1234,6 +1246,9 @@ class ProjectFilesDialog(QDialog):
         title = QLabel()
         title.setTextFormat(Qt.RichText)
         title.setText(themed_bilingual_html(project.translated_title, project.english_title, 16, 12))
+        title.setToolTip(
+            bilingual_plain(project.translated_title, project.english_title)
+        )
         self.header_title_label = title
         title_row.addWidget(title)
         title_row.addStretch(1)
@@ -1461,6 +1476,7 @@ class ProjectFilesDialog(QDialog):
         files = filtered
         self._files = files or []
         self.retry_btn.hide()
+        self.download_btn.setEnabled(False)
         while self.groups_layout.count():
             item = self.groups_layout.takeAt(0)
             widget = item.widget()
@@ -1470,6 +1486,7 @@ class ProjectFilesDialog(QDialog):
                 widget.deleteLater()
         self._file_rows.clear()
         self._selected_row = None
+        self._reset_file_scroll()
         is_modpack = self.project_type == 'modpack'
         target_version = self._files_mc_version
         if not files:
@@ -1526,7 +1543,6 @@ class ProjectFilesDialog(QDialog):
         if compatible and target_version and target_version in keys:
             keys.remove(target_version)
             keys.insert(0, target_version)
-        first_row = None
         for key in keys:
             group_files = groups[key]
             group_files.sort(key=(lambda f: f.date or ''), reverse=True)
@@ -1538,20 +1554,20 @@ class ProjectFilesDialog(QDialog):
                 row.clicked.connect(self._select_row)
                 section.add_widget(row)
                 self._file_rows.append(row)
-                if first_row is None:
-                    first_row = row
             self.groups_layout.addWidget(section)
         self.groups_layout.addStretch(1)
-        if first_row is not None:
-            self._select_row(first_row)
-        self.download_btn.setEnabled(True)
+        self.download_btn.setEnabled(False)
         if is_modpack:
-            self.status_label.setText(f'共 {len(files)} 个整合包版本，请选择要安装的版本')
+            self.status_label.setText(f'共 {len(files)} 个整合包版本；请选择文件后继续')
         elif target_version:
-            self.status_label.setText(f'共 {len(files)} 个文件；当前游戏版本 {target_version}' + ('，已找到适配文件' if compatible else '，未找到精确适配文件'))
+            self.status_label.setText(f'共 {len(files)} 个文件；当前游戏版本 {target_version}' + ('，已找到适配文件' if compatible else '，未找到精确适配文件') + '；请选择文件后继续')
         else:
-            self.status_label.setText(f'共 {len(files)} 个文件，请选择要安装的版本')
-        self.status_label.setStyleSheet('color: rgba(255,255,255,0.55); font-size: 12px;')
+            self.status_label.setText(f'共 {len(files)} 个文件；请选择文件后继续')
+        self.status_label.setStyleSheet(
+            f'color: {"#7FE08A" if compatible else "#F0C060"}; font-size: 12px;'
+        )
+        self._reset_file_scroll()
+        QTimer.singleShot(0, self._reset_file_scroll)
         self.loading_overlay.stop()
 
     def _on_error(self, message):
@@ -1703,6 +1719,12 @@ class ProjectFilesDialog(QDialog):
             if card.project.icon_url == url:
                 card.set_icon(pix)
 
+    def _reset_file_scroll(self):
+        try:
+            self.scroll.verticalScrollBar().setValue(0)
+        except (AttributeError, RuntimeError):
+            pass
+
     def _select_row(self, row):
         if row is None:
             return
@@ -1710,6 +1732,10 @@ class ProjectFilesDialog(QDialog):
             self._selected_row.set_selected(False)
         self._selected_row = row
         row.set_selected(True)
+        mod_file = getattr(row, 'mod_file', None)
+        self.download_btn.setEnabled(
+            bool(mod_file is not None and getattr(mod_file, 'download_url', ''))
+        )
         self._show_dependencies(row.mod_file)
 
     def selected_file(self):
@@ -2109,7 +2135,7 @@ class ModBrowserPage(QWidget):
         self.download_bar.setRange(0, 100)
         self.download_bar.reset_value()
         self.download_bar.hide()
-        self.download_bar.setStyleSheet('\n            QProgressBar { background: #333; border-radius: 4px; height: 12px; }\n            QProgressBar::chunk { background: #88DDDD; border-radius: 4px; }\n        ')
+        self.download_bar.setStyleSheet('\n            QProgressBar { background: #333; border-radius: 6px; height: 12px; }\n            QProgressBar::chunk { background: #88DDDD; border-radius: 6px; }\n        ')
         layout.addWidget(self.download_bar)
         self._browser_index = self.stack.addWidget(browser)
         self.stack.setCurrentWidget(browser)

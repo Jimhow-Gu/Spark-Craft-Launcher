@@ -278,29 +278,33 @@ class LaunchPrepareWorker(QThread):
             skip_verify = settings.get('disable_file_verification')
             if skip_verify is None or skip_verify == '':
                 skip_verify = self.launch_mgr.config.get('disable_file_verification', False)
-            if not bool(skip_verify):
+            verify_files = not bool(skip_verify)
+            if verify_files:
                 manager = VersionManager(mc_dir)
-                status = manager.validate_version(self.version_id)
+                # 这里只做目录/JSON/依赖链快检；文件级缺失和损坏统一交给
+                # 下面的 RepairEngine，只跑一次。
+                status = manager.validate_version(self.version_id, quick=True)
                 if status.get('fatal'):
                     self.error.emit('版本文件损坏，无法启动：\n' + '\n'.join(status.get('issues') or ['未知错误']) + '\n\n请在版本选择列表中删除后重新安装。')
                     return
                 self.status.emit('正在检查缺失文件（快速启动）...')
-                engine = RepairEngine(self.version_id, mc_dir, status=self.status.emit, progress=self.progress.emit, cancel=(lambda: self._cancelled), fast=True, missing_only=True)
-                result = engine.repair()
-                if self._cancelled:
-                    return
-                if result.failed:
-                    self.error.emit('启动前自动修复失败：\n' + '\n'.join(result.failed_items or ['未知文件']))
-                    return
             else:
                 self.status.emit('正在检查缺失的游戏文件...')
-                engine = RepairEngine(self.version_id, mc_dir, status=self.status.emit, progress=self.progress.emit, cancel=(lambda: self._cancelled), fast=True, missing_only=True)
-                result = engine.repair()
-                if self._cancelled:
-                    return
-                if result.failed:
-                    self.error.emit('补全缺失文件失败：\n' + '\n'.join(result.failed_items or ['未知文件']))
-                    return
+            engine = RepairEngine(
+                self.version_id, mc_dir,
+                status=self.status.emit,
+                progress=self.progress.emit,
+                cancel=(lambda: self._cancelled),
+                fast=True,
+                missing_only=True,
+            )
+            result = engine.repair()
+            if self._cancelled:
+                return
+            if result.failed:
+                prefix = '启动前自动修复失败' if verify_files else '补全缺失文件失败'
+                self.error.emit(prefix + '：\n' + '\n'.join(result.failed_items or ['未知文件']))
+                return
             self.status.emit('正在生成启动命令...')
             command, err = self.launch_mgr.build_launch_command(self.version_id, prompt_java=False, force_java_path=self.force_java_path)
             if command:
@@ -619,7 +623,12 @@ class HomePage(QWidget):
             elif category in ('modded', 'modpack'):
                 is_mod = True
             else:
-                is_mod = bool(v.get('loader')) or self._is_modded_version(vid)
+                if 'modded' in v:
+                    is_mod = bool(v.get('modded'))
+                else:
+                    is_mod = (
+                        bool(v.get('loader')) or self._is_modded_version(vid)
+                    )
             if is_mod:
                 mod.append(v)
             else:
@@ -665,7 +674,21 @@ class HomePage(QWidget):
         self.status_label.setText(f'正在删除版本 {version_id} ...')
         self.action_btn.setEnabled(False)
         self.action_btn.setText('正在删除...')
-        worker = VersionDeleteWorker(version_id, version_dir, self)
+        def _still_running():
+            try:
+                window = self.window()
+                return bool(
+                    window is not None
+                    and hasattr(window, 'is_version_running')
+                    and window.is_version_running(version_id)
+                )
+            except RuntimeError:
+                return False
+
+        worker = VersionDeleteWorker(
+            version_id, version_dir, self,
+            running_check=_still_running,
+        )
         self._delete_worker = worker
         worker.done.connect(self._on_version_delete_done)
         worker.failed.connect(self._on_version_delete_failed)
@@ -1235,6 +1258,19 @@ class HomePage(QWidget):
         self._prepare_worker = worker
         self._prepare_done = False
         self._prepare_task_id = ''
+        try:
+            import time as _time
+            from core.download_manager import DownloadManager
+            task_id = f'launch-prepare-{version_id}-{int(_time.time() * 1000)}'
+            self._prepare_task_id = task_id
+            DownloadManager.instance().start_task(
+                task_id,
+                f'准备启动 {nickname}',
+                steps=['校验版本文件', '生成启动参数'],
+                cancel_callback=self._cancel_launch_prepare,
+            )
+        except Exception:
+            self._prepare_task_id = ''
         worker.success.connect(self._on_launch_prepared)
         worker.error.connect(self._on_launch_prepare_error)
         worker.status.connect(self._on_launch_prepare_status)
@@ -1242,8 +1278,32 @@ class HomePage(QWidget):
         worker.finished.connect((lambda w=worker: self._on_launch_prepare_finished(w)))
         worker.start()
 
+    def _update_prepare_task(self, **kwargs):
+        task_id = getattr(self, '_prepare_task_id', '')
+        if not task_id:
+            return
+        try:
+            from core.download_manager import DownloadManager
+            DownloadManager.instance().update_task(task_id, **kwargs)
+        except Exception:
+            pass
+
+    def _finish_prepare_task(self, success, message=''):
+        task_id = getattr(self, '_prepare_task_id', '')
+        self._prepare_task_id = ''
+        if not task_id:
+            return
+        try:
+            from core.download_manager import DownloadManager
+            DownloadManager.instance().finish_task(
+                task_id, bool(success), str(message or '')
+            )
+        except Exception:
+            pass
+
     def _on_launch_prepare_status(self, text):
         self.status_label.setText(text)
+        self._update_prepare_task(status=text)
 
     def _on_launch_prepare_progress(self, value):
         try:
@@ -1251,16 +1311,21 @@ class HomePage(QWidget):
         except (TypeError, ValueError):
             return
         self.status_label.setText(f'正在准备启动 {percent}%')
+        self._update_prepare_task(
+            percent=float(percent), status=f'正在准备启动 {percent}%'
+        )
         self.action_btn.set_working('取消', percent / 100.0, show_percent=True)
 
     def _on_launch_prepared(self, command, version_id):
         self._prepare_done = True
         self._launch_preparing = False
+        self._finish_prepare_task(True, '启动准备完成')
         self._start_game(command, version_id)
 
     def _on_launch_prepare_error(self, message):
         self._prepare_done = True
         self._launch_preparing = False
+        self._finish_prepare_task(False, message)
         self._restore_action_button()
         if self._prepare_cancelled:
             self.status_label.setText('已取消启动准备')
@@ -1287,6 +1352,7 @@ class HomePage(QWidget):
             pass
         self._restore_action_button()
         self.status_label.setText('已取消启动准备')
+        self._finish_prepare_task(False, '已取消')
 
     def _on_launch_prepare_finished(self, worker):
         self._launch_preparing = False
@@ -1300,6 +1366,12 @@ class HomePage(QWidget):
                 self._restore_action_button()
                 from ui.widgets.toast import show_toast
                 show_toast('启动准备意外中断，请重试', 'error', self)
+        if getattr(self, '_prepare_task_id', ''):
+            self._finish_prepare_task(
+                False,
+                '已取消' if getattr(worker, '_cancelled', False)
+                else '启动准备意外中断',
+            )
         if self._starting_worker is None and not self._is_running:
             self._restore_action_button()
         worker.deleteLater()

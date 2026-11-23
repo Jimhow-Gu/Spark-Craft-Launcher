@@ -15,7 +15,7 @@ import certifi
 from pathlib import Path
 from PySide6.QtCore import (Qt, Signal, QTimer, QThread, QUrl, QSize)
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QIcon, QPixmap)
-from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QProgressBar, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QComboBox, QDialog, QFileDialog, QFrame, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QProgressBar, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
 from core.app_font import ui_font
 from ui.widgets.frameless_dialog import FramelessInputDialog
 from core.config import ConfigManager
@@ -402,8 +402,10 @@ class VersionPage(QWidget):
         hint.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 12px;')
         layout.addWidget(hint)
         self.installed_list = QListWidget()
-        self.installed_list.setStyleSheet('\n            QListWidget {\n                background: rgba(30,41,41,0.62);\n                border: 1px solid rgba(255,255,255,0.16);\n                border-radius: 10px;\n            }\n            QListWidget::item {\n                padding: 11px 12px;\n                color: rgba(255,255,255,0.85);\n                border-bottom: 1px solid rgba(255,255,255,0.05);\n            }\n            QListWidget::item:selected {\n                background: rgba(136,221,221,0.2);\n                border-left: 3px solid #88DDDD;\n            }\n            QScrollBar:vertical {\n                background: rgba(255,255,255,0.06);\n                width: 13px;\n                margin: 2px;\n                border-radius: 6px;\n            }\n            QScrollBar::handle:vertical {\n                background: rgba(165,195,255,0.62);\n                min-height: 32px;\n                border-radius: 5px;\n            }\n            QScrollBar::handle:vertical:hover {\n                background: rgba(190,215,255,0.9);\n            }\n            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {\n                height: 0px;\n            }\n            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {\n                background: transparent;\n            }\n        ')
+        self.installed_list.setStyleSheet('\n            QListWidget {\n                background: rgba(30,41,41,0.62);\n                border: 1px solid rgba(255,255,255,0.16);\n                border-radius: 10px;\n            }\n            QListWidget::item {\n                padding: 0px 12px;\n                color: rgba(255,255,255,0.85);\n                border-bottom: 1px solid rgba(255,255,255,0.05);\n            }\n            QListWidget::item:selected {\n                background: rgba(136,221,221,0.2);\n                border-left: 3px solid #88DDDD;\n            }\n            QScrollBar:vertical {\n                background: rgba(255,255,255,0.06);\n                width: 13px;\n                margin: 2px;\n                border-radius: 6px;\n            }\n            QScrollBar::handle:vertical {\n                background: rgba(165,195,255,0.62);\n                min-height: 32px;\n                border-radius: 5px;\n            }\n            QScrollBar::handle:vertical:hover {\n                background: rgba(190,215,255,0.9);\n            }\n            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {\n                height: 0px;\n            }\n            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {\n                background: transparent;\n            }\n        ')
         self.installed_list.setIconSize(QSize(20, 20))
+        self.installed_list.setTextElideMode(Qt.ElideRight)
+        self.installed_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.installed_list.itemSelectionChanged.connect(self._on_installed_selection_changed)
         self.installed_list.itemDoubleClicked.connect(self._on_installed_double_clicked)
         layout.addWidget(self.installed_list, 1)
@@ -585,9 +587,12 @@ class VersionPage(QWidget):
         display_name = self._nicknames.get(version_id)
         text = f'{display_name}  [{version_id}]' if display_name else version_id
         item = QListWidgetItem(text)
+        item.setSizeHint(QSize(0, 38))
+        item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         item.setIcon(self._version_icon(version_type, loader, version_id))
         item.setData(Qt.UserRole, version_id)
         item.setData(Qt.UserRole + 1, text)
+        item.setToolTip(text)
         return item
 
     @staticmethod
@@ -857,7 +862,10 @@ class VersionPage(QWidget):
         version_dir = Path(self.config.get_mc_dir()) / 'versions' / version_id
         self.delete_btn.setEnabled(False)
         self.delete_btn.setText('删除中...')
-        worker = VersionDeleteWorker(version_id, version_dir, self)
+        worker = VersionDeleteWorker(
+            version_id, version_dir, self,
+            running_check=(lambda: self._version_running(version_id)),
+        )
         self._delete_worker = worker
         worker.done.connect(self._on_version_delete_done)
         worker.failed.connect(self._on_version_delete_failed)
@@ -955,21 +963,52 @@ class VersionPage(QWidget):
         filter_row = QHBoxLayout()
         filter_label = QLabel('版本类型')
         filter_label.setStyleSheet('color: rgba(255,255,255,0.7);')
-        self.type_combo = QComboBox()
-        self.type_combo.addItems(['正式版 (release)', '快照版 (snapshot)'])
-        self.type_combo.currentIndexChanged.connect(self._load_available_versions_async)
-        self.type_combo.setFixedWidth(180)
-        self.type_combo.setStyleSheet(self._combo_style())
+        filter_pill = QFrame()
+        filter_pill.setObjectName('VersionFilterPill')
+        filter_pill.setStyleSheet(
+            'QFrame#VersionFilterPill { background:rgba(255,255,255,0.06);'
+            ' border:1px solid rgba(255,255,255,0.12); border-radius:18px; }'
+        )
+        pill_layout = QHBoxLayout(filter_pill)
+        pill_layout.setContentsMargins(3, 3, 3, 3)
+        pill_layout.setSpacing(2)
+        self._filter_group = QButtonGroup(self)
+        self._filter_group.setExclusive(True)
+        self._filter_buttons = {}
+        for key, label in (('release', '正式版'), ('snapshot', '快照版')):
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setMinimumHeight(30)
+            btn.setMinimumWidth(86)
+            btn.setStyleSheet(
+                'QPushButton { background:transparent; color:rgba(255,255,255,0.62);'
+                ' border:none; border-radius:14px; padding:5px 16px;'
+                ' font-size:13px; font-weight:700; }'
+                'QPushButton:hover { background:rgba(255,255,255,0.10);'
+                ' border-radius:14px; }'
+                'QPushButton:checked { background:#90D9D9; color:#122828;'
+                ' border-radius:14px; }'
+            )
+            btn.setChecked(key == getattr(self, '_available_filter', 'release'))
+            btn.clicked.connect(
+                (lambda _checked=False, k=key: self._set_available_filter(k))
+            )
+            self._filter_group.addButton(btn)
+            pill_layout.addWidget(btn)
+            self._filter_buttons[key] = btn
         refresh_btn = QPushButton('刷新')
         refresh_btn.clicked.connect(self._load_available_versions_async)
         refresh_btn.setStyleSheet(self._secondary_btn_style())
         filter_row.addWidget(filter_label)
-        filter_row.addWidget(self.type_combo)
+        filter_row.addWidget(filter_pill)
         filter_row.addWidget(refresh_btn)
         filter_row.addStretch(1)
         layout.addLayout(filter_row)
         self.available_list = QListWidget()
         self.available_list.setIconSize(QSize(20, 20))
+        self.available_list.setTextElideMode(Qt.ElideRight)
+        self.available_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.available_list.setStyleSheet(self.installed_list.styleSheet())
         self.available_list.itemDoubleClicked.connect(self._on_version_double_clicked)
         layout.addWidget(self.available_list, 1)
@@ -989,7 +1028,7 @@ class VersionPage(QWidget):
         self.download_progress_bar.setRange(0, 100)
         self.download_progress_bar.reset_value()
         self.download_progress_bar.hide()
-        self.download_progress_bar.setStyleSheet('\n            QProgressBar { background:#333; border-radius:4px; height:16px; }\n            QProgressBar::chunk { background:#88DDDD; border-radius:4px; }\n        ')
+        self.download_progress_bar.setStyleSheet('\n            QProgressBar { background:#333; border-radius:6px; height:12px; }\n            QProgressBar::chunk { background:#88DDDD; border-radius:6px; }\n        ')
         progress_layout.addWidget(self.download_progress_bar)
         self.cancel_download_btn = QPushButton('取消下载')
         self.cancel_download_btn.hide()
@@ -1037,17 +1076,25 @@ class VersionPage(QWidget):
             self._load_worker = None
         self._loading = False
 
+    def _set_available_filter(self, key):
+        key = 'snapshot' if str(key).lower() == 'snapshot' else 'release'
+        for name, button in getattr(self, '_filter_buttons', {}).items():
+            button.setChecked(name == key)
+        if key == getattr(self, '_available_filter', 'release'):
+            return
+        self._available_filter = key
+        self._load_available_versions_async()
+
     def _load_available_versions_async(self, silent=False):
         if self._install_busy():
             self._pending_available_refresh = True
             return
-        type_map = {0: 'release', 1: 'snapshot'}
-        vtype = type_map.get(self.type_combo.currentIndex(), 'release')
-        # 同一筛选下重复点击刷新时复用正在进行的请求；只有切换筛选才中断重载。
+        vtype = getattr(self, '_available_filter', 'release')
+        # 同一筛选下重复点击刷新时复用正在进行的请求；切换筛选必须中断旧请求。
         if (
             self._load_worker is not None
             and (self._loading or self._load_worker.isRunning())
-            and vtype == getattr(self, '_available_filter', 'release')
+            and vtype == getattr(self, '_load_filter', None)
         ):
             return
         self._available_silent = bool(silent)
@@ -1069,7 +1116,7 @@ class VersionPage(QWidget):
             self.available_list.clear()
             self.available_loading.start('正在加载版本列表', 0)
         mirror_urls = self.config.get_version_mirrors() or ['https://launchermeta.mojang.com', 'https://bmclapi2.bangbang93.com', 'https://openbmclapi.bangbang93.com']
-        self._available_filter = vtype
+        self._load_filter = vtype
         self._loading = True
         self._load_worker = LoadVersionsWorker(mirror_urls, 'all')
         self._load_worker.progress.connect(self.available_loading.set_progress)
@@ -1077,26 +1124,45 @@ class VersionPage(QWidget):
         self._load_worker.start()
 
     def _add_available_header(self, text: str):
-        item = QListWidgetItem(text)
+        item = QListWidgetItem()
         item.setFlags(Qt.NoItemFlags)
-        item.setForeground(QColor(125, 125, 125))
-        font = item.font()
-        font.setBold(True)
-        font.setPointSize(max(8, font.pointSize() - 1))
-        item.setFont(font)
+        item.setSizeHint(QSize(0, 34))
+        holder = QWidget()
+        holder.setStyleSheet('background:transparent;')
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(6, 5, 6, 3)
+        row.setSpacing(0)
+        snapshot = '快照' in text
+        tag = QLabel(text)
+        tag.setStyleSheet(
+            'QLabel { color:%s; background:%s;'
+            ' border:1px solid %s; border-radius:9px;'
+            ' padding:2px 9px; font-size:12px; font-weight:700; }'
+            % (
+                '#ffd28a' if snapshot else '#9fe8e8',
+                'rgba(240,160,48,0.14)' if snapshot else 'rgba(136,221,221,0.14)',
+                'rgba(240,160,48,0.28)' if snapshot else 'rgba(136,221,221,0.24)',
+            )
+        )
+        row.addWidget(tag)
+        row.addStretch(1)
         self.available_list.addItem(item)
+        self.available_list.setItemWidget(item, holder)
 
     def _add_available_version(self, version: dict, tag: str=''):
         version_id = str(version.get('id') or '')
         text = f'{version_id}    {tag}' if tag else version_id
         item = QListWidgetItem(text)
+        item.setSizeHint(QSize(0, 38))
+        item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         item.setIcon(self._version_icon(str(version.get('type') or '')))
         item.setData(Qt.UserRole, version_id)
+        item.setToolTip(text)
         if tag:
             _font = item.font()
             _font.setBold(True)
             item.setFont(_font)
-            item.setToolTip(tag.strip('[]'))
+            item.setToolTip(f'{text}\n{tag.strip("[]")}')
         self.available_list.addItem(item)
 
     def _release_load_worker(self, worker):

@@ -17,9 +17,7 @@ import time
 from pathlib import Path
 from datetime import datetime
 from PySide6.QtCore import QThread, Signal
-import minecraft_launcher_lib
 from core.config import ConfigManager
-from core.auth import AuthManager
 logger = logging.getLogger('LaunchManager')
 _SHARED_JAVA_LIST = None
 _JAVA_LIST_LOCK = threading.Lock()
@@ -336,17 +334,27 @@ def parse_placeholder(text: str, ctx: dict) -> str:
 class LaunchManager:
     def __init__(self):
         self.config = ConfigManager()
-        self.auth = AuthManager()
+        self._auth_manager = None
         self._cached_java_list = None
         self.LAUNCHER_NAME = 'SCL'
         self.LAUNCHER_VERSION = '1.1.0'
         self.last_window_title = ''
+
+    @property
+    def auth(self):
+        '''账号模块包含网络/微软登录依赖，首屏不启动游戏时不需要。'''
+
+        if self._auth_manager is None:
+            from core.auth import AuthManager
+            self._auth_manager = AuthManager()
+        return self._auth_manager
 
     def detect_java(self) -> str:
         user_java = self.config.get('java_path', '')
         if user_java and os.path.isfile(user_java):
             return user_java
         try:
+            import minecraft_launcher_lib
             java_path = minecraft_launcher_lib.utils.get_java_executable()
             if java_path:
                 return java_path
@@ -1234,9 +1242,8 @@ class LaunchManager:
                 version_settings['memory_max'] = f'{max_mb}M'
                 version_settings['memory_min'] = f'{min_mb}M'
                 self.save_version_settings(version_id, version_settings)
-        # 预留一部分初始堆，减少进入游戏后堆动态扩张造成的周期性卡顿。
-        initial_mb = max(512, int(max_mb * 0.5))
-        initial_mb = max(min_mb, min(initial_mb, max_mb))
+        # -Xms 严格跟随用户设置的最小内存，不再自动取最大值的一半。
+        initial_mb = max(1, min(int(min_mb), int(max_mb)))
         max_mb = int(round(max_mb))
         initial_mb = int(round(initial_mb))
         logger.info(f'内存参数: -Xmx{max_mb}m -Xms{initial_mb}m')
@@ -1312,6 +1319,12 @@ class LaunchManager:
             options['nativesDirectory'] = str(Path(mc_dir) / 'versions' / final_id / 'natives')
             options['gameDirectory'] = str(self.get_game_dir(final_id))
             classpath = _existing_classpath(get_libraries(merged, mc_dir))
+            if not classpath.strip():
+                return (
+                    None,
+                    '版本依赖库/客户端 JAR 缺失，无法生成有效 classpath；'
+                    '请先运行游戏修复或重新安装该版本',
+                )
             command = [java_path] + jvm_args
             arguments = merged.get('arguments') if isinstance(merged.get('arguments'), dict) else {}
             main_class = str(merged.get('mainClass') or '')

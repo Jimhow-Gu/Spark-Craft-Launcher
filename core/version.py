@@ -25,13 +25,10 @@ import urllib.error
 from pathlib import Path
 from typing import (Optional, List, Callable, Any, Dict)
 from PySide6.QtCore import (QThread, Signal, QObject)
-import minecraft_launcher_lib
 import requests
 import certifi
 from core.config import ConfigManager
 from core.paths import safe_rmtree
-from core.launch import LaunchManager
-from core.installers import (InstallCancelled, create_alias, install_fabric, install_forge, install_neoforge, install_vanilla, retarget_launcher_profile)
 from core.net import DownloadCancelled, HttpClient
 from core.paths import scl_dir
 logger = logging.getLogger('VersionManager')
@@ -43,9 +40,20 @@ _IS_64BIT = platform.architecture()[0] == '64bit'
 _OS_NAME = 'windows' if platform.system() == 'Windows' else 'osx' if platform.system() == 'Darwin' else 'linux'
 _ACTIVE_INSTALLS: Dict[str, tuple[str, set[str]]] = {}
 _ACTIVE_INSTALL_LOCK = threading.RLock()
+_VERSION_SCAN_CACHE: Dict[str, tuple] = {}
+_VERSION_SCAN_LOCK = threading.RLock()
 
 def _versions_key(versions_dir: str | Path) -> str:
     return os.path.normcase(os.path.abspath(str(versions_dir)))
+
+def invalidate_versions_cache(versions_dir: str | Path=None) -> None:
+    '''安装/删除/重命名后主动丢弃版本列表缓存。'''
+
+    with _VERSION_SCAN_LOCK:
+        if versions_dir is None:
+            _VERSION_SCAN_CACHE.clear()
+        else:
+            _VERSION_SCAN_CACHE.pop(_versions_key(versions_dir), None)
 
 def register_active_install(token: str, versions_dir: str | Path) -> set[str]:
     '''记录安装开始前的版本目录集合，返回该快照。'''
@@ -57,11 +65,14 @@ def register_active_install(token: str, versions_dir: str | Path) -> set[str]:
         before = set()
     with _ACTIVE_INSTALL_LOCK:
         _ACTIVE_INSTALLS[str(token)] = _versions_key(versions_dir), before
+    invalidate_versions_cache(versions_dir)
     return before
 
 def unregister_active_install(token: str) -> None:
     with _ACTIVE_INSTALL_LOCK:
-        _ACTIVE_INSTALLS.pop(str(token), None)
+        entry = _ACTIVE_INSTALLS.pop(str(token), None)
+    if entry is not None:
+        invalidate_versions_cache(entry[0])
 
 def _active_install_hidden(versions_dir: str | Path) -> set[str]:
     '''返回进行中的安装任务新创建、尚不应展示的版本 ID。'''
@@ -81,18 +92,23 @@ def _active_install_hidden(versions_dir: str | Path) -> set[str]:
             continue
     return hidden
 
-def detect_version_loader(version_id: str, data: Optional[dict]=None, version_dir: Optional[Path]=None) -> str:
+def detect_version_loader(
+    version_id: str, data: Optional[dict]=None, version_dir: Optional[Path]=None,
+    pack_data: Optional[dict]=None,
+) -> str:
     '''识别实例使用的加载器：forge / fabric / neoforge / quilt / optifine。'''
 
     if version_dir is not None:
-        pack_file = Path(version_dir) / 'pmgl_pack.json'
-        try:
-            pack = json.loads(pack_file.read_text(encoding='utf-8'))
-            loader = str(pack.get('loader') or '').strip().lower()
+        if pack_data is None:
+            pack_file = Path(version_dir) / 'pmgl_pack.json'
+            try:
+                pack_data = json.loads(pack_file.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                pack_data = {}
+        if isinstance(pack_data, dict):
+            loader = str(pack_data.get('loader') or '').strip().lower()
             if loader in ('forge', 'fabric', 'neoforge', 'quilt', 'optifine'):
                 return loader
-        except (OSError, ValueError):
-            pass
     name = str(version_id or '').lower()
     if 'neoforge' in name:
         return 'neoforge'
@@ -212,6 +228,7 @@ class DownloadHelper:
 
 
 def scan_all_java() -> List[tuple]:
+    from core.launch import LaunchManager
     launch_mgr = LaunchManager()
     java_list = launch_mgr._detect_all_java()
     candidates = []
@@ -241,85 +258,173 @@ class VersionManager:
         self.dl_helper = DownloadHelper(self.config.get_mirror_list())
         self.last_rename_error = ''
 
-    def _dependency_version_ids(self) -> set[str]:
-        '''被其他实例继承的原版/加载器版本只作为依赖，不在列表中重复显示。'''
+    @staticmethod
+    def _read_version_json(path: Path):
+        try:
+            data = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _dependency_ids_from_data(self, data_by_id: dict) -> set[str]:
+        '''从已读取的版本 JSON 计算依赖版本，避免二次读盘。'''
 
         dependency_ids = set()
-        if not self.versions_dir.exists():
-            return dependency_ids
-        try:
-            version_dirs = [item for item in self.versions_dir.iterdir() if item.is_dir()]
-        except OSError:
-            return dependency_ids
-        for ver_dir in version_dirs:
-            if not ver_dir.is_dir():
-                continue
-            current = ver_dir.name
+        for start in data_by_id:
+            current = start
             seen = {current}
             for _ in range(12):
-                json_path = self.versions_dir / current / f'{current}.json'
-                try:
-                    data = json.loads(json_path.read_text(encoding='utf-8'))
-                except (OSError, ValueError):
-                    continue
-                else:
-                    if not isinstance(data, dict):
-                        continue
-                    parent = str(data.get('inheritsFrom') or '')
-                    if parent:
-                        if parent in seen:
-                            continue
-                    parent_dir = self.versions_dir / parent
-                    if not parent_dir.is_dir():
-                        continue
-                    dependency_ids.add(parent)
-                    seen.add(parent)
-                    current = parent
+                data = data_by_id.get(current)
+                if not isinstance(data, dict):
+                    break
+                parent = str(data.get('inheritsFrom') or '')
+                if not parent or parent in seen:
+                    break
+                if not (self.versions_dir / parent).is_dir():
+                    break
+                dependency_ids.add(parent)
+                seen.add(parent)
+                current = parent
         return dependency_ids
 
-    def get_installed_versions(self, strict=False):
-        versions = []
+    def _scan_versions(self, strict=False):
+        '''一次扫描读取目录和 JSON，并按 mtime/size 缓存结果。'''
+
+        empty = ([], set())
         if not self.versions_dir.exists():
-            return versions
-        dependency_ids = self._dependency_version_ids()
-        active_hidden = _active_install_hidden(self.versions_dir)
+            return empty
         try:
-            version_dirs = list(self.versions_dir.iterdir())
+            version_dirs = [
+                item for item in self.versions_dir.iterdir() if item.is_dir()
+            ]
         except OSError:
             if strict:
                 raise
-            return versions
+            return empty
+        active_hidden = _active_install_hidden(self.versions_dir)
+        items = []
+        signature = []
         for ver_dir in version_dirs:
-            if ver_dir.is_dir():
-                if ver_dir.name in active_hidden:
-                    continue
-                if (ver_dir / INCOMPLETE_MARKER).exists():
-                    continue
-                if (ver_dir / DEPENDENCY_MARKER).exists():
-                    continue
-                if ver_dir.name in dependency_ids:
-                    continue
-                expected_json = ver_dir / f'{ver_dir.name}.json'
-                if expected_json.exists():
-                    try:
-                        with open(expected_json, encoding='utf-8') as f:
-                            data = json.load(f)
-                        if not isinstance(data, dict):
-                            continue
-                        loader = detect_version_loader(ver_dir.name, data, ver_dir)
-                        if not loader:
-                            hint = f"{data.get('inheritsFrom') or ''} {data.get('jar') or ''}".lower()
-                            for key in ('neoforge', 'forge', 'fabric', 'quilt', 'optifine'):
-                                if key in hint:
-                                    loader = key
-                                    break
-                        vtype = str(data.get('type') or 'release')
-                        if vtype.lower() == 'unknown':
-                            vtype = 'release'
-                        versions.append({'id': ver_dir.name, 'type': vtype, 'loader': loader})
-                    except Exception:
-                        pass
-        return versions
+            name = ver_dir.name
+            json_path = ver_dir / f'{name}.json'
+            pack_path = ver_dir / 'pmgl_pack.json'
+            try:
+                dir_stat = ver_dir.stat()
+            except OSError:
+                continue
+            try:
+                json_stat = json_path.stat()
+            except OSError:
+                json_stat = None
+            try:
+                pack_stat = pack_path.stat()
+            except OSError:
+                pack_stat = None
+            incomplete = (ver_dir / INCOMPLETE_MARKER).exists()
+            dependency = (ver_dir / DEPENDENCY_MARKER).exists()
+            items.append((
+                name, ver_dir, json_path, json_stat,
+                pack_path, pack_stat, incomplete, dependency,
+            ))
+            signature.append((
+                name,
+                dir_stat.st_mtime_ns,
+                json_stat.st_mtime_ns if json_stat else 0,
+                json_stat.st_size if json_stat else -1,
+                pack_stat.st_mtime_ns if pack_stat else 0,
+                pack_stat.st_size if pack_stat else -1,
+                incomplete,
+                dependency,
+            ))
+        signature = tuple(signature)
+        active_key = frozenset(active_hidden)
+        cache_key = _versions_key(self.versions_dir)
+        with _VERSION_SCAN_LOCK:
+            cached = _VERSION_SCAN_CACHE.get(cache_key)
+            if (
+                cached is not None
+                and cached[0] == signature
+                and cached[1] == active_key
+            ):
+                return [dict(item) for item in cached[2]], set(cached[3])
+
+        data_by_id = {}
+        pack_by_id = {}
+        pack_exists = set()
+        for item in items:
+            name, _ver_dir, json_path, json_stat = item[:4]
+            pack_path, pack_stat = item[4:6]
+            if json_stat is not None:
+                data = self._read_version_json(json_path)
+                if data is not None:
+                    data_by_id[name] = data
+            if pack_stat is not None:
+                pack_exists.add(name)
+                pack_data = self._read_version_json(pack_path)
+                pack_by_id[name] = (
+                    pack_data if isinstance(pack_data, dict) else {}
+                )
+        dependency_ids = self._dependency_ids_from_data(data_by_id)
+        versions = []
+        for item in items:
+            (
+                name, ver_dir, _json_path, json_stat,
+                _pack_path, _pack_stat, incomplete, dependency,
+            ) = item
+            if name in active_hidden or incomplete or dependency:
+                continue
+            if name in dependency_ids or json_stat is None:
+                continue
+            data = data_by_id.get(name)
+            if data is None:
+                continue
+            try:
+                loader = detect_version_loader(
+                    name, data, ver_dir, pack_data=pack_by_id.get(name, {})
+                )
+                if not loader:
+                    hint = (
+                        f"{data.get('inheritsFrom') or ''} "
+                        f"{data.get('jar') or ''}"
+                    ).lower()
+                    for key in ('neoforge', 'forge', 'fabric', 'quilt', 'optifine'):
+                        if key in hint:
+                            loader = key
+                            break
+                vtype = str(data.get('type') or 'release')
+                if vtype.lower() == 'unknown':
+                    vtype = 'release'
+                lower_name = name.lower()
+                modded = (
+                    bool(loader)
+                    or name in pack_exists
+                    or (ver_dir / 'game').is_dir()
+                    or any(
+                        key in lower_name
+                        for key in ('forge', 'fabric', 'neoforge', 'quilt', 'optifine')
+                    )
+                )
+                versions.append({
+                    'id': name,
+                    'type': vtype,
+                    'loader': loader,
+                    'modded': bool(modded),
+                })
+            except Exception:
+                continue
+        with _VERSION_SCAN_LOCK:
+            _VERSION_SCAN_CACHE[cache_key] = (
+                signature, active_key, versions, dependency_ids,
+            )
+        return [dict(item) for item in versions], set(dependency_ids)
+
+    def _dependency_version_ids(self) -> set[str]:
+        '''被其他实例继承的原版/加载器版本只作为依赖，不在列表中重复显示。'''
+
+        return self._scan_versions(strict=False)[1]
+
+    def get_installed_versions(self, strict=False):
+        return self._scan_versions(strict=strict)[0]
 
     def is_version_installed(self, version_id):
         ver_dir = self.versions_dir / version_id
@@ -355,39 +460,13 @@ class VersionManager:
     def get_modded_versions(self):
         '''返回已安装的非原版实例，按最近安装/修改时间倒序。'''
 
+        versions, _dependency_ids = self._scan_versions()
         result = []
-        if not self.versions_dir.exists():
-            return result
-        dependency_ids = self._dependency_version_ids()
-        active_hidden = _active_install_hidden(self.versions_dir)
-        try:
-            version_dirs = list(self.versions_dir.iterdir())
-        except OSError:
-            return result
-        for ver_dir in version_dirs:
-            if not ver_dir.is_dir():
+        for version in versions:
+            if not version.get('modded'):
                 continue
-            if ver_dir.name in active_hidden:
-                continue
-            if (ver_dir / INCOMPLETE_MARKER).exists():
-                continue
-            if (ver_dir / DEPENDENCY_MARKER).exists():
-                continue
-            if ver_dir.name in dependency_ids:
-                continue
+            ver_dir = self.versions_dir / str(version.get('id') or '')
             json_path = ver_dir / f'{ver_dir.name}.json'
-            if not json_path.exists():
-                continue
-            name = ver_dir.name.lower()
-            is_modded = any((k in name for k in ('forge', 'fabric', 'neoforge', 'quilt', 'optifine'))) or (ver_dir / 'pmgl_pack.json').exists() or (ver_dir / 'game').exists()
-            if not is_modded:
-                try:
-                    blob = json.dumps(json.loads(json_path.read_text(encoding='utf-8')), ensure_ascii=False).lower()
-                    is_modded = any((marker in blob for marker in ('fabric-loader', 'net.fabricmc', 'quilt-loader', 'org.quiltmc', 'minecraftforge', 'net.minecraftforge', 'bootstraplauncher', 'net.neoforged', 'neoforge', 'optifine')))
-                except (OSError, ValueError):
-                    is_modded = False
-            if not is_modded:
-                continue
             try:
                 mtime = json_path.stat().st_mtime
             except OSError:
@@ -423,8 +502,12 @@ class VersionManager:
                 allowed = True
         return allowed
 
-    def validate_version(self, version_id: str) -> dict:
-        '''快速结构校验：返回 valid / fatal / issues。'''
+    def validate_version(self, version_id: str, quick: bool = False) -> dict:
+        '''快速结构校验：返回 valid / fatal / issues。
+
+        quick=True 只校验版本目录/JSON/依赖链，不扫描 libraries/assets；
+        启动前由 RepairEngine 统一做文件级校验，避免重复全量扫描。
+        '''
 
         result = {'version_id': version_id, 'valid': True, 'fatal': False, 'issues': []}
         mc_root = Path(self.mc_dir)
@@ -470,6 +553,9 @@ class VersionManager:
                 result['issues'].append(f'父版本 {parent} 的 JSON 损坏')
                 break
             current_id = parent
+        if quick:
+            result['valid'] = not result['issues']
+            return result
         jar_id = None
         for dir_id, info in chain:
             if info.get('jar'):
@@ -526,6 +612,7 @@ class VersionManager:
         ver_dir = self.versions_dir / version_id
         if not ver_dir.exists():
             return False
+        invalidate_versions_cache(self.versions_dir)
         try:
             safe_rmtree(ver_dir, ignore_errors=True)
             if ver_dir.exists():
@@ -535,6 +622,8 @@ class VersionManager:
         except Exception as e:
             logger.error(f'删除版本 {version_id} 失败: {e}')
             return False
+        finally:
+            invalidate_versions_cache(self.versions_dir)
 
     def rename_version(self, old_id, new_id, running_check=None):
         '''预检后通过 journal 两阶段重命名；失败自动回滚。'''
@@ -544,6 +633,7 @@ class VersionManager:
         new_id = str(new_id or '').strip()
         if old_id == new_id:
             return True
+        invalidate_versions_cache(self.versions_dir)
         try:
             from core.version_rename import build_rename_plan, execute_rename
             plan = build_rename_plan(
@@ -560,6 +650,8 @@ class VersionManager:
             self.last_rename_error = str(exc)
             logger.error(f'重命名版本 {old_id} -> {new_id} 失败: {exc}')
             return False
+        finally:
+            invalidate_versions_cache(self.versions_dir)
 
     def get_available_versions(self, version_type='release'):
         try:
@@ -888,6 +980,7 @@ class InstallWorker(QThread):
                 self.progress_updated.emit(progress)
 
             callback = {'setStatus': set_status, 'setProgress': set_progress}
+            import minecraft_launcher_lib
             minecraft_launcher_lib.install.install_minecraft_version(self.version_id, self.mc_dir, callback=callback)
             if self._cancelled:
                 return
@@ -1019,7 +1112,9 @@ class FullInstallWorker(QThread):
 
     def _install_standalone_optifine(self, info, progress_base=20, progress_span=70):
         from core.optifine import OptiFineManager
-        from core.installers import pick_java
+        from core.installers import (
+            install_vanilla, pick_java, retarget_launcher_profile,
+        )
         manager = OptiFineManager()
         temp_dir = PROJECT_TEMP / 'optifine'
         temp_dir.mkdir(exist_ok=True)
@@ -1094,6 +1189,10 @@ class FullInstallWorker(QThread):
         self._status(f'OptiFine 已放入 mods: {dest.name}')
 
     def _run_impl(self):
+        from core.installers import (
+            InstallCancelled, create_alias, install_fabric, install_forge,
+            install_neoforge, install_vanilla,
+        )
         if self.version_mgr is None:
             self.version_mgr = VersionManager(self.mc_dir)
         mc_version = self.version_id
@@ -1374,12 +1473,23 @@ class VersionDeleteWorker(QThread):
     done = Signal(str)
     failed = Signal(str, str)
 
-    def __init__(self, version_id, version_dir, parent=None):
+    def __init__(self, version_id, version_dir, parent=None, running_check=None):
         super().__init__(parent)
         self.version_id = str(version_id)
         self.version_dir = str(version_dir)
+        self.running_check = running_check
 
     def run(self):
+        if callable(self.running_check):
+            try:
+                if self.running_check():
+                    self.failed.emit(
+                        self.version_id,
+                        '该版本的游戏正在运行，请先关闭游戏后再删除。',
+                    )
+                    return
+            except Exception:
+                pass
         path = Path(self.version_dir)
         last_error = ''
         for _attempt in range(6):

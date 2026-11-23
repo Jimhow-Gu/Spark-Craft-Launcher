@@ -19,10 +19,12 @@ LOG_FILE = LOG_DIR / 'launcher.log'
 
 try:
     # 启动器会主动关闭部分证书校验（镜像/第三方源），无需把每条
-    # InsecureRequestWarning 都打印到控制台。
+    # InsecureRequestWarning 都打印到控制台。不要在这里导入 urllib3：
+    # 正常启动没有网络请求，导入它会白白多花上百毫秒。
     import warnings
-    from urllib3.exceptions import InsecureRequestWarning
-    warnings.filterwarnings('ignore', category=InsecureRequestWarning)
+    warnings.filterwarnings(
+        'ignore', message='.*Unverified HTTPS request.*'
+    )
 except Exception:
     pass
 

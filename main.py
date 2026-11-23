@@ -46,7 +46,9 @@ def resource_path(relative: str) -> Path:
     return base / relative
 
 
-from core.paths import migrate_legacy_dirs, ensure_runtime_dirs
+from core.paths import (
+    migrate_legacy_dirs, ensure_runtime_dirs, legacy_dirs_pending, scl_dir,
+)
 from core.logging_setup import setup_logging
 setup_logging()
 
@@ -292,7 +294,7 @@ def main():
     app.aboutToQuit.connect(release_single_instance)
     app.setApplicationName("Spark Craft Launcher")
     app.setApplicationDisplayName("Spark Craft Launcher")
-    from core.update import CURRENT_VERSION
+    from core.release_info import CURRENT_VERSION
     app.setApplicationVersion(CURRENT_VERSION)
     startup_light = False
     # 启动图标跟随当前主题（配置优先，其次系统 AppsUseLightTheme）。
@@ -360,46 +362,59 @@ def main():
         activation_server.activation_requested.connect(activate_existing_window)
 
     # 兜底：如果上次下载完更新但重启按钮没有生效，下次启动直接安装。
-    try:
-        from core.update import (
-            apply_downloaded_update_on_startup,
-            downloaded_update_available,
-        )
-        if downloaded_update_available():
-            logging.getLogger("Startup").info("发现已下载更新，尝试启动时安装")
-            release_single_instance()
-            if apply_downloaded_update_on_startup():
-                os._exit(0)
-            acquire_single_instance()
-    except Exception:
-        pass
+    # 先看轻量文件标记，正常启动不导入 requests/urllib3 更新栈。
+    update_dir = scl_dir() / 'update'
+    if (update_dir / 'downloaded_update.json').is_file():
+        try:
+            from core.update import (
+                apply_downloaded_update_on_startup,
+                downloaded_update_available,
+            )
+            if downloaded_update_available():
+                logging.getLogger("Startup").info("发现已下载更新，尝试启动时安装")
+                release_single_instance()
+                if apply_downloaded_update_on_startup():
+                    os._exit(0)
+                acquire_single_instance()
+        except Exception:
+            pass
 
-    # 更新时旧 exe 会被重命名为 .old。先同步快速尝试一次（旧进程通常
-    # 已经退出），再交给后台线程按 1/2/4/8/15/30/60/120 秒继续重试，
-    # 避免用户启动后很快关闭导致清零机会被错过。
+    # 更新时旧 exe 会被重命名为 .old。只有确实存在备份时才加载更新模块。
     leftover_old = []
     try:
         import threading
-        from core.update import cleanup_old_executable
-        leftover_old = cleanup_old_executable(retries=4, retry_rounds=1) or []
-        threading.Thread(
-            target=cleanup_old_executable,
-            kwargs={'retry_rounds': 9},
-            daemon=True,
-        ).start()
+        target = Path(sys.executable).resolve() if getattr(sys, 'frozen', False) else None
+        has_old = bool(
+            target is not None
+            and (
+                any(target.parent.glob(target.name + '*.old'))
+                or (target.parent / '_internal.old').exists()
+            )
+        )
+        if has_old:
+            from core.update import cleanup_old_executable
+            leftover_old = cleanup_old_executable(retries=4, retry_rounds=1) or []
+            threading.Thread(
+                target=cleanup_old_executable,
+                kwargs={'retry_rounds': 9},
+                daemon=True,
+            ).start()
     except Exception:
         pass
 
     # 更新后首次启动时在页面读取缓存前刷新旧素材/新闻/翻译缓存。
-    try:
-        from core.update import pending_update_exists, clear_launcher_caches
-        if pending_update_exists():
-            clear_launcher_caches()
-    except Exception:
-        pass
+    if (update_dir / 'updated_update.json').is_file():
+        try:
+            from core.update import pending_update_exists, clear_launcher_caches
+            if pending_update_exists():
+                clear_launcher_caches()
+        except Exception:
+            pass
 
-    # 只有首个实例才整理 SCL 运行目录，避免第二个实例移动正在使用的文件
-    migrate_legacy_dirs()
+    # 只有首个实例才整理 SCL 运行目录，避免第二个实例移动正在使用的文件。
+    # 先用廉价存在性检查跳过绝大多数已是新版目录的启动。
+    if legacy_dirs_pending():
+        migrate_legacy_dirs()
     ensure_runtime_dirs()
     try:
         from core.java_download import cleanup_old_java_runtimes

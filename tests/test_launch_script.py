@@ -73,6 +73,27 @@ class BatchScriptTests(unittest.TestCase):
         self.assertIn('"x<y"', java_line)
         self.assertIn('cd /D "C:\\mc"', lines)
 
+    def test_javaagent_localhost_and_chinese_path(self):
+        command = [
+            r'C:\Program Files\Java\bin\java.exe',
+            r'-javaagent:C:\Users\测试 用户\authlib-injector.jar=http://127.0.0.1:5000/api',
+            '-Xmx3715m',
+            '-Xms512m',
+            r'-Djava.library.path=C:\中文 目录\natives',
+            'Main',
+        ]
+        lines = _serialize_batch_command(
+            command, '1.21.11 中文版', r'D:\游戏 目录\.minecraft\versions\1.21.11 中文版'
+        )
+        text = '\r\n'.join(lines)
+        self.assertIn('127.0.0.1:5000/api', text)
+        self.assertIn('-javaagent:', text)
+        self.assertIn('C:\\Users\\测试 用户\\authlib-injector.jar', text)
+        self.assertIn('cd /D "D:\\游戏 目录', text)
+        self.assertIn('title 启动 - 1.21.11 中文版', text)
+        # 导出端按 GBK 写盘；确保这些字符都能编码。
+        text.encode('gbk')
+
     def test_long_classpath_uses_variable(self):
         classpath = ';'.join(
             r'C:\Users\tester\.minecraft\libraries\mod%04d\x.jar' % index

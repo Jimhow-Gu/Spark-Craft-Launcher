@@ -181,6 +181,36 @@ def _merge_move(src, dest):
     except OSError:
         pass
 
+def legacy_dirs_pending() -> bool:
+    '''快速判断是否真的存在旧目录，避免每次启动都进入迁移流程。'''
+
+    base = launcher_base_dir()
+    runtime = scl_dir()
+    for name in RUNTIME_FOLDERS:
+        src = base / name
+        try:
+            if src.resolve() != (runtime / name).resolve() and src.exists():
+                return True
+        except OSError:
+            if src.exists():
+                return True
+    try:
+        config_dir = Path.home() / '.mc_launcher_py'
+    except Exception:
+        return False
+    if not config_dir.is_dir():
+        return False
+    return any(
+        path.exists()
+        for path in (
+            config_dir / 'skins',
+            config_dir / 'icon_cache',
+            config_dir / 'authlib-injector.jar',
+            config_dir / 'mc_versions_cache.json',
+        )
+    )
+
+
 def migrate_legacy_dirs():
     '''把旧版放在启动器根目录 / 用户配置目录的运行数据迁入 SCL。'''
 

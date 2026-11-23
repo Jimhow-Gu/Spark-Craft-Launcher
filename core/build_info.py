@@ -1,6 +1,6 @@
 '''启动器构建标识与发布元数据。'''
 
-from core.update import CURRENT_VERSION, EXECUTABLE_BUILD
+from core.release_info import CURRENT_VERSION, EXECUTABLE_BUILD
 
 RELEASE_CHANNEL = 'REL'
 RELEASE_BUILD = '20261123'
