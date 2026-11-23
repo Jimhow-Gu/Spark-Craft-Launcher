@@ -30,6 +30,12 @@ PROJECT_TEMP = scl_dir() / 'temp_install'
 PROJECT_TEMP.mkdir(parents=True, exist_ok=True)
 BMCLAPI = 'https://bmclapi2.bangbang93.com'
 OPENBMCLAPI = 'https://openbmclapi.bangbang93.com'
+# 在线安装方式 B 的 Maven 镜像；最后一项为空表示回退官方源。
+_ONLINE_MAVEN_MIRRORS = (
+    f'{BMCLAPI}/maven/',
+    f'{OPENBMCLAPI}/maven/',
+    '',
+)
 
 class InstallCancelled(Exception):
     pass
@@ -1035,7 +1041,13 @@ def install_forge(mc_version, forge_version, mc_dir, custom_name, *, method='aut
             _prefetch_mojmaps(profile, mc_dir, status_cb=status_cb, cancel=cancel)
             log_path = LOG_DIR / f'install_{mc_version}-{forge_version}_online.log'
             emit('loader_install', 5)
-            rc = _run_installer(java_path, patched, ['--installClient', str(mc_dir), '--mirror', 'https://repo.cleanroommc.com/releases/'], mc_dir_path, status_cb=status_cb, log_path=log_path, maven_mirror=False, cancel=cancel)
+            for mirror in _ONLINE_MAVEN_MIRRORS:
+                args = ['--installClient', str(mc_dir)]
+                if mirror:
+                    args.extend(['--mirror', mirror])
+                rc = _run_installer(java_path, patched, args, mc_dir_path, status_cb=status_cb, log_path=log_path, maven_mirror=False, cancel=cancel)
+                if rc == 0:
+                    break
             if rc == 0:
                 emit('loader_install', 100)
                 ProgressMapper(50, 10, progress_cb)(100)
@@ -1247,7 +1259,13 @@ def install_neoforge(mc_version, neoforge_version, mc_dir, custom_name, *, metho
         _prefetch_mojmaps(profile, mc_dir, status_cb=status_cb, cancel=cancel)
         log_path = LOG_DIR / f'install_{neoforge_version}_online.log'
         emit('loader_install', 5)
-        rc = _run_installer(java_path, patched, ['--install-client', str(mc_dir), '--mirror', 'https://repo.cleanroommc.com/releases/'], mc_dir_path, status_cb=status_cb, log_path=log_path, maven_mirror=False, cancel=cancel)
+        for mirror in _ONLINE_MAVEN_MIRRORS:
+            args = ['--install-client', str(mc_dir)]
+            if mirror:
+                args.extend(['--mirror', mirror])
+            rc = _run_installer(java_path, patched, args, mc_dir_path, status_cb=status_cb, log_path=log_path, maven_mirror=False, cancel=cancel)
+            if rc == 0:
+                break
         if rc == 0:
             emit('loader_install', 100)
             ProgressMapper(50, 10, progress_cb)(100)

@@ -114,6 +114,45 @@ class StagedDownloadTests(unittest.TestCase):
                 installers._download_installer([url], dest, http=http)
             self.assertEqual(dest.read_bytes(), b'OLD')
 
+    def test_empty_staged_file_is_not_reused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / 'file.bin'
+            dest.write_bytes(b'OLD')
+            (Path(tmp) / 'file.bin.new').write_bytes(b'')
+            http = FakeHttp({'good': b'NEW'})
+            staged.staged_download(['good'], dest, http=http)
+            self.assertEqual(dest.read_bytes(), b'NEW')
+            self.assertEqual(http.calls, ['good'])
+
+    def test_empty_staged_file_can_be_opted_in(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / 'file.bin'
+            dest.write_bytes(b'OLD')
+            (Path(tmp) / 'file.bin.new').write_bytes(b'')
+            staged.staged_download([], dest, allow_empty=True)
+            self.assertEqual(dest.read_bytes(), b'')
+
+    def test_all_hashes_are_checked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'file.bin'
+            path.write_bytes(b'content')
+            sha1 = hashlib.sha1(b'content').hexdigest()
+            sha256 = hashlib.sha256(b'content').hexdigest()
+            sha512 = hashlib.sha512(b'content').hexdigest()
+            self.assertTrue(HttpClient._verify(
+                path, sha1=sha1, sha256=sha256, sha512=sha512, size=7
+            ))
+            self.assertFalse(HttpClient._verify(
+                path, sha1=sha1, sha256='0' * 64, size=7
+            ))
+            self.assertFalse(HttpClient._verify(
+                path, sha256=sha256, sha512='0' * 128, size=7
+            ))
+
+    def test_no_cleanroom_mirror(self):
+        text = Path(installers.__file__).read_text(encoding='utf-8')
+        self.assertNotIn('cleanroommc', text.lower())
+
 
 class JavaRuntimeTests(unittest.TestCase):
     def test_bad_java_zip_keeps_existing_runtime(self):

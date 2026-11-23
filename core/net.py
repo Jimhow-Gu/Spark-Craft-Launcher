@@ -510,19 +510,26 @@ class HttpClient:
         try:
             if not path.is_file():
                 return False
-            if size is not None:
-                if path.stat().st_size != size:
+            actual_size = path.stat().st_size
+            if size is not None and actual_size != size:
+                return False
+            checked = False
+            for algorithm, expected in (
+                ('sha1', sha1),
+                ('sha256', sha256),
+                ('sha512', sha512),
+            ):
+                if not expected:
+                    continue
+                checked = True
+                if _hash_file(path, algorithm) != str(expected).lower():
                     return False
-                if size == 0 and not (sha1 or sha256 or sha512):
-                    return True
-            if sha1:
-                return _hash_file(path, 'sha1') == sha1.lower()
-            if sha256:
-                return _hash_file(path, 'sha256') == sha256.lower()
-            if sha512:
-                return _hash_file(path, 'sha512') == sha512.lower()
+            if checked:
+                return True
+            if size is not None:
+                return True
             # 没有任何期望哈希/大小时，0 字节文件不可能是有效下载结果。
-            return path.stat().st_size > 0
+            return actual_size > 0
         except OSError:
             return False
 

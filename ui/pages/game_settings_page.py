@@ -1257,7 +1257,7 @@ class GameSettingsPage(QWidget):
         self.mem_slider.setEnabled(enabled)
         if enabled:
             self._save_setting('mem_mode', 'custom')
-            self._save_setting('memory_max', self._format_mem(self.mem_slider.value()))
+            self._save_setting('memory_max', f'{int(self.mem_slider.value())}M')
             return
         self._save_setting('mem_mode', 'global')
         self._save_setting('memory_max', '')
@@ -1265,7 +1265,7 @@ class GameSettingsPage(QWidget):
     def _on_mem_slider_changed(self, value):
         self._update_mem_label()
         if self.custom_radio.isChecked():
-            self._save_setting('memory_max', self._format_mem(value))
+            self._save_setting('memory_max', f'{int(value)}M')
 
     def _on_java_changed(self, index):
         if index == 0:

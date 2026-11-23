@@ -10,7 +10,6 @@ import re
 import shutil
 import sys
 import json
-import base64
 import math
 import logging
 import threading
@@ -194,6 +193,134 @@ def chinese_lang_code(base_version) -> str:
         except ValueError:
             pass
     return 'zh_CN'
+
+def parse_mem_to_mb(mem_str):
+    '''把内存文本转换为整数 MB；Java 的 -Xmx/-Xms 不接受小数。'''
+
+    match = re.match(
+        r'^\s*(\d+(?:\.\d+)?)\s*([GMK]?)\s*$',
+        str(mem_str or ''),
+        re.I,
+    )
+    if not match:
+        return 2048
+    try:
+        val = float(match.group(1))
+    except (TypeError, ValueError):
+        return 2048
+    if not math.isfinite(val) or val <= 0:
+        return 2048
+    unit = match.group(2).upper()
+    if unit == 'G':
+        return int(round(val * 1024))
+    if unit == 'K':
+        return max(1, int(round(val / 1024)))
+    return int(round(val))
+
+
+_BATCH_SPECIAL = ' \t&|<>^()'
+
+
+def _batch_arg(value) -> str:
+    '''序列化 cmd 参数：转义 %，并对空格/特殊字符加引号。'''
+
+    text = str(value).replace('%', '%%')
+    if not text:
+        return '""'
+    if any(ch in text for ch in _BATCH_SPECIAL) or '"' in text:
+        text = text.replace('"', '\\"')
+        return f'"{text}"'
+    return text
+
+
+def _batch_title_text(value) -> str:
+    '''title 命令保留空格，只转义 cmd 元字符。'''
+
+    text = str(value).replace('%', '%%')
+    for ch in '^&|<>()':
+        text = text.replace(ch, '^' + ch)
+    return text
+
+
+def _classpath_set_lines(classpath: str) -> list:
+    '''把长 classpath 拆到 set "CP=..." 多行，避免 cmd 单行上限。'''
+
+    remaining = str(classpath)
+    chunks = []
+    while len(remaining) > 3000:
+        cut = remaining.rfind(';', 0, 3000)
+        if cut < 0:
+            cut = 3000
+        else:
+            cut += 1
+        chunks.append(remaining[:cut])
+        remaining = remaining[cut:]
+    chunks.append(remaining)
+    lines = []
+    for index, chunk in enumerate(chunks):
+        escaped = chunk.replace('%', '%%')
+        if index == 0:
+            lines.append(f'set "CP={escaped}"')
+        else:
+            separator = '' if chunks[index - 1].endswith(';') else ';'
+            lines.append(f'set "CP=%CP%{separator}{escaped}"')
+    return lines
+
+
+def _serialize_batch_command(command: list, version: str, game_dir) -> list:
+    '''把完整 Java 命令行序列化为 PCL 风格的 bat 行。'''
+
+    command = [str(arg) for arg in command]
+    if command:
+        java_exe = Path(command[0])
+        if java_exe.name.lower() in ('javaw.exe', 'javaw'):
+            command[0] = str(java_exe.with_name('java.exe'))
+    # 长 classpath 改为 set CP 后再引用，避免超过 cmd 行长度限制。
+    cp_value = ''
+    cp_index = None
+    legacy_index = None
+    for index, arg in enumerate(command):
+        if arg == '-cp' and index + 1 < len(command):
+            if cp_index is None:
+                cp_index = index + 1
+                cp_value = command[index + 1]
+        elif arg.startswith('-DlegacyClassPath='):
+            if legacy_index is None:
+                legacy_index = index
+                if not cp_value:
+                    cp_value = arg.split('=', 1)[1]
+    total_length = sum(len(arg) + 3 for arg in command)
+    use_cp_var = bool(cp_value) and (len(cp_value) > 5000 or total_length > 7000)
+    set_lines = []
+    cp_token = '@@SCL_CP_VALUE@@'
+    cp_prop_token = '@@SCL_CP_PROPERTY@@'
+    if use_cp_var:
+        set_lines = _classpath_set_lines(cp_value)
+        if cp_index is not None:
+            command[cp_index] = cp_token
+        if legacy_index is not None:
+            command[legacy_index] = cp_prop_token
+    java_line = ' '.join(_batch_arg(arg) for arg in command)
+    if use_cp_var:
+        java_line = java_line.replace(cp_token, '"%CP%"')
+        java_line = java_line.replace(
+            cp_prop_token, '"-DlegacyClassPath=%CP%"'
+        )
+    version_text = _batch_title_text(version)
+    game_text = str(game_dir).replace('%', '%%')
+    lines = [
+        'chcp 936>nul',
+        '@echo off',
+        'setlocal DisableDelayedExpansion',
+        f'title 启动 - {version_text}',
+        'echo 游戏正在启动，请稍候。',
+        f'cd /D "{game_text}"',
+    ]
+    if set_lines:
+        lines.extend(set_lines)
+    lines.extend(['', java_line, '', 'echo 游戏已退出。', 'pause'])
+    return lines
+
 
 def parse_placeholder(text: str, ctx: dict) -> str:
     if not text:
@@ -1084,33 +1211,13 @@ class LaunchManager:
         else:
             mem_max = self._format_mem(version_settings.get('memory_max') or self.config.get('memory_max', '4G'))
         mem_min = self._format_mem(version_settings.get('memory_min') or self.config.get('memory_min', '512M'))
-        def parse_mem_to_mb(mem_str):
-            match = re.match(
-                r'^\s*(\d+(?:\.\d+)?)\s*([GMK]?)\s*$',
-                str(mem_str or ''),
-                re.I,
-            )
-            if not match:
-                return 2048
-            try:
-                val = float(match.group(1))
-            except (TypeError, ValueError):
-                return 2048
-            if not math.isfinite(val) or val <= 0:
-                return 2048
-            unit = match.group(2).upper()
-            if unit == 'G':
-                return val * 1024
-            if unit == 'K':
-                return val / 1024
-            return val
 
-        max_mb = parse_mem_to_mb(mem_max)
-        min_mb = parse_mem_to_mb(mem_min)
+        max_mb = int(parse_mem_to_mb(mem_max))
+        min_mb = int(parse_mem_to_mb(mem_min))
         # 过大的 Xmx 会挤压系统内存并让超大堆的 GC 停顿更明显。
         try:
             from core.memory import safe_memory_limit_mb
-            safe_mb = safe_memory_limit_mb()
+            safe_mb = int(round(safe_memory_limit_mb()))
             if max_mb > safe_mb:
                 logger.warning(
                     f'内存分配 {max_mb}M 超过稳定上限，已限制为 {safe_mb}M'
@@ -1120,18 +1227,20 @@ class LaunchManager:
         except Exception:
             pass
         if min_mb > max_mb:
-            logger.warning(f'最小内存 {mem_min} > 最大内存 {mem_max}，自动调整')
-            mem_min = mem_max
+            logger.warning(f'最小内存 {min_mb}M > 最大内存 {max_mb}M，自动调整')
             min_mb = max_mb
+            mem_min = f'{min_mb}M'
             if not auto_memory:
-                version_settings['memory_max'] = mem_max
-                version_settings['memory_min'] = mem_min
+                version_settings['memory_max'] = f'{max_mb}M'
+                version_settings['memory_min'] = f'{min_mb}M'
                 self.save_version_settings(version_id, version_settings)
         # 预留一部分初始堆，减少进入游戏后堆动态扩张造成的周期性卡顿。
         initial_mb = max(512, int(max_mb * 0.5))
         initial_mb = max(min_mb, min(initial_mb, max_mb))
-        logger.info(f'内存参数: -Xmx{max_mb}M -Xms{initial_mb}M')
-        jvm_args = [f'-Xmx{max_mb}M', f'-Xms{initial_mb}M']
+        max_mb = int(round(max_mb))
+        initial_mb = int(round(initial_mb))
+        logger.info(f'内存参数: -Xmx{max_mb}m -Xms{initial_mb}m')
+        jvm_args = [f'-Xmx{max_mb}m', f'-Xms{initial_mb}m']
         from core.jvm import (DEFAULT_JVM_ARGS, gc_arguments, split_arguments)
         def advanced(key, default=None):
             value = version_settings.get(key)
@@ -1342,45 +1451,25 @@ class LaunchManager:
             return None, f'构造启动命令失败：{str(e)}'
 
     def build_launch_script(self, version_id: str) -> tuple[str, str]:
-        '''生成可双击运行的启动脚本。
+        '''生成 PCL 风格的可双击启动脚本。
 
-        版本名/参数全部编码进安全 token，bat 只调用启动器自身的
-        ``--launch-b64`` 模式，不再拼接命令行，也不依赖 PowerShell。
-        这样既避免 cmd 注入，也减少 PowerShell/EncodedCommand 的杀软误报。
+        使用完整 Java 命令行，不再二次启动启动器；脚本本身包含当前账号
+        的登录令牌，和 PCL 导出的脚本一样应视为私密文件。
         '''
 
-        command, err = self.build_launch_command(version_id)
+        command, err = self.build_launch_command(
+            version_id, prompt_java=False
+        )
         if not command:
             return '', err
-        token = base64.urlsafe_b64encode(
-            str(version_id).encode('utf-8')
-        ).decode('ascii').rstrip('=')
         game_dir = self.get_game_dir(version_id)
         try:
             game_dir.mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
-        if getattr(sys, 'frozen', False):
-            launcher = [str(Path(sys.executable).resolve())]
-        else:
-            launcher = [
-                str(Path(sys.executable).resolve()),
-                str(Path(__file__).resolve().parent.parent / 'main.py'),
-            ]
-
-        def quoted(value):
-            # cmd 中 % 需要双写；路径不能包含双引号（Windows 文件名限制）。
-            return '"' + str(value).replace('%', '%%') + '"'
-
-        launcher_line = ' '.join(quoted(part) for part in launcher)
+        lines = _serialize_batch_command(command, version_id, game_dir)
         newline = chr(13) + chr(10)
-        content = newline.join([
-            '@echo off',
-            'setlocal DisableDelayedExpansion',
-            'chcp 936>nul',
-            f'start "" {launcher_line} --launch-b64 {token}',
-            'exit /b',
-        ]) + newline
+        content = newline.join(lines) + newline
         return content, ''
 
     def pre_launch_check(self, version_id: str) -> tuple[bool, str]:

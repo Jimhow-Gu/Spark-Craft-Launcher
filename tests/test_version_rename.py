@@ -164,6 +164,18 @@ class RenamePlanTests(unittest.TestCase):
             self.assertFalse((versions / 'Renamed').exists())
             self.assertEqual(config.data['selected_version'], 'Test')
 
+    def test_rollback_does_not_create_missing_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mc, versions, config, _profile = make_env(tmp)
+            config.config_file.unlink()
+            plan = build_rename_plan('Test', 'Renamed', versions, mc, config)
+            self.assertFalse(plan.config_existed)
+            with self.assertRaises(RenameError):
+                execute_rename(plan, fail_after='dir_moved')
+            self.assertTrue((versions / 'Test' / 'Test.json').is_file())
+            self.assertFalse((versions / 'Renamed').exists())
+            self.assertFalse(config.config_file.exists())
+
     def test_locked_child_write_rolls_back_all(self):
         import core.version_rename as module
         with tempfile.TemporaryDirectory() as tmp:

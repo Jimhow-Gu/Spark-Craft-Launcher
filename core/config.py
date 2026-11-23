@@ -96,7 +96,7 @@ class ConfigManager:
         self._default = {
             'mc_dir': str(home / '.minecraft'),
             'java_path': '',
-            'memory_max': '4G',
+            'memory_max': '4096M',
             'memory_min': '512M',
             'mem_mode': 'auto',
             'download_threads': 64,
@@ -295,21 +295,19 @@ class ConfigManager:
         unit = match.group(2).upper()
         if unit == 'G':
             mb = amount * 1024
-        elif unit == 'M' or not unit:
-            mb = amount
-            unit = 'M'
         else:
             mb = amount
+        mb = int(round(mb))
         if mb < 512:
             return None
         # 启动器的安全堆上限为 20GB；超过则收敛而不是生成超大 -Xmx。
-        if mb > 20 * 1024:
-            return '20G'
-        return f'{amount:g}{unit}'
+        mb = min(mb, 20 * 1024)
+        # 统一保存为整数 MB，避免 3.6G -> -Xmx3686.4M 这类 Java 非法参数。
+        return f'{mb}M'
 
     @staticmethod
     def _memory_mb(value):
-        '''把已清洗的内存文本换算成 MB，仅用于比较 min/max。'''
+        '''把已清洗的内存文本换算成整数 MB，仅用于比较 min/max。'''
 
         match = re.fullmatch(r'\s*(\d+(?:\.\d+)?)\s*([GgMm]?)\s*', str(value or ''))
         if not match:
@@ -321,7 +319,8 @@ class ConfigManager:
         if amount <= 0:
             return None
         unit = match.group(2).upper()
-        return amount * 1024 if unit == 'G' else amount
+        mb = amount * 1024 if unit == 'G' else amount
+        return int(round(mb))
 
     @classmethod
     def _clamp_memory_pair(cls, values, fallback_max=None):

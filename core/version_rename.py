@@ -333,8 +333,17 @@ def _restore_config(plan: RenamePlan):
     config = plan.config
     for key, value in plan.config_snapshot.items():
         config.set(key, value, auto_save=False)
-    if (plan.config_existed or plan.config_changed) and not config.save():
-        raise RenameError('恢复启动器配置失败')
+    if plan.config_existed:
+        if not config.save():
+            raise RenameError('恢复启动器配置失败')
+        return
+    # 原配置文件不存在时，_apply_config 可能刚刚创建了它；回滚应恢复
+    # “没有配置文件”的原始状态，而不是留下一个新建的默认配置。
+    if plan.config_path:
+        try:
+            Path(plan.config_path).unlink(missing_ok=True)
+        except OSError as exc:
+            raise RenameError(f'删除回滚中新建的配置文件失败：{exc}') from exc
 
 
 def _rollback(plan: RenamePlan, jar_moved: bool) -> tuple[bool, str]:

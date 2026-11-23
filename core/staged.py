@@ -33,13 +33,18 @@ def _remove_staged(temp: Path):
     _remove_part_files(temp.with_name(temp.name + '.part'))
 
 
-def _verify_staged(path: Path, *, sha1='', sha256='', size=None, check_zip=False):
+def _verify_staged(
+    path: Path, *, sha1='', sha256='', size=None, check_zip=False,
+    allow_empty=False,
+):
     try:
         if not path.is_file():
             return False, '临时文件不存在'
         actual_size = path.stat().st_size
         if size is not None and int(size) > 0 and actual_size != int(size):
             return False, f'大小不匹配（期望 {size}，实际 {actual_size}）'
+        if actual_size == 0 and not allow_empty:
+            return False, '临时文件为空'
         if sha1:
             actual = hash_file(path, 'sha1')
             if actual.lower() != str(sha1).lower():
@@ -69,6 +74,7 @@ def staged_download(
     sha256: str = '',
     size=None,
     check_zip: bool = False,
+    allow_empty: bool = False,
     progress: Optional[Callable] = None,
     cancel: Optional[Callable] = None,
     status_cb: Optional[Callable] = None,
@@ -92,7 +98,8 @@ def staged_download(
     try:
         if temp.exists():
             ok, reason = _verify_staged(
-                temp, sha1=sha1, sha256=sha256, size=size, check_zip=check_zip
+                temp, sha1=sha1, sha256=sha256, size=size,
+                check_zip=check_zip, allow_empty=allow_empty,
             )
             if ok:
                 try:
@@ -135,7 +142,8 @@ def staged_download(
                     allow_slow_fallback=allow_slow_fallback,
                 )
                 ok, reason = _verify_staged(
-                    temp, sha1=sha1, sha256=sha256, size=size, check_zip=check_zip
+                    temp, sha1=sha1, sha256=sha256, size=size,
+                    check_zip=check_zip, allow_empty=allow_empty,
                 )
                 if not ok:
                     _remove_staged(temp)

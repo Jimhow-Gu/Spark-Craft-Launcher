@@ -28,15 +28,15 @@ class ConfigValidationTests(unittest.TestCase):
     def test_memory_pair_is_clamped(self):
         self.config.set('memory_max', '4G', auto_save=False)
         self.config.set('memory_min', '1G', auto_save=False)
-        self.assertEqual(self.config.get('memory_min'), '1G')
+        self.assertEqual(self.config.get('memory_min'), '1024M')
         self.config.set('memory_min', '8G', auto_save=False)
-        self.assertEqual(self.config.get('memory_min'), '4G')
-        self.assertEqual(self.config.get('memory_max'), '4G')
+        self.assertEqual(self.config.get('memory_min'), '4096M')
+        self.assertEqual(self.config.get('memory_max'), '4096M')
 
     def test_invalid_memory_rejected(self):
         self.config.set('memory_max', '4G', auto_save=False)
         self.assertFalse(self.config.set('memory_max', 'not-memory'))
-        self.assertEqual(self.config.get('memory_max'), '4G')
+        self.assertEqual(self.config.get('memory_max'), '4096M')
 
     def test_threads_and_nan(self):
         self.assertFalse(self.config.set('download_threads', float('nan')))
@@ -58,10 +58,14 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(self.config.get('background_video_volume'), 100)
 
     def test_valid_memory_text(self):
-        self.assertEqual(ConfigManager._valid_memory_text('6G'), '6G')
+        self.assertEqual(ConfigManager._valid_memory_text('6G'), '6144M')
         self.assertEqual(ConfigManager._valid_memory_text('1536'), '1536M')
         self.assertIsNone(ConfigManager._valid_memory_text('0'))
-        self.assertEqual(ConfigManager._valid_memory_text('99999G'), '20G')
+        self.assertEqual(ConfigManager._valid_memory_text('99999G'), '20480M')
+        self.assertEqual(ConfigManager._valid_memory_text('3.6G'), '3686M')
+        self.assertEqual(ConfigManager._valid_memory_text('3715M'), '3715M')
+        self.assertEqual(ConfigManager._memory_mb('3.6G'), 3686)
+        self.assertEqual(ConfigManager._memory_mb('512M'), 512)
 
 
 if __name__ == '__main__':

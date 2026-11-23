@@ -22,7 +22,7 @@ from core.paths import safe_rmtree, scl_dir
 CURRENT_VERSION = '1.11.4'
 VERSION_DISPLAY = 'V1.11.4（正式版）'
 # DLL 构建号在同一版本内递增；每次发布新大版本时重置为 1。
-EXECUTABLE_BUILD = '41'
+EXECUTABLE_BUILD = '42'
 REPO = 'Jimhow-Gu/Spark-Craft-Launcher'
 API_LATEST = f'https://api.github.com/repos/{REPO}/releases/latest'
 API_KGGITHUB = f'https://api.kkgithub.com/repos/{REPO}/releases/latest'
@@ -650,9 +650,11 @@ def _prepare_onedir_update(asset_path, version):
     update_dir = scl_dir() / 'update'
     update_dir.mkdir(parents=True, exist_ok=True)
     marker = _pending_update_marker(version)
+    updated_marker = _updated_update_path()
+    failed_marker = _update_marker_path(FAILED_MARKER)
     script = update_dir / 'apply_onedir_update.ps1'
     script_text = chr(10).join([
-        'param([int]$WaitPid,[string]$NewRoot,[string]$TargetExe,[string]$WorkDir)',
+        'param([int]$WaitPid,[string]$NewRoot,[string]$TargetExe,[string]$WorkDir,[string]$Version,[string]$UpdatedMarker,[string]$FailedMarker,[string]$InstallingMarker)',
         '$TargetDir = Split-Path -Parent $TargetExe',
         '$ExeName = Split-Path -Leaf $TargetExe',
         '$TargetInternal = Join-Path $TargetDir "_internal"',
@@ -675,31 +677,43 @@ def _prepare_onedir_update(asset_path, version):
         '    Write-UpdaterLog ($Label + " failed after retries")',
         '    return $false',
         '}',
+        'function Write-UpdateMarker([string]$Path,[string]$State,[string]$Reason) {',
+        '    $payload = @{ version = $Version; state = $State; time = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }',
+        '    if ($Reason) { $payload.reason = $Reason }',
+        '    $json = $payload | ConvertTo-Json -Compress',
+        '    $utf8 = New-Object System.Text.UTF8Encoding($false)',
+        '    [System.IO.File]::WriteAllText($Path, $json, $utf8)',
+        '}',
+        'function Fail([string]$Reason) {',
+        '    Write-UpdaterLog ("onedir failed: " + $Reason)',
+        '    try { Write-UpdateMarker $FailedMarker "failed" $Reason } catch { }',
+        '    Remove-Item -LiteralPath $InstallingMarker -Force -ErrorAction SilentlyContinue',
+        '    exit 1',
+        '}',
+        'trap { Write-UpdaterLog ("onedir unhandled: " + $_); Write-UpdateMarker $FailedMarker "failed" "unhandled"; exit 1 }',
         'Write-UpdaterLog "onedir: waiting for pid $WaitPid"',
         'Wait-Process -Id $WaitPid -ErrorAction SilentlyContinue',
         'Start-Sleep -Milliseconds 1000',
         'if (!(Test-Path -LiteralPath $NewInternal) -or !(Test-Path -LiteralPath (Join-Path $NewRoot $ExeName))) {',
-        '    Write-UpdaterLog "onedir: new package incomplete"',
-        '    exit 1',
+        '    Fail "new package incomplete"',
         '}',
         'if (Test-Path -LiteralPath $BackupInternal) {',
-        '    if (!(Invoke-Retry "remove old internal backup" { Remove-Item -LiteralPath $BackupInternal -Recurse -Force -ErrorAction Stop })) { exit 1 }',
+        '    if (!(Invoke-Retry "remove old internal backup" { Remove-Item -LiteralPath $BackupInternal -Recurse -Force -ErrorAction Stop })) { Fail "remove old internal backup" }',
         '}',
         'if (Test-Path -LiteralPath $BackupExe) {',
-        '    if (!(Invoke-Retry "remove old exe backup" { Remove-Item -LiteralPath $BackupExe -Force -ErrorAction Stop })) { exit 1 }',
+        '    if (!(Invoke-Retry "remove old exe backup" { Remove-Item -LiteralPath $BackupExe -Force -ErrorAction Stop })) { Fail "remove old exe backup" }',
         '}',
         '$movedExe = $false',
         '$movedInternal = $false',
         'if (Test-Path -LiteralPath $TargetExe) {',
         '    $movedExe = Invoke-Retry "backup exe" { Move-Item -LiteralPath $TargetExe -Destination $BackupExe -Force -ErrorAction Stop }',
-        '    if (!$movedExe) { Write-UpdaterLog "onedir: cannot move current exe"; exit 1 }',
+        '    if (!$movedExe) { Fail "cannot move current exe" }',
         '}',
         'if (Test-Path -LiteralPath $TargetInternal) {',
         '    $movedInternal = Invoke-Retry "backup internal" { Move-Item -LiteralPath $TargetInternal -Destination $BackupInternal -Force -ErrorAction Stop }',
         '    if (!$movedInternal) {',
         '        if ($movedExe) { Invoke-Retry "restore exe" { Move-Item -LiteralPath $BackupExe -Destination $TargetExe -Force -ErrorAction Stop } | Out-Null }',
-        '        Write-UpdaterLog "onedir: cannot move current _internal"',
-        '        exit 1',
+        '        Fail "cannot move current _internal"',
         '    }',
         '}',
         '$copiedInternal = Invoke-Retry "copy internal" {',
@@ -711,14 +725,29 @@ def _prepare_onedir_update(asset_path, version):
         '    $copiedExe = Invoke-Retry "copy exe" { Copy-Item -LiteralPath (Join-Path $NewRoot $ExeName) -Destination $TargetExe -Force -ErrorAction Stop }',
         '}',
         'if ($copiedInternal -and $copiedExe) {',
+        '    $verified = $false',
+        '    try {',
+        '        $sourceHash = (Get-FileHash -LiteralPath (Join-Path $NewRoot $ExeName) -Algorithm SHA256).Hash',
+        '        $targetHash = (Get-FileHash -LiteralPath $TargetExe -Algorithm SHA256).Hash',
+        '        if ($sourceHash -and $sourceHash -eq $targetHash) { $verified = $true }',
+        '    } catch { Write-UpdaterLog ("onedir verify failed: " + $_.Exception.Message) }',
+        '    if (!$verified) {',
+        '        Invoke-Retry "rollback internal" { if (Test-Path -LiteralPath $BackupInternal) { Remove-Item -LiteralPath $TargetInternal -Recurse -Force -ErrorAction SilentlyContinue; Move-Item -LiteralPath $BackupInternal -Destination $TargetInternal -Force -ErrorAction Stop } } | Out-Null',
+        '        if ($movedExe) { Invoke-Retry "rollback exe" { Move-Item -LiteralPath $BackupExe -Destination $TargetExe -Force -ErrorAction Stop } | Out-Null }',
+        '        Fail "copied exe hash mismatch"',
+        '    }',
         '    $started = Invoke-Retry "start new version" { Start-Process -FilePath $TargetExe -WorkingDirectory $TargetDir -ErrorAction Stop }',
         '    if (!$started) {',
         '        Write-UpdaterLog "onedir: restart failed, rolling back"',
         '        Invoke-Retry "rollback exe" { if (Test-Path -LiteralPath $BackupExe) { Move-Item -LiteralPath $BackupExe -Destination $TargetExe -Force -ErrorAction Stop } } | Out-Null',
         '        Invoke-Retry "rollback internal" { if (Test-Path -LiteralPath $BackupInternal) { Remove-Item -LiteralPath $TargetInternal -Recurse -Force -ErrorAction SilentlyContinue; Move-Item -LiteralPath $BackupInternal -Destination $TargetInternal -Force -ErrorAction Stop } } | Out-Null',
-        '        exit 1',
+        '        Fail "restart failed and rolled back"',
         '    }',
         '    Write-UpdaterLog "onedir: updated and restarted"',
+        '    try {',
+        '        Write-UpdateMarker $UpdatedMarker "updated" ""',
+        '        Remove-Item -LiteralPath $InstallingMarker -Force -ErrorAction SilentlyContinue',
+        '    } catch { Write-UpdaterLog ("onedir updated marker failed: " + $_.Exception.Message) }',
         '    Invoke-Retry "cleanup internal backup" { if (Test-Path -LiteralPath $BackupInternal) { Remove-Item -LiteralPath $BackupInternal -Recurse -Force -ErrorAction Stop } } | Out-Null',
         '    Invoke-Retry "cleanup exe backup" { if (Test-Path -LiteralPath $BackupExe) { Remove-Item -LiteralPath $BackupExe -Force -ErrorAction Stop } } | Out-Null',
         '    Invoke-Retry "cleanup extracted package" { Remove-Item -LiteralPath $NewRoot -Recurse -Force -ErrorAction Stop } | Out-Null',
@@ -727,14 +756,15 @@ def _prepare_onedir_update(asset_path, version):
         'Write-UpdaterLog "onedir: copy failed, rolling back"',
         'Invoke-Retry "rollback internal" { if (Test-Path -LiteralPath $BackupInternal) { Remove-Item -LiteralPath $TargetInternal -Recurse -Force -ErrorAction SilentlyContinue; Move-Item -LiteralPath $BackupInternal -Destination $TargetInternal -Force -ErrorAction Stop } } | Out-Null',
         'if ($movedExe) { Invoke-Retry "rollback exe" { Move-Item -LiteralPath $BackupExe -Destination $TargetExe -Force -ErrorAction Stop } | Out-Null }',
-        'exit 1',
+        'Fail "copy failed after rollback"',
     ]) + chr(10)
     script.write_text(script_text, encoding='utf-8-sig')
     write_update_log(f'prepare onedir: target={target} new={new_exe} script={script}')
     try:
         subprocess.Popen(
             ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script),
-             str(os.getpid()), str(new_root), str(target), str(target.parent)],
+             str(os.getpid()), str(new_root), str(target), str(target.parent),
+             str(version), str(updated_marker), str(failed_marker), str(marker)],
             creationflags=(
                 getattr(subprocess, 'CREATE_NO_WINDOW', 0)
                 | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
@@ -780,14 +810,56 @@ def _clean_child_environment():
     return env
 
 
-def _pending_update_marker(version):
-    marker = scl_dir() / 'update' / 'pending_update.json'
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text(
-        json.dumps({'version': str(version), 'time': time.time()}, ensure_ascii=False),
-        encoding='utf-8',
+INSTALLING_MARKER = 'pending_update.json'
+UPDATED_MARKER = 'updated_update.json'
+FAILED_MARKER = 'failed_update.json'
+
+
+def _update_marker_path(name):
+    return scl_dir() / 'update' / name
+
+
+def _write_update_marker(path, version, state, reason=''):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        'version': str(version),
+        'state': str(state),
+        'time': time.time(),
+    }
+    if reason:
+        data['reason'] = str(reason)
+    path.write_text(
+        json.dumps(data, ensure_ascii=False), encoding='utf-8'
     )
-    return marker
+    return path
+
+
+def _pending_update_marker(version):
+    '''记录“正在安装”；它不是成功回执。'''
+
+    for name in (UPDATED_MARKER, FAILED_MARKER):
+        try:
+            _update_marker_path(name).unlink(missing_ok=True)
+        except OSError:
+            pass
+    return _write_update_marker(
+        _update_marker_path(INSTALLING_MARKER), version, 'installing'
+    )
+
+
+def _updated_update_marker(version):
+    '''记录“复制并校验成功”，只由真实成功路径写入。'''
+
+    return _write_update_marker(
+        _update_marker_path(UPDATED_MARKER), version, 'updated'
+    )
+
+
+def _failed_update_marker(version, reason=''):
+    return _write_update_marker(
+        _update_marker_path(FAILED_MARKER), version, 'failed', reason
+    )
 
 
 DOWNLOADED_MARKER = 'downloaded_update.json'
@@ -804,11 +876,17 @@ _CACHE_REFRESH_ITEMS = (
 
 
 def _pending_update_path():
-    return scl_dir() / 'update' / 'pending_update.json'
+    return _update_marker_path(INSTALLING_MARKER)
+
+
+def _updated_update_path():
+    return _update_marker_path(UPDATED_MARKER)
 
 
 def pending_update_exists():
-    return _pending_update_path().is_file()
+    '''是否已有成功的更新回执；仅用于更新后的缓存刷新。'''
+
+    return _updated_update_path().is_file()
 
 
 def clear_launcher_caches():
@@ -1016,8 +1094,9 @@ def apply_downloaded_update_on_startup():
     try:
         if is_onedir_install():
             # onedir 不能只换 exe；外部脚本会等待本进程退出后整体替换。
+            # 下载 marker 必须保留到新版启动后按版本号确认，不能在这里
+            # 因为“脚本已启动”就当成安装成功。
             prepare_update(asset, version)
-            clear_downloaded_update()
             return True
         if apply_update_inplace(asset, version):
             clear_downloaded_update()
@@ -1102,7 +1181,8 @@ def apply_update_inplace(asset_path, version):
             magic = handle.read(2)
         if magic != b'MZ' or target.stat().st_size != new_exe.stat().st_size:
             raise DownloadError('更新文件写入不完整')
-        _pending_update_marker(version)
+        # 直接替换路径已经完成复制和大小校验，可以写成功回执。
+        _updated_update_marker(version)
         if extracted:
             try:
                 new_exe.unlink()
@@ -1159,10 +1239,15 @@ def apply_update_inplace(asset_path, version):
                 write_update_log('inplace: restored previous exe')
             except OSError as restore_error:
                 write_update_log(f'inplace restore failed: {restore_error}')
-            try:
-                (scl_dir() / 'update' / 'pending_update.json').unlink(missing_ok=True)
-            except OSError:
-                pass
+            for path in (
+                _updated_update_path(),
+                _pending_update_path(),
+                _update_marker_path(FAILED_MARKER),
+            ):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
         raise
 
 
@@ -1260,15 +1345,31 @@ def prepare_update(asset_path, version):
     new_exe = _extract_exe(asset_path)
     update_dir = scl_dir() / 'update'
     marker = _pending_update_marker(version)
+    updated_marker = _updated_update_path()
+    failed_marker = _update_marker_path(FAILED_MARKER)
     script = update_dir / 'apply_update.ps1'
     script_text = chr(10).join([
-        'param([int]$WaitPid,[string]$NewExe,[string]$Target,[string]$WorkDir)',
+        'param([int]$WaitPid,[string]$NewExe,[string]$Target,[string]$WorkDir,[string]$Version,[string]$UpdatedMarker,[string]$FailedMarker,[string]$InstallingMarker)',
         '$LogDir = Join-Path $WorkDir "SCL\\update"',
         'New-Item -ItemType Directory -Force -Path $LogDir | Out-Null',
         '$Log = Join-Path $LogDir "apply_update.log"',
         'function Write-UpdaterLog([string]$Text) {',
         '    Add-Content -LiteralPath $Log -Value ("[" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "] " + $Text) -Encoding UTF8',
         '}',
+        'function Write-UpdateMarker([string]$Path,[string]$State,[string]$Reason) {',
+        '    $payload = @{ version = $Version; state = $State; time = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }',
+        '    if ($Reason) { $payload.reason = $Reason }',
+        '    $json = $payload | ConvertTo-Json -Compress',
+        '    $utf8 = New-Object System.Text.UTF8Encoding($false)',
+        '    [System.IO.File]::WriteAllText($Path, $json, $utf8)',
+        '}',
+        'function Fail([string]$Reason) {',
+        '    Write-UpdaterLog ("failed: " + $Reason)',
+        '    try { Write-UpdateMarker $FailedMarker "failed" $Reason } catch { }',
+        '    Remove-Item -LiteralPath $InstallingMarker -Force -ErrorAction SilentlyContinue',
+        '    exit 1',
+        '}',
+        'trap { Write-UpdaterLog ("unhandled: " + $_); Write-UpdateMarker $FailedMarker "failed" "unhandled"; exit 1 }',
         'Write-UpdaterLog "waiting for pid $WaitPid"',
         'Wait-Process -Id $WaitPid -ErrorAction SilentlyContinue',
         'Start-Sleep -Milliseconds 800',
@@ -1286,16 +1387,30 @@ def prepare_update(asset_path, version):
         '    }',
         '}',
         'if ($copied) {',
-        '    Start-Sleep -Milliseconds 800',
+        '    $verified = $false',
         '    try {',
-        '        Start-Process -FilePath $Target -WorkingDirectory $WorkDir -ErrorAction Stop',
-        '        Write-UpdaterLog "restarted"',
-        '    } catch {',
-        '        Write-UpdaterLog ("restart failed: " + $_.Exception.Message)',
+        '        $sourceHash = (Get-FileHash -LiteralPath $NewExe -Algorithm SHA256).Hash',
+        '        $targetHash = (Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash',
+        '        if ($sourceHash -and $sourceHash -eq $targetHash) { $verified = $true }',
+        '    } catch { Write-UpdaterLog ("verify failed: " + $_.Exception.Message) }',
+        '    if ($verified) {',
+        '        Start-Sleep -Milliseconds 800',
+        '        try {',
+        '            Start-Process -FilePath $Target -WorkingDirectory $WorkDir -ErrorAction Stop',
+        '            Write-UpdaterLog "restarted"',
+        '        } catch {',
+        '            Write-UpdaterLog ("restart failed: " + $_.Exception.Message)',
+        '        }',
+        '        try {',
+        '            Write-UpdateMarker $UpdatedMarker "updated" ""',
+        '            Remove-Item -LiteralPath $InstallingMarker -Force -ErrorAction SilentlyContinue',
+        '        } catch { Write-UpdaterLog ("updated marker failed: " + $_.Exception.Message) }',
+        '        Remove-Item -LiteralPath $NewExe -Force -ErrorAction SilentlyContinue',
+        '    } else {',
+        '        Fail "copied exe hash mismatch"',
         '    }',
-        '    Remove-Item -LiteralPath $NewExe -Force -ErrorAction SilentlyContinue',
         '} else {',
-        '    Write-UpdaterLog "copy failed after retries"',
+        '    Fail "copy failed after retries"',
         '}',
     ]) + chr(10)
     script.write_text(script_text, encoding='utf-8-sig')
@@ -1303,7 +1418,8 @@ def prepare_update(asset_path, version):
     try:
         subprocess.Popen(
             ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script),
-             str(os.getpid()), str(new_exe), str(target), str(target.parent)],
+             str(os.getpid()), str(new_exe), str(target), str(target.parent),
+             str(version), str(updated_marker), str(failed_marker), str(marker)],
             creationflags=(
                 getattr(subprocess, 'CREATE_NO_WINDOW', 0)
                 | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
@@ -1324,18 +1440,27 @@ def prepare_update(asset_path, version):
 
 
 def consume_updated_marker():
-    marker = scl_dir() / 'update' / 'pending_update.json'
+    '''只消费安装脚本写下的成功回执；pending 是“正在安装”而非成功。'''
+
+    marker = _updated_update_path()
     if not marker.is_file():
         return ''
+    version = ''
     try:
-        data = json.loads(marker.read_text(encoding='utf-8'))
-        version = str(data.get('version') or '')
+        data = json.loads(marker.read_text(encoding='utf-8-sig'))
+        if str(data.get('state') or 'updated') == 'updated':
+            version = str(data.get('version') or '')
     except (OSError, ValueError):
         version = ''
-    try:
-        marker.unlink(missing_ok=True)
-    except OSError:
-        pass
+    for path in (
+        marker,
+        _pending_update_path(),
+        _update_marker_path(FAILED_MARKER),
+    ):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
     return version
 
 
