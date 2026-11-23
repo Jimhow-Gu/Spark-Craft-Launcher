@@ -1,20 +1,23 @@
-# Spark Craft Launcher V1.11.4 DLL42 构建说明
+# Spark Craft Launcher V1.11.4 DLL43 构建说明
 
 ## 结论
 
-DLL42 已完成构建与冒烟测试。这一版修正内存参数必须为整数的问题，导出脚本改为
-PCL 风格完整 Java 命令，移除 Forge/NeoForge 的 Cleanroom 镜像回退，拆分更新
-“正在安装/成功/失败”回执，并补上空暂存文件与多哈希校验、版本重命名配置回滚。
+DLL43 已完成构建与冒烟测试。这一版完成启动/点击响应优化、原生 Windows 任务栏进度、
+关闭前媒体释放、启动修复单次链路、多项 UI 细节统一，以及此前 DLL42 的整数内存、
+PCL 启动脚本、更新回执和下载校验修复。
 
 | 产物 | 大小 | SHA256 |
 |---|---:|---|
-| DLL42 正式 onefile | 29,906,369 字节 | `3b17c87469c330e52bd2c14b470d12c156c8bee78e820ccc41e7472c1529438d` |
-| DLL42 正式 zip | 29,609,211 字节 | `9f114572f318b3bab97db1e633bc627085a4632e226f4749b8fafb67705d6388` |
+| DLL43 正式 onefile | 29,914,606 字节 | `34be026ce67cace7f7b581552b780565f54f9099503ad57430fea84c4d7c2fea` |
+| DLL43 正式 zip | 29,617,737 字节 | `98110da778c66fdb5bae60e49ee7007a424bb151d777b3984396c88f036b209c` |
+| DLL42 onefile（历史基线） | 29,906,369 字节 | `3b17c87469c330e52bd2c14b470d12c156c8bee78e820ccc41e7472c1529438d` |
 | DLL41 onefile（历史基线） | 29,903,516 字节 | `89eed52c2d55dfe9ee33a921e155008ec251ec059935d7651b789f4abdc8c39a` |
 | DLL40 onefile（历史基线） | 29,882,773 字节 | `89c75da5a249e5a34d31e18fb1f46630a8bd9a3097b67fff7fa13ed3188895e8` |
 | DLL39 onefile（历史基线） | 36,662,822 字节 | `289383100f2209b5d2105e1aa25d5f5e76c80ac5a0e24cf4bc2d66379f73455c` |
 
-- 构建号：`SCLREL1.11.4.R20261123.RP1.DLL42`
+- 构建号：`SCLREL1.11.4.R20261123.RP1.DLL43`
+- DLL43 起：启动/点击性能优化、原生 Windows 任务栏进度、关闭媒体释放、启动修复单次链路、
+  Capsule 版本筛选、圆角返回按钮、版本列表标签/行高/省略与文件选择状态色。
 - DLL42 起：整数内存参数、PCL 风格启动脚本、BMCL/OpenBMC 安装器回退、
   installing/updated/failed 更新回执、空暂存文件默认拒绝、多哈希全量校验。
 - DLL41 起：镜像优先数据源、分页回退、staged 安装/Java 回滚、版本重命名日志、
@@ -23,7 +26,22 @@ PCL 风格完整 Java 命令，移除 Forge/NeoForge 的 Cleanroom 镜像回退�
   启动不再整窗透明渐显；雪花/烟花最高 120 FPS，加载动画最高 60 FPS。
 - 构建入口：`python build_slim.py`（当前正式发布）；`python build_onedir.py` 仅保留内部/回滚构建
 - 安装包默认目录：`%LOCALAPPDATA%\Programs\SparkCraftLauncher`
-- 不使用 UPX，不删除静态图片解码插件，不改变 UI 布局与业务功能。
+- 不使用 UPX，不删除静态图片解码插件；本版只调整控件样式与交互状态，不改变页面结构和业务功能。
+
+## DLL43 更新
+
+- 启动优化：背景图首帧后延迟加载、页面按需构建、`showEvent` 单次守卫、导航去重、
+  版本扫描单次 JSON 读取与 mtime/size 缓存；源码隔离启动窗口约 0.88–0.98s。
+- Windows 原生任务栏进度：新增 `core/taskbar_progress.py`（`ITaskbarList3`），与
+  `DownloadManager.snapshot()` 同步，覆盖下载、启动准备和整合包导入；关闭时释放 COM。
+- 关闭流程：`shutdown_media()` 停止背景视频/音乐后，再落盘配置/日志并 `os._exit`；
+  打包版连续关闭实测约 0.54s，无残留进程。
+- 启动修复：目录/JSON 快检后只跑一次 `RepairEngine`；`missing_only` 同时检查已知大小和
+  JAR/ZIP 结构；空 classpath 直接报错，不再生成 `-cp ""`；`-Xms` 严格使用用户最小内存。
+- UI：正式版/快照版改为圆角胶囊；返回按钮统一圆形；版本列表头改小圆角标签；
+  行高统一 38px、图标 20×20；长名称省略+tooltip；未选文件时下载按钮禁用；
+  文件列表回顶；适配/其他版本/无文件状态色分级；下载页与详情页进度条统一 12px/6px。
+- 运行中删除版本在 Worker 内二次检查；配置保存继续使用 RLock 与原子替换。
 
 ## DLL42 更新
 
@@ -105,7 +123,8 @@ PCL 风格完整 Java 命令，移除 Forge/NeoForge 的 Cleanroom 镜像回退�
 |---|---:|---:|
 | 安装后首次启动（安装器已预热） | 1.10s | 1.29s |
 | 后续启动 | 1.03–1.06s | 1.03–1.24s |
-| DLL42 onefile 冷启动（当前开发机实测） | 约 1.3s | - |
+| DLL43 onefile 冷启动（当前开发机实测） | 约 1.06–1.21s | - |
+| DLL42 onefile 冷启动（历史实测） | 约 1.3s | - |
 | DLL41 onefile 冷启动（历史实测） | 约 1.2s | - |
 | DLL40 onefile 冷启动（历史实测） | 约 1.5s | - |
 | DLL40 `--prewarm` | 约 1.47s | - |
@@ -177,9 +196,9 @@ onedir 更新流程：
 
 ## 体积构成与媒体后端
 
-DLL39 onefile 为 36,662,822 字节；DLL42 为 29,906,369 字节，减少
-6,756,453 字节（18.43%），落在 28–30 MB 目标区间；相比 DLL41 增加
-2,853 字节，来自整数内存、PCL 脚本、更新回执和校验边界逻辑。主要变化：
+DLL39 onefile 为 36,662,822 字节；DLL43 为 29,914,606 字节，减少
+6,748,216 字节（18.41%），落在 28–30 MB 目标区间；相比 DLL42 增加
+8,237 字节，来自任务栏 COM、性能缓存和 UI 调整逻辑。主要变化：
 
 - 移除精简 FFmpeg 运行库（约 4.5 MB 压缩后）；
 - 移除 PyInstaller Tcl/Tk 闪屏（约 1.5 MB 压缩后）；
