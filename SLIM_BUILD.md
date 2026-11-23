@@ -1,20 +1,22 @@
-# Spark Craft Launcher V1.11.4 DLL41 构建说明
+# Spark Craft Launcher V1.11.4 DLL42 构建说明
 
 ## 结论
 
-DLL41 已完成构建与冒烟测试。这一版在 DLL40 瘦身基础上，完成 CurseForge/Modrinth
-镜像回退与分页、下载完整性校验、安装器/Java 原子回滚、版本重命名日志恢复、配置校验、
-单实例唤醒、Mod 覆盖备份和更新源测速/签名校验；同时修复打包版关闭时 Qt/WMF
-析构卡住、进程残留为无窗口后台进程的问题。
+DLL42 已完成构建与冒烟测试。这一版修正内存参数必须为整数的问题，导出脚本改为
+PCL 风格完整 Java 命令，移除 Forge/NeoForge 的 Cleanroom 镜像回退，拆分更新
+“正在安装/成功/失败”回执，并补上空暂存文件与多哈希校验、版本重命名配置回滚。
 
 | 产物 | 大小 | SHA256 |
 |---|---:|---|
-| DLL41 正式 onefile | 29,903,516 字节 | `89eed52c2d55dfe9ee33a921e155008ec251ec059935d7651b789f4abdc8c39a` |
-| DLL41 正式 zip | 29,606,179 字节 | `913def584e0c2d07f323195d467f788cc683d39bb23004347106150286182654` |
+| DLL42 正式 onefile | 29,906,369 字节 | `3b17c87469c330e52bd2c14b470d12c156c8bee78e820ccc41e7472c1529438d` |
+| DLL42 正式 zip | 29,609,211 字节 | `9f114572f318b3bab97db1e633bc627085a4632e226f4749b8fafb67705d6388` |
+| DLL41 onefile（历史基线） | 29,903,516 字节 | `89eed52c2d55dfe9ee33a921e155008ec251ec059935d7651b789f4abdc8c39a` |
 | DLL40 onefile（历史基线） | 29,882,773 字节 | `89c75da5a249e5a34d31e18fb1f46630a8bd9a3097b67fff7fa13ed3188895e8` |
 | DLL39 onefile（历史基线） | 36,662,822 字节 | `289383100f2209b5d2105e1aa25d5f5e76c80ac5a0e24cf4bc2d66379f73455c` |
 
-- 构建号：`SCLREL1.11.4.R20261119.RP1.DLL41`
+- 构建号：`SCLREL1.11.4.R20261123.RP1.DLL42`
+- DLL42 起：整数内存参数、PCL 风格启动脚本、BMCL/OpenBMC 安装器回退、
+  installing/updated/failed 更新回执、空暂存文件默认拒绝、多哈希全量校验。
 - DLL41 起：镜像优先数据源、分页回退、staged 安装/Java 回滚、版本重命名日志、
   单实例窗口唤醒、Mod 同名备份、更新源测速与 SHA512 校验、打包版可靠退出。
 - DLL40 起：WMF 媒体后端、无 Tcl/Tk 闪屏、浅/深/中性三套图标、窗口四角填充式 1px 边框、
@@ -22,6 +24,23 @@ DLL41 已完成构建与冒烟测试。这一版在 DLL40 瘦身基础上，完�
 - 构建入口：`python build_slim.py`（当前正式发布）；`python build_onedir.py` 仅保留内部/回滚构建
 - 安装包默认目录：`%LOCALAPPDATA%\Programs\SparkCraftLauncher`
 - 不使用 UPX，不删除静态图片解码插件，不改变 UI 布局与业务功能。
+
+## DLL42 更新
+
+- 内存文本统一转换为整数 MB：`3715M`→3715、`3.6G`→3686、`512M`→512；启动参数使用
+  `-Xmx3715m` / `-Xms512m` 小写 m，配置保存一律写整数 MB，界面显示仍可为 `3.6G`。
+- 导出启动脚本改为 PCL 风格：`chcp 936`、`@echo off`、`title`、启动/退出提示、
+  `cd /D`、完整 `java.exe` 命令行和 `pause`；`%` 双写、特殊字符参数加引号，
+  超长 classpath 使用 `set "CP=..."` 分段；文件保持 GBK + CRLF。
+- Forge / NeoForge 在线安装方式 B 不再使用 Cleanroom，依次回退 BMCL、OpenBMC
+  Maven 镜像和官方源。
+- 更新回执拆分为 `pending_update.json`（installing）、`updated_update.json`（成功）和
+  `failed_update.json`；只有复制并校验成功才写 updated，启动提示只消费 updated。
+  onedir 更新不再在 PowerShell 启动后立即清下载标记，失败不会再误报“已成功更新”。
+- `staged_download` 默认拒绝空暂存文件（`allow_empty=False`）；`HttpClient._verify`
+  对同时提供的 SHA1/SHA256/SHA512 全部校验。
+- 版本重命名回滚时，若原配置文件不存在则删除回滚过程中新建的配置，不留下默认配置。
+- 设置页分组顶部边距保持 `(24, 16, 24, 18)`，本轮未改 UI 布局。
 
 ## DLL41 更新
 
@@ -86,7 +105,8 @@ DLL41 已完成构建与冒烟测试。这一版在 DLL40 瘦身基础上，完�
 |---|---:|---:|
 | 安装后首次启动（安装器已预热） | 1.10s | 1.29s |
 | 后续启动 | 1.03–1.06s | 1.03–1.24s |
-| DLL41 onefile 冷启动（当前开发机实测） | 约 1.2s | - |
+| DLL42 onefile 冷启动（当前开发机实测） | 约 1.3s | - |
+| DLL41 onefile 冷启动（历史实测） | 约 1.2s | - |
 | DLL40 onefile 冷启动（历史实测） | 约 1.5s | - |
 | DLL40 `--prewarm` | 约 1.47s | - |
 
@@ -157,9 +177,9 @@ onedir 更新流程：
 
 ## 体积构成与媒体后端
 
-DLL39 onefile 为 36,662,822 字节；DLL41 为 29,903,516 字节，减少
-6,759,306 字节（18.44%），落在 28–30 MB 目标区间；相比 DLL40 增加
-20,743 字节，来自本批下载/回滚/恢复与退出可靠性逻辑。主要变化：
+DLL39 onefile 为 36,662,822 字节；DLL42 为 29,906,369 字节，减少
+6,756,453 字节（18.43%），落在 28–30 MB 目标区间；相比 DLL41 增加
+2,853 字节，来自整数内存、PCL 脚本、更新回执和校验边界逻辑。主要变化：
 
 - 移除精简 FFmpeg 运行库（约 4.5 MB 压缩后）；
 - 移除 PyInstaller Tcl/Tk 闪屏（约 1.5 MB 压缩后）；

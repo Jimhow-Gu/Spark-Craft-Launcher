@@ -49,7 +49,7 @@ mc_launcher/
 
 ### 便携版（当前正式发布）
 
-下载 `Spark.Craft.Launcher.exe`（V1.11.4 DLL41）直接运行，或用
+下载 `Spark.Craft.Launcher.exe`（V1.11.4 DLL42）直接运行，或用
 `Spark.Craft.Launcher.zip` 解压。`SCL/` 用户数据保持不变。
 
 > 1.11.5–1.11.7 的 onedir/安装包发布已撤回为草稿，当前版本线恢复到
