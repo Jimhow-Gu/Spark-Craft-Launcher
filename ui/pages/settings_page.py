@@ -1857,14 +1857,14 @@ class SettingsPage(QWidget):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(music_dir())))
 
     def _load_community_ui(self):
-        for combo, key, default in (self.community_source_combo, 'community_source_pref', 'mirror'), (self.mod_filename_combo, 'mod_filename_format', 'bracket_title'), (self.mod_manage_combo, 'mod_manage_style', 'title_translated'):
+        for combo, key, default in (self.community_source_combo, 'community_source_pref', 'official'), (self.mod_filename_combo, 'mod_filename_format', 'bracket_title'), (self.mod_manage_combo, 'mod_manage_style', 'title_translated'):
             idx = combo.findData(self.config.get(key, default))
             combo.blockSignals(True)
             combo.setCurrentIndex(idx if idx >= 0 else 0)
             combo.blockSignals(False)
 
     def _save_community_settings(self):
-        self.config.set('community_source_pref', self.community_source_combo.currentData() or 'mirror')
+        self.config.set('community_source_pref', self.community_source_combo.currentData() or 'official')
         self.config.set('mod_filename_format', self.mod_filename_combo.currentData() or 'bracket_title')
         self.config.set('mod_manage_style', self.mod_manage_combo.currentData() or 'title_translated')
         self.settings_changed.emit()

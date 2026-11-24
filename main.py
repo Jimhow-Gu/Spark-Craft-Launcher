@@ -52,7 +52,6 @@ from core.paths import (
 from core.logging_setup import setup_logging
 setup_logging()
 
-from ui.main_window import MainWindow
 from core.config import ConfigManager
 
 
@@ -239,6 +238,9 @@ def _run_exported_launch(token):
 
 
 def main():
+    if '--apply-update' in sys.argv[1:]:
+        from core.update import run_update_helper
+        sys.exit(run_update_helper(sys.argv))
     if '--prewarm' in sys.argv[1:]:
         _run_prewarm()
         return
@@ -442,6 +444,7 @@ def main():
     apply_packaged_defaults_once()
     init_game_dirs()
 
+    from ui.main_window import MainWindow
     try:
         window = MainWindow()
     except Exception:

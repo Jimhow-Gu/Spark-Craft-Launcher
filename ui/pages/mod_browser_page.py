@@ -1079,6 +1079,24 @@ class FileRow(QWidget):
         super().mouseReleaseEvent(event)
 
 
+def _is_base_api_project(project):
+    """Fabric API / Quilt API 这类基础 API 独立成组。"""
+
+    values = (
+        getattr(project, 'slug', ''),
+        getattr(project, 'project_id', ''),
+        getattr(project, 'english_title', ''),
+        getattr(project, 'title', ''),
+        getattr(project, 'translated_title', ''),
+    )
+    text = ' '.join(str(value or '') for value in values).lower()
+    compact = text.replace(' ', '').replace('_', '-')
+    return any(
+        key in compact
+        for key in ('fabric-api', 'quilt-api', 'fabricapi', 'quiltapi')
+    )
+
+
 def _dep_key(dep):
     return str(dep.get('project_id') or dep.get('modId') or dep.get('projectId') or dep.get('version_id') or dep.get('file_name') or '')
 
@@ -1213,11 +1231,13 @@ class ProjectFilesDialog(QDialog):
         self._files = []
         self._file_rows = []
         self._selected_row = None
+        self._install_dir_override = None
         self._dep_generation = 0
         self._dep_worker = None
         self._dep_workers = set()
         self._dep_cache = {}
-        self._dep_required_order = []
+        self._dep_order = []
+        self._dep_types = {}
         self._dep_cached_items = {}
         self._dep_items = []
         self._installed_mod_tokens = set()
@@ -1336,6 +1356,24 @@ class ProjectFilesDialog(QDialog):
         layout.addWidget(self.scroll, 1)
         self.world_combo = None
         self._datapack_dir = self.game_dir
+        if project_type != 'modpack' and project_type != 'datapack':
+            target_row = QHBoxLayout()
+            target_row.addWidget(QLabel('安装到'))
+            self.install_target_label = _ElidedLabel('')
+            self.install_target_label.setStyleSheet(
+                'color:rgba(255,255,255,0.56); font-size:12px;'
+            )
+            target_row.addWidget(self.install_target_label, 1)
+            target_btn = QPushButton('更改')
+            target_btn.setStyleSheet(
+                'QPushButton { background:#3a3a3a; color:white; border:none;'
+                ' border-radius:6px; padding:4px 10px; }'
+                'QPushButton:hover { background:#4a4a4a; }'
+            )
+            target_btn.clicked.connect(self._choose_install_dir)
+            target_row.addWidget(target_btn)
+            layout.addLayout(target_row)
+            self._refresh_install_target()
         if project_type == 'datapack':
             dest_row = QHBoxLayout()
             dest_row.addWidget(QLabel('保存到'))
@@ -1439,13 +1477,16 @@ class ProjectFilesDialog(QDialog):
     def _mc_versions(file):
         return [v for v in file.game_versions if re.match('^\\d+\\.\\d+', str(v))]
 
+    def _file_supports_target(self, file):
+        target = str(self._files_mc_version or '').strip()
+        if not target:
+            return True
+        return target in self._mc_versions(file)
+
     def _is_compatible(self, file):
         if not self.mc_version:
             return True
-        for version in self._mc_versions(file):
-            if version == self.mc_version or self.mc_version.startswith(version + '.'):
-                return True
-        return False
+        return str(self.mc_version) in self._mc_versions(file)
 
     @staticmethod
     def _file_matches_project_type(filename, project_type):
@@ -1460,6 +1501,16 @@ class ProjectFilesDialog(QDialog):
             return suffix in ('.mrpack', '.zip')
         return True
 
+    def _file_matches_loader(self, file):
+        if self.project_type != 'mod' or not self._files_loader:
+            return True
+        loaders = [
+            str(value or '').strip().lower()
+            for value in (getattr(file, 'loaders', None) or [])
+        ]
+        # 来源没有返回 loader 字段时不要误杀；有字段时按目标加载器本地筛选。
+        return not loaders or self._files_loader.lower() in loaders
+
     def _on_files(self, files):
         try:
             self._load_timeout.stop()
@@ -1469,8 +1520,11 @@ class ProjectFilesDialog(QDialog):
         # 版本；按项目类型过滤，避免把 .jar 放进 world/datapacks。
         filtered = [
             file for file in (files or [])
-            if self._file_matches_project_type(
-                getattr(file, 'filename', ''), self.project_type
+            if (
+                self._file_matches_project_type(
+                    getattr(file, 'filename', ''), self.project_type
+                )
+                and self._file_matches_loader(file)
             )
         ]
         files = filtered
@@ -1513,15 +1567,14 @@ class ProjectFilesDialog(QDialog):
             groups = {}
             for file in files:
                 versions = self._mc_versions(file)
-                if target_version:
-                    if any((target_version.startswith(v + '.') for v in versions if v != target_version)):
-                        key = target_version
-                    elif versions:
-                        key = sorted(versions, key=_natural_key)[-1]
-                    else:
-                        key = '未知版本'
+                if target_version and target_version in versions:
+                    # 快照/正式版必须完整匹配，不能再把 26.4-snapshot-10
+                    # 截成 26.4 后误判为兼容。
+                    key = target_version
+                elif versions:
+                    key = sorted(versions, key=_natural_key)[-1]
                 else:
-                    key = sorted(versions, key=_natural_key)[-1] if versions else '未知版本'
+                    key = '未知版本'
                 groups.setdefault(key, []).append(file)
         except Exception as exc:
             self.warning_label.setText(f'文件列表解析失败：{exc}')
@@ -1532,7 +1585,10 @@ class ProjectFilesDialog(QDialog):
             self.download_btn.setEnabled(False)
             self.loading_overlay.stop()
             return
-        compatible = True if is_modpack else target_version in groups
+        snapshot_target = 'snapshot' in str(target_version or '').lower()
+        compatible = True if is_modpack else any(
+            self._file_supports_target(file) for file in files
+        )
         if not is_modpack and target_version and not compatible:
             self.warning_label.setText(f'此 Mod 与当前游戏版本 {target_version} 不适配。\n你仍然可以在下方选择其他游戏版本的 Mod 文件手动安装。')
             self.warning_label.show()
@@ -1540,15 +1596,29 @@ class ProjectFilesDialog(QDialog):
             self.warning_label.hide()
         keys = list(groups.keys())
         keys.sort(key=_natural_key, reverse=True)
-        if compatible and target_version and target_version in keys:
+        if (
+            compatible and target_version and target_version in keys
+            and not snapshot_target
+        ):
             keys.remove(target_version)
             keys.insert(0, target_version)
         for key in keys:
             group_files = groups[key]
             group_files.sort(key=(lambda f: f.date or ''), reverse=True)
             group_files.sort(key=(lambda f: self._release_order(f.release_type)))
-            highlighted = bool(target_version and key == target_version)
-            section = CollapsibleSection(f'Minecraft {key}', f'{len(group_files)} 个文件' + (' · 当前游戏版本' if highlighted else ''), highlighted=highlighted, expanded=highlighted or key == keys[0] and (not target_version or not compatible))
+            highlighted = bool(
+                target_version and key == target_version and not snapshot_target
+            )
+            section = CollapsibleSection(
+                f'Minecraft {key}',
+                f'{len(group_files)} 个文件'
+                + (' · 当前游戏版本' if highlighted else ''),
+                highlighted=highlighted,
+                expanded=True if snapshot_target else (
+                    highlighted
+                    or key == keys[0] and (not target_version or not compatible)
+                ),
+            )
             for mod_file in group_files:
                 row = FileRow(mod_file, target_version, self.project.english_title, self.project.translated_title)
                 row.clicked.connect(self._select_row)
@@ -1559,6 +1629,10 @@ class ProjectFilesDialog(QDialog):
         self.download_btn.setEnabled(False)
         if is_modpack:
             self.status_label.setText(f'共 {len(files)} 个整合包版本；请选择文件后继续')
+        elif target_version and snapshot_target:
+            self.status_label.setText(
+                f'共 {len(files)} 个文件；请选择文件后继续'
+            )
         elif target_version:
             self.status_label.setText(f'共 {len(files)} 个文件；当前游戏版本 {target_version}' + ('，已找到适配文件' if compatible else '，未找到精确适配文件') + '；请选择文件后继续')
         else:
@@ -1626,39 +1700,56 @@ class ProjectFilesDialog(QDialog):
     def _show_dependencies(self, mod_file):
         self._dep_items = []
         self._clear_dependency_cards()
-        required = []
+        dependencies = []
+        dep_types = {}
         seen = set()
         for dep in mod_file.dependencies or []:
             if not isinstance(dep, dict):
                 continue
-            if (dep.get('dependency_type') or '').lower() != 'required':
+            dtype = str(dep.get('dependency_type') or 'required').lower()
+            if dtype not in ('required', 'optional'):
                 continue
             pid = dep.get('project_id') or dep.get('modId') or dep.get('projectId')
             if pid and str(pid) == str(self.project.project_id):
                 continue
             key = _dep_key(dep)
-            if not key or key in seen:
+            if not key:
+                continue
+            if key in seen:
+                if dtype == 'required':
+                    dep_types[key] = 'required'
                 continue
             seen.add(key)
-            required.append(dep)
-        if not required:
+            dependencies.append(dep)
+            dep_types[key] = dtype
+        if not dependencies:
             self._render_dependency_cards([])
             return
         self.dep_panel.show()
-        self._dep_required_order = [_dep_key(dep) for dep in required]
+        self._dep_order = [_dep_key(dep) for dep in dependencies]
+        self._dep_types = dep_types
         cached_items = [
-            self._dep_cache[key]
-            for key in self._dep_required_order
+            (key, *self._dep_cache[key])
+            for key in self._dep_order
             if key in self._dep_cache
         ]
-        missing = [dep for dep in required if _dep_key(dep) not in self._dep_cache]
+        missing = [
+            dep for dep in dependencies if _dep_key(dep) not in self._dep_cache
+        ]
+        required_count = sum(
+            1 for key in self._dep_order if dep_types.get(key) == 'required'
+        )
+        optional_count = len(self._dep_order) - required_count
+        counts = f'必需 {required_count}'
+        if optional_count:
+            counts += f' · 可选 {optional_count}'
         if missing:
             self._dep_cached_items = {
                 key: self._dep_cache[key]
-                for key in self._dep_required_order
+                for key in self._dep_order
                 if key in self._dep_cache
             }
-            self.dep_title.setText(f'此模组的前置模组（{len(required)}）· 正在加载...')
+            self.dep_title.setText(f'前置与可选模组（{counts}）· 正在加载...')
             self._dep_generation += 1
             gen = self._dep_generation
             worker = DependencyInfoWorker(gen, self.project.source, missing)
@@ -1669,7 +1760,7 @@ class ProjectFilesDialog(QDialog):
             self._dep_worker = worker
             worker.start()
             return
-        self.dep_title.setText(f'此模组的前置模组（{len(required)}）')
+        self.dep_title.setText(f'前置与可选模组（{counts}）')
         self._render_dependency_cards(cached_items)
 
     def _on_dep_info(self, generation, items):
@@ -1679,40 +1770,72 @@ class ProjectFilesDialog(QDialog):
         for key, project, icon in items:
             merged[key] = project, icon
         self._dep_cache.update(merged)
-        ordered = [merged[key] for key in self._dep_required_order if key in merged]
+        ordered = [
+            (key, merged[key][0], merged[key][1])
+            for key in self._dep_order
+            if key in merged
+        ]
         self._render_dependency_cards(ordered)
 
     def _render_dependency_cards(self, items):
-        '''只展示尚未安装的前置；已安装前置不再被误报为缺失。'''
+        '''必需/可选依赖分组展示；基础 API 单独置顶，可选组默认折叠。'''
 
         self._dep_items = list(items or [])
         self._clear_dependency_cards()
-        missing = [
-            (project, icon_bytes)
-            for project, icon_bytes in self._dep_items
-            if not self._dependency_installed(project)
-        ]
+        missing = []
+        for item in self._dep_items:
+            if len(item) >= 3:
+                key, project, icon_bytes = item[0], item[1], item[2]
+            else:
+                key, project, icon_bytes = '', item[0], item[1]
+            if not self._dependency_installed(project):
+                missing.append((key, project, icon_bytes))
         if not missing:
             self.dep_panel.hide()
             return
-        self.dep_title.setText(f'此模组的前置模组（{len(missing)}）')
+        self.dep_title.setText(f'前置与可选模组（{len(missing)}）')
         self.dep_panel.show()
-        for project, icon_bytes in missing:
-            card = DependencyCard(project)
-            card.clicked.connect(self.dependency_selected.emit)
-            self.dep_list_layout.addWidget(card)
-            self._dep_cards.append(card)
-            if icon_bytes:
-                pix = QPixmap()
-                if pix.loadFromData(icon_bytes) and not pix.isNull():
-                    card.set_icon(pix)
+        groups = {'api': [], 'required': [], 'optional': []}
+        for key, project, icon_bytes in missing:
+            dtype = self._dep_types.get(key, 'required')
+            if _is_base_api_project(project):
+                groups['api'].append((project, icon_bytes))
+            elif dtype == 'optional':
+                groups['optional'].append((project, icon_bytes))
+            else:
+                groups['required'].append((project, icon_bytes))
+        sections = (
+            ('api', '基础 API', True),
+            ('required', '必需前置', True),
+            ('optional', '可选依赖', False),
+        )
+        for group_key, title, expanded in sections:
+            group = groups.get(group_key) or []
+            if not group:
                 continue
-            if project.icon_url:
-                cached = self._dep_icon_loader.cached(project.icon_url)
-                if cached:
-                    card.set_icon(cached)
-                else:
-                    self._dep_icon_loader.request(project.icon_url)
+            section = CollapsibleSection(
+                title,
+                f'{len(group)} 个',
+                highlighted=group_key == 'api',
+                expanded=expanded,
+            )
+            self.dep_list_layout.addWidget(section)
+            for project, icon_bytes in group:
+                card = DependencyCard(project)
+                card.clicked.connect(self.dependency_selected.emit)
+                section.add_widget(card)
+                self._dep_cards.append(card)
+                if icon_bytes:
+                    pix = QPixmap()
+                    if pix.loadFromData(icon_bytes) and not pix.isNull():
+                        card.set_icon(pix)
+                    continue
+                if project.icon_url:
+                    cached = self._dep_icon_loader.cached(project.icon_url)
+                    if cached:
+                        card.set_icon(cached)
+                    else:
+                        self._dep_icon_loader.request(project.icon_url)
 
     def _on_dep_icon_ready(self, url, pix):
         for card in self._dep_cards:
@@ -1747,6 +1870,38 @@ class ProjectFilesDialog(QDialog):
             return str(self._datapack_dir or self.game_dir)
         return ''
 
+    def _refresh_install_target(self):
+        label = getattr(self, 'install_target_label', None)
+        if label is None:
+            return
+        target = self.install_dir()
+        text = str(target) if target else '整合包导入器'
+        label.setText(f'将安装到：{text}')
+        label.setToolTip(text)
+
+    def install_dir(self):
+        if self.project_type == 'modpack':
+            return None
+        if self._install_dir_override:
+            return Path(self._install_dir_override)
+        if self.project_type == 'datapack':
+            return Path(self._datapack_dir or self.game_dir)
+        folder = {
+            'resourcepack': 'resourcepacks',
+            'shader': 'shaderpacks',
+        }.get(self.project_type, 'mods')
+        return Path(self.game_dir) / folder
+
+    def _choose_install_dir(self):
+        current = self.install_dir()
+        path = QFileDialog.getExistingDirectory(
+            self, '选择安装目录', str(current or self.game_dir)
+        )
+        if not path:
+            return
+        self._install_dir_override = Path(path)
+        self._refresh_install_target()
+
     def _choose_datapack_dir(self):
         path = QFileDialog.getExistingDirectory(
             self, '选择数据包保存文件夹', str(self._datapack_dir or self.game_dir)
@@ -1759,6 +1914,7 @@ class ProjectFilesDialog(QDialog):
             chosen = chosen / 'datapacks'
         self._datapack_dir = chosen
         self.datapack_dir_label.setText(str(chosen))
+        self._refresh_install_target()
 
     def _open_source(self):
         '''按项目实际来源打开详情页；来源为“全部”时使用当前项目来源。'''
@@ -2543,6 +2699,21 @@ class ModBrowserPage(QWidget):
                 pass
         return base
 
+    @staticmethod
+    def _strip_loader_suffix(value):
+        """只去掉实例名尾部的加载器后缀，保留完整快照版本号。"""
+
+        text = str(value or '').strip()
+        if not text:
+            return ''
+        text = re.sub(
+            r'(?i)[-_](?:forge|fabric|neoforge|quilt|optifine|liteloader)'
+            r'(?:[-_].*)?$',
+            '',
+            text,
+        )
+        return text.strip(' -_')
+
     def _target_mc_version_from_instance(self):
         vid = str(self.config.get('selected_version', '') or '').strip()
         if not vid:
@@ -2551,10 +2722,11 @@ class ModBrowserPage(QWidget):
             path = Path(self.config.get_mc_dir()) / 'versions' / vid / f'{vid}.json'
             data = json.loads(path.read_text(encoding='utf-8'))
             for candidate in data.get('clientVersion'), data.get('inheritsFrom'), vid:
-                if candidate:
-                    match = re.search('(\\d+\\.\\d+(?:\\.\\d+)?)', str(candidate))
-                    if match:
-                        return match.group(1)
+                if not candidate:
+                    continue
+                base = self._strip_loader_suffix(candidate)
+                if base and re.search(r'\d', base):
+                    return base
             return ''
         except Exception:
             return ''
@@ -2656,11 +2828,12 @@ class ModBrowserPage(QWidget):
         mod_file = page.selected_file()
         world = page.selected_world()
         game_dir = page.game_dir
+        manual_dir = page.install_dir()
         self._close_files_page()
         if not mod_file or not mod_file.download_url:
             QMessageBox.warning(self, '无法下载', '没有选择文件或文件没有下载地址')
             return
-        self._start_project_download(project, mod_file, world, game_dir)
+        self._start_project_download(project, mod_file, world, game_dir, manual_dir=manual_dir)
 
     def _close_files_page(self):
         page = self._files_page
@@ -2739,7 +2912,10 @@ class ModBrowserPage(QWidget):
             if self.project_type == 'datapack':
                 # 新流程的 world 已经是目标文件夹（saves/<世界>/datapacks
                 # 或游戏目录/自定义目录）；兼容旧调用传入的世界名。
-                target = Path(world) if world else Path(game_dir)
+                target = (
+                    Path(manual_dir) if manual_dir
+                    else Path(world) if world else Path(game_dir)
+                )
                 if not target.is_absolute():
                     target = game_dir / 'saves' / target / 'datapacks'
                 dest_dir = target

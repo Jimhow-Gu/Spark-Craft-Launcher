@@ -51,6 +51,43 @@ class UpdateMarkerTests(unittest.TestCase):
         self.assertEqual(update.consume_updated_marker(), '')
         self.assertTrue(self._path('failed_update.json').is_file())
 
+    def test_new_exe_helper_replaces_target(self):
+        source = self.root / 'downloaded-new.exe'
+        source.write_bytes(b'MZ' + b'new-build')
+        target = self.root / 'Spark Craft Launcher.exe'
+        target.write_bytes(b'MZ' + b'old-build')
+        with patch.object(update.sys, 'frozen', True, create=True), \
+             patch.object(update.sys, 'executable', str(source)):
+            code = update.run_update_helper([
+                'launcher', '--apply-update', str(target), '1.11.4', '0', '0',
+            ])
+        self.assertEqual(code, 0)
+        self.assertEqual(target.read_bytes(), source.read_bytes())
+        updated = self._path('updated_update.json')
+        self.assertTrue(updated.is_file())
+        data = json.loads(updated.read_text(encoding='utf-8'))
+        self.assertEqual(data['state'], 'updated')
+
+    def test_launcher_passes_target_and_pids(self):
+        target = self.root / 'Spark Craft Launcher.exe'
+        target.write_bytes(b'MZ')
+        new_exe = self.root / 'update-new.exe'
+        new_exe.write_bytes(b'MZ')
+        with patch.object(update.sys, 'frozen', True, create=True), \
+             patch.object(update.sys, 'executable', str(target)), \
+             patch.object(update.os, 'getpid', return_value=111), \
+             patch.object(update.os, 'getppid', return_value=222), \
+             patch.object(update, '_extract_exe', return_value=new_exe), \
+             patch.object(update.subprocess, 'Popen') as popen:
+            result = update.launch_update_helper(Path('asset.exe'), '1.11.4')
+        self.assertEqual(result, new_exe)
+        command = popen.call_args.args[0]
+        self.assertIn('--apply-update', command)
+        self.assertIn(str(target), command)
+        self.assertIn('1.11.4', command)
+        self.assertIn('111', command)
+        self.assertIn('222', command)
+
     def test_onedir_script_has_success_and_failure_receipts(self):
         target = self.root / 'Spark Craft Launcher.exe'
         target.write_bytes(b'MZ')
@@ -73,6 +110,12 @@ class UpdateMarkerTests(unittest.TestCase):
         self.assertIn('Fail "copy failed after rollback"', text)
         self.assertIn('Get-FileHash', text)
         self.assertIn('trap {', text)
+        self.assertIn('Wait-Or-Kill $WaitPid 45', text)
+        self.assertIn('Wait-Or-Kill $ParentPid 15', text)
+        self.assertIn('parent path check failed', text)
+        self.assertIn('Stop-BackupProcess', text)
+        self.assertIn('cleanup exe backup', text)
+        self.assertIn('exit 2', text)
         args = popen.call_args.args[0]
         self.assertIn(str(update._updated_update_path()), args)
         self.assertIn(str(update._update_marker_path('failed_update.json')), args)

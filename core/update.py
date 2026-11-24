@@ -650,119 +650,263 @@ def _prepare_onedir_update(asset_path, version):
     marker = _pending_update_marker(version)
     updated_marker = _updated_update_path()
     failed_marker = _update_marker_path(FAILED_MARKER)
+    raw_parent_pid = int(os.getppid() or 0)
+    parent_path = _process_executable_path(raw_parent_pid)
+    wait_parent_pid = 0
+    if (
+        raw_parent_pid
+        and raw_parent_pid != os.getpid()
+        and _same_executable_path(parent_path, target)
+    ):
+        wait_parent_pid = raw_parent_pid
+    else:
+        write_update_log(
+            'prepare onedir: parent wait skipped '
+            f'pid={raw_parent_pid} path={parent_path!r}'
+        )
+    parent_arg = parent_path if wait_parent_pid else ''
     script = update_dir / 'apply_onedir_update.ps1'
-    script_text = chr(10).join([
-        'param([int]$WaitPid,[string]$NewRoot,[string]$TargetExe,[string]$WorkDir,[string]$Version,[string]$UpdatedMarker,[string]$FailedMarker,[string]$InstallingMarker)',
-        '$TargetDir = Split-Path -Parent $TargetExe',
-        '$ExeName = Split-Path -Leaf $TargetExe',
-        '$TargetInternal = Join-Path $TargetDir "_internal"',
-        '$NewInternal = Join-Path $NewRoot "_internal"',
-        '$BackupInternal = $TargetInternal + ".old"',
-        '$BackupExe = $TargetExe + ".old"',
-        '$LogDir = Join-Path $TargetDir "SCL\\update"',
-        'New-Item -ItemType Directory -Force -Path $LogDir | Out-Null',
-        '$Log = Join-Path $LogDir "apply_update.log"',
-        'function Write-UpdaterLog([string]$Text) {',
-        '    Add-Content -LiteralPath $Log -Value ("[" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "] " + $Text) -Encoding UTF8',
-        '}',
-        'function Invoke-Retry([string]$Label,[scriptblock]$Action) {',
-        '    for ($i = 0; $i -lt 120; $i++) {',
-        '        try { & $Action; return $true } catch {',
-        '            if (($i % 10) -eq 0) { Write-UpdaterLog ($Label + " retry: " + $_.Exception.Message) }',
-        '            Start-Sleep -Milliseconds 500',
-        '        }',
-        '    }',
-        '    Write-UpdaterLog ($Label + " failed after retries")',
-        '    return $false',
-        '}',
-        'function Write-UpdateMarker([string]$Path,[string]$State,[string]$Reason) {',
-        '    $payload = @{ version = $Version; state = $State; time = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }',
-        '    if ($Reason) { $payload.reason = $Reason }',
-        '    $json = $payload | ConvertTo-Json -Compress',
-        '    $utf8 = New-Object System.Text.UTF8Encoding($false)',
-        '    [System.IO.File]::WriteAllText($Path, $json, $utf8)',
-        '}',
-        'function Fail([string]$Reason) {',
-        '    Write-UpdaterLog ("onedir failed: " + $Reason)',
-        '    try { Write-UpdateMarker $FailedMarker "failed" $Reason } catch { }',
-        '    Remove-Item -LiteralPath $InstallingMarker -Force -ErrorAction SilentlyContinue',
-        '    exit 1',
-        '}',
-        'trap { Write-UpdaterLog ("onedir unhandled: " + $_); Write-UpdateMarker $FailedMarker "failed" "unhandled"; exit 1 }',
-        'Write-UpdaterLog "onedir: waiting for pid $WaitPid"',
-        'Wait-Process -Id $WaitPid -ErrorAction SilentlyContinue',
-        'Start-Sleep -Milliseconds 1000',
-        'if (!(Test-Path -LiteralPath $NewInternal) -or !(Test-Path -LiteralPath (Join-Path $NewRoot $ExeName))) {',
-        '    Fail "new package incomplete"',
-        '}',
-        'if (Test-Path -LiteralPath $BackupInternal) {',
-        '    if (!(Invoke-Retry "remove old internal backup" { Remove-Item -LiteralPath $BackupInternal -Recurse -Force -ErrorAction Stop })) { Fail "remove old internal backup" }',
-        '}',
-        'if (Test-Path -LiteralPath $BackupExe) {',
-        '    if (!(Invoke-Retry "remove old exe backup" { Remove-Item -LiteralPath $BackupExe -Force -ErrorAction Stop })) { Fail "remove old exe backup" }',
-        '}',
-        '$movedExe = $false',
-        '$movedInternal = $false',
-        'if (Test-Path -LiteralPath $TargetExe) {',
-        '    $movedExe = Invoke-Retry "backup exe" { Move-Item -LiteralPath $TargetExe -Destination $BackupExe -Force -ErrorAction Stop }',
-        '    if (!$movedExe) { Fail "cannot move current exe" }',
-        '}',
-        'if (Test-Path -LiteralPath $TargetInternal) {',
-        '    $movedInternal = Invoke-Retry "backup internal" { Move-Item -LiteralPath $TargetInternal -Destination $BackupInternal -Force -ErrorAction Stop }',
-        '    if (!$movedInternal) {',
-        '        if ($movedExe) { Invoke-Retry "restore exe" { Move-Item -LiteralPath $BackupExe -Destination $TargetExe -Force -ErrorAction Stop } | Out-Null }',
-        '        Fail "cannot move current _internal"',
-        '    }',
-        '}',
-        '$copiedInternal = Invoke-Retry "copy internal" {',
-        '    New-Item -ItemType Directory -Force -Path $TargetInternal -ErrorAction Stop | Out-Null',
-        '    Copy-Item -Path (Join-Path $NewInternal "*") -Destination $TargetInternal -Recurse -Force -ErrorAction Stop',
-        '}',
-        '$copiedExe = $false',
-        'if ($copiedInternal) {',
-        '    $copiedExe = Invoke-Retry "copy exe" { Copy-Item -LiteralPath (Join-Path $NewRoot $ExeName) -Destination $TargetExe -Force -ErrorAction Stop }',
-        '}',
-        'if ($copiedInternal -and $copiedExe) {',
-        '    $verified = $false',
-        '    try {',
-        '        $sourceHash = (Get-FileHash -LiteralPath (Join-Path $NewRoot $ExeName) -Algorithm SHA256).Hash',
-        '        $targetHash = (Get-FileHash -LiteralPath $TargetExe -Algorithm SHA256).Hash',
-        '        if ($sourceHash -and $sourceHash -eq $targetHash) { $verified = $true }',
-        '    } catch { Write-UpdaterLog ("onedir verify failed: " + $_.Exception.Message) }',
-        '    if (!$verified) {',
-        '        Invoke-Retry "rollback internal" { if (Test-Path -LiteralPath $BackupInternal) { Remove-Item -LiteralPath $TargetInternal -Recurse -Force -ErrorAction SilentlyContinue; Move-Item -LiteralPath $BackupInternal -Destination $TargetInternal -Force -ErrorAction Stop } } | Out-Null',
-        '        if ($movedExe) { Invoke-Retry "rollback exe" { Move-Item -LiteralPath $BackupExe -Destination $TargetExe -Force -ErrorAction Stop } | Out-Null }',
-        '        Fail "copied exe hash mismatch"',
-        '    }',
-        '    $started = Invoke-Retry "start new version" { Start-Process -FilePath $TargetExe -WorkingDirectory $TargetDir -ErrorAction Stop }',
-        '    if (!$started) {',
-        '        Write-UpdaterLog "onedir: restart failed, rolling back"',
-        '        Invoke-Retry "rollback exe" { if (Test-Path -LiteralPath $BackupExe) { Move-Item -LiteralPath $BackupExe -Destination $TargetExe -Force -ErrorAction Stop } } | Out-Null',
-        '        Invoke-Retry "rollback internal" { if (Test-Path -LiteralPath $BackupInternal) { Remove-Item -LiteralPath $TargetInternal -Recurse -Force -ErrorAction SilentlyContinue; Move-Item -LiteralPath $BackupInternal -Destination $TargetInternal -Force -ErrorAction Stop } } | Out-Null',
-        '        Fail "restart failed and rolled back"',
-        '    }',
-        '    Write-UpdaterLog "onedir: updated and restarted"',
-        '    try {',
-        '        Write-UpdateMarker $UpdatedMarker "updated" ""',
-        '        Remove-Item -LiteralPath $InstallingMarker -Force -ErrorAction SilentlyContinue',
-        '    } catch { Write-UpdaterLog ("onedir updated marker failed: " + $_.Exception.Message) }',
-        '    Invoke-Retry "cleanup internal backup" { if (Test-Path -LiteralPath $BackupInternal) { Remove-Item -LiteralPath $BackupInternal -Recurse -Force -ErrorAction Stop } } | Out-Null',
-        '    Invoke-Retry "cleanup exe backup" { if (Test-Path -LiteralPath $BackupExe) { Remove-Item -LiteralPath $BackupExe -Force -ErrorAction Stop } } | Out-Null',
-        '    Invoke-Retry "cleanup extracted package" { Remove-Item -LiteralPath $NewRoot -Recurse -Force -ErrorAction Stop } | Out-Null',
-        '    exit 0',
-        '}',
-        'Write-UpdaterLog "onedir: copy failed, rolling back"',
-        'Invoke-Retry "rollback internal" { if (Test-Path -LiteralPath $BackupInternal) { Remove-Item -LiteralPath $TargetInternal -Recurse -Force -ErrorAction SilentlyContinue; Move-Item -LiteralPath $BackupInternal -Destination $TargetInternal -Force -ErrorAction Stop } } | Out-Null',
-        'if ($movedExe) { Invoke-Retry "rollback exe" { Move-Item -LiteralPath $BackupExe -Destination $TargetExe -Force -ErrorAction Stop } | Out-Null }',
-        'Fail "copy failed after rollback"',
-    ]) + chr(10)
+    script_text = r"""param(
+    [int]$WaitPid,
+    [int]$ParentPid,
+    [string]$ParentPath,
+    [string]$NewRoot,
+    [string]$TargetExe,
+    [string]$WorkDir,
+    [string]$Version,
+    [string]$UpdatedMarker,
+    [string]$FailedMarker,
+    [string]$InstallingMarker
+)
+$TargetDir = Split-Path -Parent $TargetExe
+$ExeName = Split-Path -Leaf $TargetExe
+$TargetInternal = Join-Path $TargetDir "_internal"
+$NewInternal = Join-Path $NewRoot "_internal"
+$BackupInternal = $TargetInternal + ".old"
+$BackupExe = $TargetExe + ".old"
+$LogDir = Join-Path $TargetDir "SCL\\update"
+New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+$Log = Join-Path $LogDir "apply_update.log"
+
+function Write-UpdaterLog([string]$Text) {
+    Add-Content -LiteralPath $Log -Value ("[" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "] " + $Text) -Encoding UTF8
+}
+
+function Invoke-Retry([string]$Label, [scriptblock]$Action) {
+    for ($i = 0; $i -lt 120; $i++) {
+        try {
+            & $Action
+            return $true
+        } catch {
+            if (($i % 10) -eq 0) {
+                Write-UpdaterLog ($Label + " retry: " + $_.Exception.Message)
+            }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+    Write-UpdaterLog ($Label + " failed after retries")
+    return $false
+}
+
+function Write-UpdateMarker([string]$Path, [string]$State, [string]$Reason) {
+    $payload = @{ version = $Version; state = $State; time = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
+    if ($Reason) { $payload.reason = $Reason }
+    $json = $payload | ConvertTo-Json -Compress
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $json, $utf8)
+}
+
+function Fail([string]$Reason) {
+    Write-UpdaterLog ("onedir failed: " + $Reason)
+    try { Write-UpdateMarker $FailedMarker "failed" $Reason } catch { }
+    Remove-Item -LiteralPath $InstallingMarker -Force -ErrorAction SilentlyContinue
+    exit 1
+}
+
+function Stop-BackupProcess([string]$Path) {
+    if (!$Path) { return }
+    try {
+        foreach ($proc in @(Get-Process)) {
+            try {
+                $procPath = $proc.Path
+                if ($procPath -and [string]::Equals(
+                    [System.IO.Path]::GetFullPath($procPath),
+                    [System.IO.Path]::GetFullPath($Path),
+                    [System.StringComparison]::OrdinalIgnoreCase
+                )) {
+                    Write-UpdaterLog ("stopping process holding backup: " + $proc.Id + " " + $procPath)
+                    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+                }
+            } catch { }
+        }
+    } catch { }
+}
+
+function Wait-Or-Kill([int]$ProcessId, [int]$TimeoutSeconds, [string]$Label) {
+    if (!$ProcessId -or $ProcessId -le 0) { return $true }
+    $process = $null
+    try {
+        $process = Get-Process -Id $ProcessId -ErrorAction Stop
+    } catch {
+        return $true
+    }
+    Write-UpdaterLog ("waiting for " + $Label + " pid " + $ProcessId + " timeout=" + $TimeoutSeconds + "s")
+    try {
+        if ($process.WaitForExit($TimeoutSeconds * 1000)) {
+            return $true
+        }
+    } catch { }
+    Write-UpdaterLog ("timeout waiting for " + $Label + " pid " + $ProcessId + "; force stopping")
+    try {
+        Stop-Process -Id $ProcessId -Force -ErrorAction Stop
+    } catch {
+        Write-UpdaterLog ("force stop failed for " + $Label + ": " + $_.Exception.Message)
+    }
+    try { $process.WaitForExit(5000) | Out-Null } catch { }
+    return $true
+}
+
+$parentValid = $false
+if ($ParentPid -gt 0 -and $ParentPath) {
+    try {
+        $parentProc = Get-Process -Id $ParentPid -ErrorAction Stop
+        $parentExe = $parentProc.Path
+        if ($parentExe -and [string]::Equals(
+            [System.IO.Path]::GetFullPath($parentExe),
+            [System.IO.Path]::GetFullPath($TargetExe),
+            [System.StringComparison]::OrdinalIgnoreCase
+        )) {
+            $parentValid = $true
+        }
+    } catch { }
+}
+if ($ParentPid -gt 0 -and -not $parentValid) {
+    Write-UpdaterLog "parent path check failed; parent will not be waited or killed"
+    $ParentPid = 0
+}
+
+trap {
+    Write-UpdaterLog ("onedir unhandled: " + $_)
+    try { Write-UpdateMarker $FailedMarker "failed" "unhandled" } catch { }
+    Remove-Item -LiteralPath $InstallingMarker -Force -ErrorAction SilentlyContinue
+    exit 1
+}
+
+Wait-Or-Kill $WaitPid 45 "old launcher" | Out-Null
+Wait-Or-Kill $ParentPid 15 "launcher parent" | Out-Null
+Start-Sleep -Milliseconds 750
+if (!(Test-Path -LiteralPath $NewInternal) -or !(Test-Path -LiteralPath (Join-Path $NewRoot $ExeName))) {
+    Fail "new package incomplete"
+}
+
+Stop-BackupProcess $BackupExe
+if (Test-Path -LiteralPath $BackupInternal) {
+    if (!(Invoke-Retry "remove old internal backup" { Remove-Item -LiteralPath $BackupInternal -Recurse -Force -ErrorAction Stop })) {
+        Fail "remove old internal backup"
+    }
+}
+if (Test-Path -LiteralPath $BackupExe) {
+    if (!(Invoke-Retry "remove old exe backup" { Remove-Item -LiteralPath $BackupExe -Force -ErrorAction Stop })) {
+        Fail "remove old exe backup"
+    }
+}
+
+$movedExe = $false
+$movedInternal = $false
+if (Test-Path -LiteralPath $TargetExe) {
+    $movedExe = Invoke-Retry "backup exe" { Move-Item -LiteralPath $TargetExe -Destination $BackupExe -Force -ErrorAction Stop }
+    if (!$movedExe) { Fail "cannot move current exe" }
+}
+if (Test-Path -LiteralPath $TargetInternal) {
+    $movedInternal = Invoke-Retry "backup internal" { Move-Item -LiteralPath $TargetInternal -Destination $BackupInternal -Force -ErrorAction Stop }
+    if (!$movedInternal) {
+        if ($movedExe) {
+            Invoke-Retry "restore exe" { Move-Item -LiteralPath $BackupExe -Destination $TargetExe -Force -ErrorAction Stop } | Out-Null
+        }
+        Fail "cannot move current _internal"
+    }
+}
+$copiedInternal = Invoke-Retry "copy internal" {
+    New-Item -ItemType Directory -Force -Path $TargetInternal -ErrorAction Stop | Out-Null
+    Copy-Item -Path (Join-Path $NewInternal "*") -Destination $TargetInternal -Recurse -Force -ErrorAction Stop
+}
+$copiedExe = $false
+if ($copiedInternal) {
+    $copiedExe = Invoke-Retry "copy exe" { Copy-Item -LiteralPath (Join-Path $NewRoot $ExeName) -Destination $TargetExe -Force -ErrorAction Stop }
+}
+if ($copiedInternal -and $copiedExe) {
+    $verified = $false
+    try {
+        $sourceHash = (Get-FileHash -LiteralPath (Join-Path $NewRoot $ExeName) -Algorithm SHA256).Hash
+        $targetHash = (Get-FileHash -LiteralPath $TargetExe -Algorithm SHA256).Hash
+        if ($sourceHash -and $sourceHash -eq $targetHash) { $verified = $true }
+    } catch {
+        Write-UpdaterLog ("onedir verify failed: " + $_.Exception.Message)
+    }
+    if (!$verified) {
+        Invoke-Retry "rollback internal" { if (Test-Path -LiteralPath $BackupInternal) { Remove-Item -LiteralPath $TargetInternal -Recurse -Force -ErrorAction SilentlyContinue; Move-Item -LiteralPath $BackupInternal -Destination $TargetInternal -Force -ErrorAction Stop } } | Out-Null
+        if ($movedExe) {
+            Invoke-Retry "rollback exe" { Move-Item -LiteralPath $BackupExe -Destination $TargetExe -Force -ErrorAction Stop } | Out-Null
+        }
+        Fail "copied exe hash mismatch"
+    }
+    $started = Invoke-Retry "start new version" { Start-Process -FilePath $TargetExe -WorkingDirectory $TargetDir -ErrorAction Stop }
+    if (!$started) {
+        Write-UpdaterLog "onedir: restart failed, rolling back"
+        Invoke-Retry "rollback exe" { if (Test-Path -LiteralPath $BackupExe) { Move-Item -LiteralPath $BackupExe -Destination $TargetExe -Force -ErrorAction Stop } } | Out-Null
+        Invoke-Retry "rollback internal" { if (Test-Path -LiteralPath $BackupInternal) { Remove-Item -LiteralPath $TargetInternal -Recurse -Force -ErrorAction SilentlyContinue; Move-Item -LiteralPath $BackupInternal -Destination $TargetInternal -Force -ErrorAction Stop } } | Out-Null
+        Fail "restart failed and rolled back"
+    }
+    Write-UpdaterLog "onedir: updated and restarted"
+    try {
+        Write-UpdateMarker $UpdatedMarker "updated" ""
+        Remove-Item -LiteralPath $InstallingMarker -Force -ErrorAction SilentlyContinue
+    } catch {
+        Write-UpdaterLog ("onedir updated marker failed: " + $_.Exception.Message)
+    }
+    $cleanupOk = $true
+    Stop-BackupProcess $BackupExe
+    if (!(Invoke-Retry "cleanup internal backup" { if (Test-Path -LiteralPath $BackupInternal) { Remove-Item -LiteralPath $BackupInternal -Recurse -Force -ErrorAction Stop } })) {
+        $cleanupOk = $false
+        Write-UpdaterLog "onedir: internal backup cleanup failed"
+    }
+    if (!(Invoke-Retry "cleanup exe backup" { if (Test-Path -LiteralPath $BackupExe) { Remove-Item -LiteralPath $BackupExe -Force -ErrorAction Stop } })) {
+        $cleanupOk = $false
+        Write-UpdaterLog "onedir: exe backup cleanup failed"
+    }
+    if (!(Invoke-Retry "cleanup extracted package" { if (Test-Path -LiteralPath $NewRoot) { Remove-Item -LiteralPath $NewRoot -Recurse -Force -ErrorAction Stop } })) {
+        $cleanupOk = $false
+        Write-UpdaterLog "onedir: extracted package cleanup failed"
+    }
+    if ($cleanupOk) {
+        Write-UpdaterLog "onedir: update cleanup complete"
+        exit 0
+    }
+    Write-UpdaterLog "onedir: updated but cleanup incomplete"
+    exit 2
+}
+
+Write-UpdaterLog "onedir: copy failed, rolling back"
+Invoke-Retry "rollback internal" { if (Test-Path -LiteralPath $BackupInternal) { Remove-Item -LiteralPath $TargetInternal -Recurse -Force -ErrorAction SilentlyContinue; Move-Item -LiteralPath $BackupInternal -Destination $TargetInternal -Force -ErrorAction Stop } } | Out-Null
+if ($movedExe) {
+    Invoke-Retry "rollback exe" { if (Test-Path -LiteralPath $BackupExe) { Move-Item -LiteralPath $BackupExe -Destination $TargetExe -Force -ErrorAction Stop } } | Out-Null
+}
+Fail "copy failed after rollback"
+"""
     script.write_text(script_text, encoding='utf-8-sig')
-    write_update_log(f'prepare onedir: target={target} new={new_exe} script={script}')
+    write_update_log(
+        f'prepare onedir: target={target} new={new_exe} '
+        f'wait_parent={wait_parent_pid} script={script}'
+    )
     try:
         subprocess.Popen(
-            ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script),
-             str(os.getpid()), str(new_root), str(target), str(target.parent),
-             str(version), str(updated_marker), str(failed_marker), str(marker)],
+            [
+                'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                '-File', str(script),
+                str(os.getpid()), str(wait_parent_pid), str(parent_arg),
+                str(new_root), str(target), str(target.parent),
+                str(version), str(updated_marker), str(failed_marker), str(marker),
+            ],
             creationflags=(
                 getattr(subprocess, 'CREATE_NO_WINDOW', 0)
                 | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
@@ -780,7 +924,6 @@ def _prepare_onedir_update(asset_path, version):
             pass
         raise
     return script
-
 
 def write_update_log(text):
     try:
@@ -1097,7 +1240,8 @@ def apply_downloaded_update_on_startup():
             prepare_update(asset, version)
             return True
         if apply_update_inplace(asset, version):
-            clear_downloaded_update()
+            # helper 在复制/替换成功后才清下载标记；这里立即清会失去
+            # 失败时下次启动重试的机会。
             return True
     except Exception as exc:
         write_update_log(f'startup: apply downloaded update failed: {exc}')
@@ -1127,126 +1271,312 @@ def _resolve_update_exe(asset_path):
     return _extract_exe(path), True
 
 
-def apply_update_inplace(asset_path, version):
-    '''在当前进程内完成替换并启动新 exe。
+def _wait_pid_exit(pid, timeout_ms):
+    """等待指定 PID 退出；进程已不存在视为完成。"""
 
-    Windows 允许重命名正在运行的 exe，但不允许直接覆盖。先把旧 exe
-    改名为 .old，再把新文件复制到原路径，最后启动新进程。整个过程不依赖
-    PowerShell，避免旧更新脚本在部分环境下未执行导致“更新后不重启”。
-    '''
+    if pid is None or int(pid) <= 0 or int(pid) == os.getpid():
+        return True
+    if os.name != 'nt':
+        deadline = time.monotonic() + max(0, timeout_ms) / 1000.0
+        while time.monotonic() < deadline:
+            try:
+                os.kill(int(pid), 0)
+            except OSError:
+                return True
+            time.sleep(0.1)
+        return False
+    try:
+        import ctypes
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel32.OpenProcess.argtypes = [
+            ctypes.c_uint32, ctypes.c_bool, ctypes.c_uint32,
+        ]
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.WaitForSingleObject.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32,
+        ]
+        kernel32.WaitForSingleObject.restype = ctypes.c_uint32
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_bool
+        # SYNCHRONIZE = 0x00100000
+        handle = kernel32.OpenProcess(0x00100000, False, int(pid))
+        if not handle:
+            return True
+        try:
+            result = kernel32.WaitForSingleObject(handle, int(timeout_ms))
+            # WAIT_OBJECT_0 = 0, WAIT_ABANDONED = 0x80
+            return result in (0, 0x80)
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return True
+
+
+def _process_executable_path(pid):
+    """返回指定 PID 的 exe 完整路径；拿不到时返回空字符串。"""
+
+    if os.name != 'nt' or not pid or int(pid) <= 0:
+        return ''
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel32.OpenProcess.argtypes = [
+            wintypes.DWORD, wintypes.BOOL, wintypes.DWORD,
+        ]
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.QueryFullProcessImageNameW.argtypes = [
+            ctypes.c_void_p, wintypes.DWORD, wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        # PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = kernel32.OpenProcess(0x1000, False, int(pid))
+        if handle:
+            try:
+                size = wintypes.DWORD(32768)
+                buffer = ctypes.create_unicode_buffer(size.value)
+                if kernel32.QueryFullProcessImageNameW(
+                    handle, 0, buffer, ctypes.byref(size)
+                ):
+                    return str(buffer.value or '')
+            finally:
+                kernel32.CloseHandle(handle)
+    except Exception:
+        pass
+    try:
+        import psutil
+        return str(psutil.Process(int(pid)).exe() or '')
+    except Exception:
+        return ''
+
+
+def _same_executable_path(left, right):
+    try:
+        return bool(
+            left and right
+            and os.path.normcase(os.path.abspath(str(left)))
+            == os.path.normcase(os.path.abspath(str(right)))
+        )
+    except (OSError, ValueError):
+        return False
+
+
+def launch_update_helper(asset_path, version):
+    """由旧进程拉起下载到的新 exe，让新 exe 作为 updater。
+
+    旧进程不再改名/复制当前 exe；它只启动新 exe 并立即退出。新 exe 等待
+    旧 PID 和 PyInstaller 父 PID 退出后完成 copy -> .new -> os.replace。
+    """
 
     if not getattr(sys, 'frozen', False):
         raise DownloadError('源码运行模式不支持自动替换 exe，请手动下载更新。')
-    if is_onedir_install():
-        raise DownloadError('onedir 安装需要使用目录更新器')
     target = Path(sys.executable).resolve()
-    if not target.is_file():
-        raise DownloadError('找不到当前启动器 exe，无法自动更新。')
-    write_update_log(
-        f'inplace: start target={target} asset={asset_path} version={version}'
-    )
-    old_exe = target.with_name(target.name + '.old')
-    moved = False
-    extracted = False
+    new_exe = _extract_exe(asset_path)
+    if not new_exe.is_file() or new_exe.stat().st_size <= 0:
+        raise DownloadError('下载的更新文件为空')
     try:
-        new_exe, extracted = _resolve_update_exe(asset_path)
-        write_update_log(f'inplace: resolved new={new_exe}')
-        if new_exe.resolve() == target:
-            raise DownloadError('更新包与当前启动器相同，无需更新。')
-        if old_exe.exists():
-            try:
-                old_exe.unlink()
-            except OSError:
-                # 上一次残留的 .old 仍被占用时换一个名字，避免本次更新失败。
-                old_exe = target.with_name(
-                    f'{target.name}.{os.getpid()}.old'
-                )
-        last_error = None
-        for attempt in range(12):
-            try:
-                os.replace(target, old_exe)
-                moved = True
-                break
-            except OSError as exc:
-                last_error = exc
-                time.sleep(0.2)
-        if not moved:
-            raise DownloadError(f'无法重命名当前 exe：{last_error}')
-        shutil.copy2(new_exe, target)
-        # 更新只替换本体 exe；SCL 目录中的日志、皮肤、缓存和用户数据保持原位。
-        write_update_log('inplace: exe replaced, SCL preserved')
-        with target.open('rb') as handle:
-            magic = handle.read(2)
-        if magic != b'MZ' or target.stat().st_size != new_exe.stat().st_size:
-            raise DownloadError('更新文件写入不完整')
-        # 直接替换路径已经完成复制和大小校验，可以写成功回执。
+        with new_exe.open('rb') as handle:
+            if handle.read(2) != b'MZ':
+                raise DownloadError('下载的更新文件不是有效的 exe')
+    except OSError as exc:
+        raise DownloadError(f'无法读取更新文件：{exc}') from exc
+    marker = _pending_update_marker(version)
+    parent_pid = os.getppid()
+    command = [
+        str(new_exe), '--apply-update', str(target), str(version),
+        str(os.getpid()), str(parent_pid),
+    ]
+    write_update_log(
+        f'helper launch: target={target} new={new_exe} '
+        f'old_pid={os.getpid()} parent_pid={parent_pid}'
+    )
+    try:
+        subprocess.Popen(
+            command,
+            cwd=str(target.parent),
+            close_fds=True,
+            env=_clean_child_environment(),
+            creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0),
+        )
+    except OSError as exc:
+        write_update_log(f'helper launch failed: {exc}')
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise DownloadError(f'无法启动更新程序：{exc}') from exc
+    # 旧进程即使没有立即退出，也不能继续占用目标 exe；5 秒后强制退出。
+    timer = threading.Timer(5.0, lambda: os._exit(0))
+    timer.daemon = True
+    timer.start()
+    return new_exe
+
+
+def run_update_helper(argv):
+    """新 exe 的 updater 模式；返回进程退出码。"""
+
+    if not getattr(sys, 'frozen', False):
+        return 1
+    try:
+        index = list(argv).index('--apply-update')
+        values = list(argv)[index + 1:index + 5]
+        if len(values) < 4:
+            raise ValueError('missing update arguments')
+        target = Path(values[0]).resolve()
+        version = str(values[1])
+        old_pid = int(values[2])
+        parent_pid = int(values[3])
+    except Exception as exc:
+        write_update_log(f'update helper: invalid args: {exc}')
+        return 1
+    source = Path(sys.executable).resolve()
+    write_update_log(
+        f'update helper: source={source} target={target} version={version} '
+        f'old_pid={old_pid} parent_pid={parent_pid}'
+    )
+    try:
+        if not _wait_pid_exit(old_pid, 45000):
+            raise DownloadError('等待旧启动器退出超时')
+        if parent_pid and parent_pid != old_pid:
+            if not _wait_pid_exit(parent_pid, 15000):
+                raise DownloadError('等待 PyInstaller 父进程退出超时')
+        if source != target:
+            temp = target.with_name(target.name + '.new')
+            last_error = None
+            replaced = False
+            for _ in range(120):
+                try:
+                    if temp.exists():
+                        temp.unlink()
+                    shutil.copy2(source, temp)
+                    if temp.stat().st_size != source.stat().st_size:
+                        raise OSError('copy size mismatch')
+                    with temp.open('rb') as handle:
+                        if handle.read(2) != b'MZ':
+                            raise OSError('copy is not a PE file')
+                    os.replace(temp, target)
+                    replaced = True
+                    break
+                except OSError as exc:
+                    last_error = exc
+                    time.sleep(0.25)
+            if not replaced:
+                raise DownloadError(f'替换启动器失败：{last_error}')
         _updated_update_marker(version)
-        if extracted:
+        try:
+            _pending_update_path().unlink(missing_ok=True)
+        except OSError:
+            pass
+        clear_downloaded_update()
+        started = False
+        try:
+            subprocess.Popen(
+                [str(target)],
+                cwd=str(target.parent),
+                close_fds=True,
+                env=_clean_child_environment(),
+                creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0),
+            )
+            started = True
+        except OSError as exc:
+            write_update_log(f'update helper: restart failed: {exc}')
+        if not started:
             try:
-                new_exe.unlink()
+                os.startfile(str(target))
             except OSError:
                 pass
-        write_update_log('inplace: copy ok, launching new exe')
-        last_launch_error = None
-        for attempt in range(10):
-            try:
-                subprocess.Popen(
-                    [str(target)],
-                    cwd=str(target.parent),
-                    close_fds=True,
-                    env=_clean_child_environment(),
-                    creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0),
-                )
-                last_launch_error = None
-                break
-            except OSError as exc:
-                last_launch_error = exc
-                time.sleep(0.3)
-        if last_launch_error is not None:
-            # Popen 失败时再走 ShellExecute，部分安全软件只拦截前者。
-            try:
-                saved = {}
-                for key in list(os.environ):
-                    upper = key.upper()
-                    if (
-                        upper.startswith('_PYI_')
-                        or upper.startswith('_MEIPASS')
-                        or upper.startswith('PYINSTALLER_')
-                    ):
-                        saved[key] = os.environ.pop(key)
-                try:
-                    os.startfile(str(target))
-                finally:
-                    os.environ.update(saved)
-                last_launch_error = None
-                write_update_log('inplace: started via ShellExecute')
-            except OSError as exc:
-                last_launch_error = exc
-        if last_launch_error is not None:
-            raise DownloadError(f'无法启动新版本：{last_launch_error}')
-        write_update_log('inplace: restarted')
-        clear_downloaded_update()
-        return True
+        write_update_log('update helper: updated and restarted')
+        return 0
     except Exception as exc:
-        write_update_log(f'inplace failed: {exc}')
-        if moved:
-            try:
-                if target.exists():
-                    target.unlink()
-                os.replace(old_exe, target)
-                write_update_log('inplace: restored previous exe')
-            except OSError as restore_error:
-                write_update_log(f'inplace restore failed: {restore_error}')
-            for path in (
-                _updated_update_path(),
-                _pending_update_path(),
-                _update_marker_path(FAILED_MARKER),
-            ):
-                try:
-                    path.unlink(missing_ok=True)
-                except OSError:
-                    pass
-        raise
+        write_update_log(f'update helper failed: {exc}')
+        try:
+            _failed_update_marker(version, str(exc))
+            _pending_update_path().unlink(missing_ok=True)
+        except OSError:
+            pass
+        # 目标 exe 仍是旧版，尽量把它重新启动，避免用户没有界面。
+        try:
+            subprocess.Popen(
+                [str(target)],
+                cwd=str(target.parent),
+                close_fds=True,
+                env=_clean_child_environment(),
+                creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0),
+            )
+        except OSError:
+            pass
+        return 1
+
+
+def apply_update_inplace(asset_path, version):
+    """兼容旧调用：改为启动新 exe updater，不再直接改当前 exe。"""
+
+    launch_update_helper(asset_path, version)
+    return True
+
+
+def _taskkill_old_image_names(paths):
+    """psutil 不可用时按 exe 文件名结束旧备份进程。"""
+
+    names = sorted({
+        Path(str(path)).name for path in paths if Path(str(path)).name
+    })
+    for name in names:
+        try:
+            subprocess.run(
+                ['taskkill', '/F', '/IM', name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+                timeout=10,
+            )
+            write_update_log(f'taskkill fallback for old executable: {name}')
+        except Exception as exc:
+            write_update_log(
+                f'taskkill fallback failed for {name}: '
+                f'{type(exc).__name__}: {exc}'
+            )
+
+
+def _terminate_old_processes(paths):
+    """结束仍从 .old 备份运行的旧启动器进程，避免文件一直被占用。"""
+
+    if os.name != 'nt' or not paths:
+        return
+    resolved = []
+    for path in paths:
+        try:
+            resolved.append(Path(str(path)).resolve())
+        except OSError:
+            resolved.append(Path(str(path)))
+    try:
+        import psutil
+    except Exception:
+        _taskkill_old_image_names(resolved)
+        return
+    targets = {
+        os.path.normcase(os.path.abspath(str(path))) for path in resolved
+    }
+    for process in psutil.process_iter(['pid', 'exe']):
+        try:
+            pid = int(process.info.get('pid') or 0)
+            exe = str(process.info.get('exe') or '')
+            if not pid or pid == os.getpid() or not exe:
+                continue
+            if os.path.normcase(os.path.abspath(exe)) not in targets:
+                continue
+            subprocess.run(
+                ['taskkill', '/F', '/PID', str(pid)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+                timeout=10,
+            )
+            write_update_log(f'terminated stale old executable process: {pid}')
+        except Exception:
+            continue
 
 
 def _schedule_delete_on_reboot(path):
@@ -1288,6 +1618,10 @@ def cleanup_old_executable(retries=20, retry_rounds=1):
                     ]
                 )
             candidates = list(target.parent.glob(target.name + '*.old'))
+            # 每一轮删 .old 前都先结束仍从该备份运行的进程；否则任务管理器/
+            # 更新器留下的句柄会让后续多轮重试全部失败。
+            if candidates:
+                _terminate_old_processes(candidates)
             for old_exe in candidates:
                 last_error = None
                 for _ in range(max(1, int(retries))):
@@ -1322,119 +1656,31 @@ def cleanup_old_executable(retries=20, retry_rounds=1):
             path for path in target.parent.glob(target.name + '*.old')
             if path.exists()
         ]
+        _terminate_old_processes(remaining)
         for path in remaining:
-            if _schedule_delete_on_reboot(path):
-                write_update_log(
-                    f'scheduled old executable for reboot deletion: {path.name}'
-                )
+            try:
+                os.chmod(path, 0o666)
+                path.unlink()
+                write_update_log(f'cleaned old executable after taskkill {path.name}')
+            except OSError:
+                if _schedule_delete_on_reboot(path):
+                    write_update_log(
+                        f'scheduled old executable for reboot deletion: {path.name}'
+                    )
+        remaining = [path for path in remaining if path.exists()]
         return remaining
     except OSError:
         return []
 
 
 def prepare_update(asset_path, version):
-    '''下载完成后启动外部更新脚本；调用方随后应退出启动器。返回更新脚本路径。'''
+    '''下载完成后启动新 exe updater；调用方随后应退出启动器。'''
 
     if not getattr(sys, 'frozen', False):
         raise DownloadError('源码运行模式不支持自动替换 exe，请手动下载更新。')
     if is_onedir_install():
         return _prepare_onedir_update(asset_path, version)
-    target = Path(sys.executable).resolve()
-    new_exe = _extract_exe(asset_path)
-    update_dir = scl_dir() / 'update'
-    marker = _pending_update_marker(version)
-    updated_marker = _updated_update_path()
-    failed_marker = _update_marker_path(FAILED_MARKER)
-    script = update_dir / 'apply_update.ps1'
-    script_text = chr(10).join([
-        'param([int]$WaitPid,[string]$NewExe,[string]$Target,[string]$WorkDir,[string]$Version,[string]$UpdatedMarker,[string]$FailedMarker,[string]$InstallingMarker)',
-        '$LogDir = Join-Path $WorkDir "SCL\\update"',
-        'New-Item -ItemType Directory -Force -Path $LogDir | Out-Null',
-        '$Log = Join-Path $LogDir "apply_update.log"',
-        'function Write-UpdaterLog([string]$Text) {',
-        '    Add-Content -LiteralPath $Log -Value ("[" + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + "] " + $Text) -Encoding UTF8',
-        '}',
-        'function Write-UpdateMarker([string]$Path,[string]$State,[string]$Reason) {',
-        '    $payload = @{ version = $Version; state = $State; time = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }',
-        '    if ($Reason) { $payload.reason = $Reason }',
-        '    $json = $payload | ConvertTo-Json -Compress',
-        '    $utf8 = New-Object System.Text.UTF8Encoding($false)',
-        '    [System.IO.File]::WriteAllText($Path, $json, $utf8)',
-        '}',
-        'function Fail([string]$Reason) {',
-        '    Write-UpdaterLog ("failed: " + $Reason)',
-        '    try { Write-UpdateMarker $FailedMarker "failed" $Reason } catch { }',
-        '    Remove-Item -LiteralPath $InstallingMarker -Force -ErrorAction SilentlyContinue',
-        '    exit 1',
-        '}',
-        'trap { Write-UpdaterLog ("unhandled: " + $_); Write-UpdateMarker $FailedMarker "failed" "unhandled"; exit 1 }',
-        'Write-UpdaterLog "waiting for pid $WaitPid"',
-        'Wait-Process -Id $WaitPid -ErrorAction SilentlyContinue',
-        'Start-Sleep -Milliseconds 800',
-        '$copied = $false',
-        'for ($i = 0; $i -lt 60; $i++) {',
-        '    try {',
-        '        Unblock-File -LiteralPath $NewExe -ErrorAction SilentlyContinue',
-        '        Copy-Item -LiteralPath $NewExe -Destination $Target -Force -ErrorAction Stop',
-        '        $copied = $true',
-        '        Write-UpdaterLog "copy ok"',
-        '        break',
-        '    } catch {',
-        '        if ($i -eq 0 -or ($i % 10) -eq 0) { Write-UpdaterLog ("copy retry: " + $_.Exception.Message) }',
-        '        Start-Sleep -Milliseconds 500',
-        '    }',
-        '}',
-        'if ($copied) {',
-        '    $verified = $false',
-        '    try {',
-        '        $sourceHash = (Get-FileHash -LiteralPath $NewExe -Algorithm SHA256).Hash',
-        '        $targetHash = (Get-FileHash -LiteralPath $Target -Algorithm SHA256).Hash',
-        '        if ($sourceHash -and $sourceHash -eq $targetHash) { $verified = $true }',
-        '    } catch { Write-UpdaterLog ("verify failed: " + $_.Exception.Message) }',
-        '    if ($verified) {',
-        '        Start-Sleep -Milliseconds 800',
-        '        try {',
-        '            Start-Process -FilePath $Target -WorkingDirectory $WorkDir -ErrorAction Stop',
-        '            Write-UpdaterLog "restarted"',
-        '        } catch {',
-        '            Write-UpdaterLog ("restart failed: " + $_.Exception.Message)',
-        '        }',
-        '        try {',
-        '            Write-UpdateMarker $UpdatedMarker "updated" ""',
-        '            Remove-Item -LiteralPath $InstallingMarker -Force -ErrorAction SilentlyContinue',
-        '        } catch { Write-UpdaterLog ("updated marker failed: " + $_.Exception.Message) }',
-        '        Remove-Item -LiteralPath $NewExe -Force -ErrorAction SilentlyContinue',
-        '    } else {',
-        '        Fail "copied exe hash mismatch"',
-        '    }',
-        '} else {',
-        '    Fail "copy failed after retries"',
-        '}',
-    ]) + chr(10)
-    script.write_text(script_text, encoding='utf-8-sig')
-    write_update_log(f'prepare: target={target} new={new_exe} script={script}')
-    try:
-        subprocess.Popen(
-            ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script),
-             str(os.getpid()), str(new_exe), str(target), str(target.parent),
-             str(version), str(updated_marker), str(failed_marker), str(marker)],
-            creationflags=(
-                getattr(subprocess, 'CREATE_NO_WINDOW', 0)
-                | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
-            ),
-            close_fds=True,
-            cwd=str(target.parent),
-            env=_clean_child_environment(),
-        )
-        write_update_log('prepare: powershell started')
-    except OSError as exc:
-        write_update_log(f'prepare: powershell failed: {exc}')
-        try:
-            marker.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
-    return script
+    return launch_update_helper(asset_path, version)
 
 
 def consume_updated_marker():

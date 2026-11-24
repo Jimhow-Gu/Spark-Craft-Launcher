@@ -141,11 +141,11 @@ def download_candidates(url):
         official.append(url)
     try:
         preference = str(
-            ConfigManager().get('community_source_pref', 'mirror') or 'mirror'
+            ConfigManager().get('community_source_pref', 'official') or 'official'
         ).lower()
     except Exception:
         preference = 'official'
-    candidates = mirror + official if preference in ('mirror', 'auto') else official + mirror
+    candidates = mirror + official if preference == 'mirror' else official + mirror
     if url not in candidates:
         candidates.append(url)
     return list(dict.fromkeys(candidates))
@@ -174,6 +174,15 @@ def _natural_key(text):
 
 def _release_rank(kind):
     return {'release': 0, 'beta': 1, 'alpha': 2}.get((kind or '').lower(), 3)
+
+def _cf_loader_names(versions):
+    known = {'forge', 'fabric', 'neoforge', 'quilt', 'optifine'}
+    result = []
+    for value in versions or []:
+        loader = str(value or '').strip().lower()
+        if loader in known and loader not in result:
+            result.append(loader)
+    return result
 
 def _cf_game_versions(files):
     result = []
@@ -223,15 +232,15 @@ class ModrinthSource(BaseSource):
             return self.http.get_json(url, params=params)
         try:
             preference = str(
-                ConfigManager().get('community_source_pref', 'mirror') or 'mirror'
+                ConfigManager().get('community_source_pref', 'official') or 'official'
             ).lower()
         except Exception:
             preference = 'mirror'
         # 按社区源偏好顺序请求，不再让官方/镜像竞速决定结果。
-        if preference == 'official':
-            targets = [url, targets[1]]
-        else:
+        if preference == 'mirror':
             targets = [targets[1], url]
+        else:
+            targets = [url, targets[1]]
         for target in targets:
             try:
                 return self.http.get_json(target, params=params)
@@ -275,10 +284,6 @@ class ModrinthSource(BaseSource):
         if not idents:
             return []
         params = {'limit': 100}
-        if mc_version:
-            params['game_versions'] = json.dumps([mc_version])
-        if loader:
-            params['loaders'] = json.dumps([loader])
         data = None
         last_error = None
         ident = idents[0]
@@ -379,10 +384,6 @@ class ModrinthSource(BaseSource):
         if not project_id:
             return
         params = {'limit': 100}
-        if mc_version:
-            params['game_versions'] = json.dumps([mc_version])
-        if loader:
-            params['loaders'] = json.dumps([loader])
         try:
             rows = self._get_json(f'{MODRINTH_API}/project/{quote(project_id)}/version', params=params)
         except Exception:
@@ -558,10 +559,6 @@ class CurseForgeSource(BaseSource):
 
     def get_files(self, project, mc_version='', loader=''):
         params = {'pageSize': 50, 'sortField': 2, 'sortOrder': 'desc'}
-        if mc_version:
-            params['gameVersion'] = mc_version
-        if loader and loader in CF_LOADER_IDS:
-            params['modLoaderType'] = CF_LOADER_IDS[loader]
 
         # 官方返回 200 但为空时也要试镜像；不要去掉筛选条件把不兼容版本塞给用户。
         bases = self._request_bases()
@@ -601,7 +598,7 @@ class CurseForgeSource(BaseSource):
         total = int(pagination.get('totalCount') or len(first_rows) or 0)
         page_size = max(1, int(pagination.get('pageSize') or params['pageSize']))
         index = page_size
-        max_pages = 20
+        max_pages = 100
         for _ in range(1, max_pages):
             if total and len(rows) >= total:
                 break
@@ -707,7 +704,7 @@ class CurseForgeSource(BaseSource):
         release = str(found.get('type') or 'release').lower()
         if release not in ('release', 'beta', 'alpha'):
             release = 'release'
-        return ModFile(source=self.name, project_id=str(project_id), file_id=str(wanted), filename=filename, display_name=str(found.get('display') or filename), download_url=download_url, size=int(found.get('filesize') or 0), date=_fmt_date(str(found.get('uploaded_at') or '')), release_type=release, game_versions=[str(v) for v in found.get('versions') or []], loaders=[], sha1='', dependencies=[])
+        return ModFile(source=self.name, project_id=str(project_id), file_id=str(wanted), filename=filename, display_name=str(found.get('display') or filename), download_url=download_url, size=int(found.get('filesize') or 0), date=_fmt_date(str(found.get('uploaded_at') or '')), release_type=release, game_versions=[str(v) for v in found.get('versions') or []], loaders=_cf_loader_names(found.get('versions')), sha1='', dependencies=[])
 
     def _row_to_file(self, row, project):
         if not isinstance(row, dict):
@@ -730,7 +727,7 @@ class CurseForgeSource(BaseSource):
                 relation = 0
             if relation == 3 and dep.get('modId'):
                 dependencies.append({'project_id': str(dep.get('modId')), 'dependency_type': 'required'})
-        return ModFile(source=self.name, project_id=project.project_id, file_id=file_id, filename=filename, display_name=row.get('displayName') or filename, download_url=url, size=int(row.get('fileLength') or 0), date=_fmt_date(row.get('fileDate') or ''), release_type=release, game_versions=row.get('gameVersions') or [], loaders=[], sha1=hashes.get('sha1', ''), dependencies=dependencies)
+        return ModFile(source=self.name, project_id=project.project_id, file_id=file_id, filename=filename, display_name=row.get('displayName') or filename, download_url=url, size=int(row.get('fileLength') or 0), date=_fmt_date(row.get('fileDate') or ''), release_type=release, game_versions=row.get('gameVersions') or [], loaders=_cf_loader_names(row.get('gameVersions')), sha1=hashes.get('sha1', ''), dependencies=dependencies)
 
     def get_project(self, project_id):
         try:

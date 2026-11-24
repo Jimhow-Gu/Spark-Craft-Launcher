@@ -151,7 +151,7 @@ class ConfigManager:
             'background_music_index': 0,
             'background_music_paused': False,
             'background_music_autoplay': True,
-            'community_source_pref': 'mirror',
+            'community_source_pref': 'official',
             'mod_filename_format': 'bracket_title',
             'mod_manage_style': 'title_translated',
             'theme': 'system',

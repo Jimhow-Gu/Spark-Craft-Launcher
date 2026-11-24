@@ -1694,18 +1694,11 @@ class MainWindow(QMainWindow):
 
     def _schedule_startup_tasks(self):
         # 启动不做整窗透明渐显，避免透出其他应用并减少 DWM 合成卡顿。
-        QTimer.singleShot(2000, self.force_restore)
         QTimer.singleShot(1500, self._on_startup_update_notice)
         QTimer.singleShot(1200, self._enable_page_fade)
 
     def _enable_page_fade(self):
         self._page_fade_ready = True
-
-    def force_restore(self):
-        if self.windowState() & Qt.WindowMinimized:
-            self.setWindowState(Qt.WindowNoState)
-        self.raise_()
-        self.activateWindow()
 
     def _apply_window_mask(self):
         '''给无边框窗口加圆角裁切，避免四角露出方形底色。'''

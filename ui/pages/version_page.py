@@ -13,8 +13,13 @@ import time
 import requests
 import certifi
 from pathlib import Path
-from PySide6.QtCore import (Qt, Signal, QTimer, QThread, QUrl, QSize)
-from PySide6.QtGui import (QColor, QDesktopServices, QFont, QIcon, QPixmap)
+from PySide6.QtCore import (
+    QEasingCurve, QPropertyAnimation, QRect, QRectF, Qt, QSize, QThread, QTimer,
+    QUrl, Signal,
+)
+from PySide6.QtGui import (
+    QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap,
+)
 from PySide6.QtWidgets import (QButtonGroup, QComboBox, QDialog, QFileDialog, QFrame, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QProgressBar, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
 from core.app_font import ui_font
 from ui.widgets.frameless_dialog import FramelessInputDialog
@@ -23,6 +28,9 @@ from core.download_manager import DownloadManager
 from core.launch import LaunchManager
 from core.modpack import (ModpackImportWorker, inspect_modpack, sanitize_version_name, is_windows_reserved_name)
 from core.version import (FullInstallWorker, VersionManager, VersionDeleteWorker, VersionResidualCleanupWorker, cleanup_deleted_version, detect_version_loader)
+from core.version_sources import (
+    MIN_VERSION_COUNT, V2_PATH, manifest_candidates, merge_manifests,
+)
 from core.net import HttpClient, is_network_error_text, network_available
 from core.paths import scl_dir
 from ui.widgets.toast import notify_network_failure
@@ -113,57 +121,72 @@ class LoadVersionsWorker(QThread):
             pass
 
     def _fetch_manifest(self):
-        '''并发请求各镜像，谁先返回有效清单就用谁（特殊网络环境下不会逐个超时等待）。'''
+        '''并发拉取 Piston v1 + launchermeta v1 + BMCLAPI v1，合并去重；v2 仅兜底。'''
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        def fetch(base):
+        def fetch(url):
             if self._cancelled:
-                return None
-            url = str(base or '').strip()
-            if not url:
-                return None
-            if not url.endswith('.json'):
-                url = url.rstrip('/') + '/mc/game/version_manifest_v2.json'
+                return url, None
             http = HttpClient(timeout=10, retries=1)
             try:
-                data = http.get_json(url, timeout=10)
+                data = http.get_json(str(url), timeout=10)
                 if isinstance(data, dict) and data.get('versions'):
-                    return data
+                    return url, data
             except Exception:
-                return None
+                pass
             finally:
                 http.close()
-            return None
+            return url, None
 
-        mirrors = [u for u in self.mirror_urls if u]
-        # 官方 launchermeta 在新网络下可能被重定向或限制，piston-meta 是
-        # Mojang 当前的直连清单地址；BMCLAPI/OpenBMCLAPI 作为国内回退。
-        for base in (
-            'https://piston-meta.mojang.com',
-            'https://launchermeta.mojang.com',
-            'https://bmclapi2.bangbang93.com',
-            'https://openbmclapi.bangbang93.com',
-        ):
-            if base not in mirrors:
-                mirrors.append(base)
-        pool = ThreadPoolExecutor(max_workers=max(1, min(6, len(mirrors))))
-        try:
-            futures = [pool.submit(fetch, base) for base in mirrors]
-            for future in as_completed(futures):
-                if self._cancelled:
-                    return None
-                try:
-                    result = future.result()
-                except Exception:
-                    continue
-                if result:
-                    for other in futures:
-                        other.cancel()
-                    self._save_cached_manifest(result)
-                    return result
-        finally:
-            pool.shutdown(wait=False, cancel_futures=True)
+        def fetch_group(urls):
+            manifests = []
+            sources = []
+            pool = ThreadPoolExecutor(max_workers=max(1, min(6, len(urls))))
+            try:
+                futures = [pool.submit(fetch, url) for url in urls]
+                for future in as_completed(futures):
+                    if self._cancelled:
+                        return [], []
+                    try:
+                        url, data = future.result()
+                    except Exception:
+                        continue
+                    if data:
+                        sources.append(url)
+                        manifests.append(data)
+            finally:
+                pool.shutdown(wait=False, cancel_futures=True)
+            return manifests, sources
+
+        v1_urls = manifest_candidates(
+            extra=self.mirror_urls, include_v2=False
+        )
+        manifests, sources = fetch_group(v1_urls)
+        merged = (
+            merge_manifests(
+                manifests, sources, min_versions=MIN_VERSION_COUNT
+            )
+            if manifests else {}
+        )
+        if len(merged.get('versions') or []) < MIN_VERSION_COUNT:
+            # 只有主源全部失败或数量异常时才尝试 v2，避免日常重复请求。
+            v2_urls = [
+                url for url in manifest_candidates(
+                    extra=self.mirror_urls, include_v2=True
+                )
+                if url.endswith(V2_PATH)
+            ]
+            fallback_manifests, fallback_sources = fetch_group(v2_urls)
+            if fallback_manifests:
+                merged = merge_manifests(
+                    manifests + fallback_manifests,
+                    sources + fallback_sources,
+                    min_versions=MIN_VERSION_COUNT,
+                ) or merged
+        if merged.get('versions'):
+            self._save_cached_manifest(merged)
+            return merged
         return self._load_cached_manifest()
 
     def run(self):
@@ -211,6 +234,74 @@ class VersionValidationWorker(QThread):
             self.done.emit(result)
 
 
+class _CapsuleIndicator(QWidget):
+    """自绘胶囊底块，完全不依赖 QSS 的 border-radius。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        rect = QRectF(self.rect())
+        radius = min(rect.width(), rect.height()) / 2.0
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor('#90D9D9'))
+        painter.drawRoundedRect(rect, radius, radius)
+
+
+class _CapsuleTabButton(QPushButton):
+    """胶囊切换按钮：文字/悬停底块均自绘，避免全局按钮样式画方。"""
+
+    def __init__(self, text, parent=None):
+        super().__init__(text, parent)
+        self.setAttribute(Qt.WA_Hover, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAutoFillBackground(False)
+        self.setFont(ui_font(13))
+        self.setStyleSheet(
+            'QPushButton { background:transparent; border:none; padding:0; }'
+        )
+        self.toggled.connect(self.update)
+
+    def enterEvent(self, event):
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.TextAntialiasing, True)
+        checked = self.isChecked()
+        hovered = self.underMouse()
+        if hovered and not checked:
+            rect = QRectF(self.rect())
+            radius = rect.height() / 2.0
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(
+                144, 217, 217, 48 if self.isDown() else 30
+            ))
+            painter.drawRoundedRect(rect, radius, radius)
+        if checked:
+            color = QColor('#122828')
+        elif hovered:
+            color = QColor(245, 252, 252)
+        else:
+            color = QColor(255, 255, 255, 158)
+        painter.setPen(color)
+        painter.setFont(self.font())
+        painter.drawText(self.rect(), Qt.AlignCenter, self.text())
+
+
 class VersionPage(QWidget):
     version_installed = Signal(str)
     version_selected = Signal(str)
@@ -235,6 +326,7 @@ class VersionPage(QWidget):
         self._modpack_worker = None
         self._modpack_dialog = None
         self._modpack_page = None
+        self._modpack_mode = 'new'
         self._current_modpack_path = ''
         self._download_task_id = ''
         self._install_jobs = {}
@@ -961,35 +1053,30 @@ class VersionPage(QWidget):
         title.setStyleSheet('color:#f0f0f0;')
         layout.addWidget(title)
         filter_row = QHBoxLayout()
-        filter_label = QLabel('版本类型')
-        filter_label.setStyleSheet('color: rgba(255,255,255,0.7);')
         filter_pill = QFrame()
         filter_pill.setObjectName('VersionFilterPill')
+        # PCL MyRadioButton 风格：两个独立胶囊，不再在胶囊外再套一层胶囊。
+        # 选中底块由单独的 indicator 绘制，切换时做几何动画。
         filter_pill.setStyleSheet(
-            'QFrame#VersionFilterPill { background:rgba(255,255,255,0.06);'
-            ' border:1px solid rgba(255,255,255,0.12); border-radius:18px; }'
+            'QFrame#VersionFilterPill { background:transparent; border:none; }'
         )
+        self._filter_indicator = _CapsuleIndicator(filter_pill)
+        self._filter_indicator.setObjectName('VersionFilterIndicator')
+        self._filter_indicator.show()
+        self._filter_indicator_anim = None
         pill_layout = QHBoxLayout(filter_pill)
-        pill_layout.setContentsMargins(3, 3, 3, 3)
-        pill_layout.setSpacing(2)
+        pill_layout.setContentsMargins(0, 0, 0, 0)
+        pill_layout.setSpacing(8)
         self._filter_group = QButtonGroup(self)
         self._filter_group.setExclusive(True)
         self._filter_buttons = {}
         for key, label in (('release', '正式版'), ('snapshot', '快照版')):
-            btn = QPushButton(label)
+            btn = _CapsuleTabButton(label)
             btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setMinimumHeight(30)
+            btn.setFocusPolicy(Qt.NoFocus)
+            btn.setFixedHeight(30)
             btn.setMinimumWidth(86)
-            btn.setStyleSheet(
-                'QPushButton { background:transparent; color:rgba(255,255,255,0.62);'
-                ' border:none; border-radius:14px; padding:5px 16px;'
-                ' font-size:13px; font-weight:700; }'
-                'QPushButton:hover { background:rgba(255,255,255,0.10);'
-                ' border-radius:14px; }'
-                'QPushButton:checked { background:#90D9D9; color:#122828;'
-                ' border-radius:14px; }'
-            )
             btn.setChecked(key == getattr(self, '_available_filter', 'release'))
             btn.clicked.connect(
                 (lambda _checked=False, k=key: self._set_available_filter(k))
@@ -999,12 +1086,18 @@ class VersionPage(QWidget):
             self._filter_buttons[key] = btn
         refresh_btn = QPushButton('刷新')
         refresh_btn.clicked.connect(self._load_available_versions_async)
-        refresh_btn.setStyleSheet(self._secondary_btn_style())
-        filter_row.addWidget(filter_label)
+        refresh_btn.setFixedHeight(30)
+        refresh_btn.setStyleSheet(
+            'QPushButton { background:#3a3a3a; color:white; border:none;'
+            ' border-radius:6px; padding:0 16px; }'
+            'QPushButton:hover { background:#4a4a4a; }'
+            'QPushButton:disabled { background:#2a2a2a; color:#666; }'
+        )
         filter_row.addWidget(filter_pill)
         filter_row.addWidget(refresh_btn)
         filter_row.addStretch(1)
         layout.addLayout(filter_row)
+        QTimer.singleShot(0, lambda: self._update_filter_indicator(False))
         self.available_list = QListWidget()
         self.available_list.setIconSize(QSize(20, 20))
         self.available_list.setTextElideMode(Qt.ElideRight)
@@ -1076,13 +1169,54 @@ class VersionPage(QWidget):
             self._load_worker = None
         self._loading = False
 
+    def _update_filter_indicator(self, animate=False):
+        indicator = getattr(self, '_filter_indicator', None)
+        button = getattr(self, '_filter_buttons', {}).get(
+            getattr(self, '_available_filter', 'release')
+        )
+        if indicator is None or button is None:
+            return
+        target = QRect(button.geometry())
+        if target.width() <= 0 or target.height() <= 0:
+            return
+        current = indicator.geometry()
+        if current == target:
+            return
+        if animate and indicator.isVisible() and current.width() > 0:
+            old_anim = getattr(self, '_filter_indicator_anim', None)
+            if old_anim is not None:
+                try:
+                    old_anim.stop()
+                except RuntimeError:
+                    pass
+            animation = QPropertyAnimation(indicator, b'geometry', self)
+            animation.setDuration(180)
+            animation.setEasingCurve(QEasingCurve.OutCubic)
+            animation.setStartValue(current)
+            animation.setEndValue(target)
+            animation.finished.connect(
+                (lambda: setattr(self, '_filter_indicator_anim', None))
+            )
+            self._filter_indicator_anim = animation
+            animation.start()
+        else:
+            indicator.setGeometry(target)
+        indicator.show()
+        indicator.lower()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, lambda: self._update_filter_indicator(False))
+
     def _set_available_filter(self, key):
         key = 'snapshot' if str(key).lower() == 'snapshot' else 'release'
         for name, button in getattr(self, '_filter_buttons', {}).items():
             button.setChecked(name == key)
         if key == getattr(self, '_available_filter', 'release'):
+            self._update_filter_indicator(False)
             return
         self._available_filter = key
+        self._update_filter_indicator(True)
         self._load_available_versions_async()
 
     def _load_available_versions_async(self, silent=False):
@@ -1220,19 +1354,27 @@ class VersionPage(QWidget):
 
         versions = sorted(versions, key=_version_order, reverse=True)
         filter_type = getattr(self, '_available_filter', 'release')
-        latest_release = next((v for v in versions if str(v.get('type', '')).lower() == 'release'), None)
-        latest_snapshot = next((v for v in versions if str(v.get('type', '')).lower() == 'snapshot'), None)
-        pinned = [v for v in (latest_release, latest_snapshot) if v is not None]
-        if pinned:
-            self._add_available_header('最新版本')
-            for version in pinned:
-                self._add_available_version(version)
         if filter_type == 'snapshot':
-            items = [v for v in versions if str(v.get('type', '')).lower() == 'snapshot']
+            # 测试版不推荐、不置顶、不显示“当前版本”；仅保留高位到低位的
+            # 中性列表，用户需要自己选择。
+            items = [
+                v for v in versions
+                if str(v.get('type', '')).lower() == 'snapshot'
+            ]
             if items:
                 self._add_available_header(f'快照与预览版 ({len(items)})')
         else:
-            items = [v for v in versions if str(v.get('type', '')).lower() == 'release']
+            latest_release = next(
+                (v for v in versions if str(v.get('type', '')).lower() == 'release'),
+                None,
+            )
+            if latest_release is not None:
+                self._add_available_header('最新版本')
+                self._add_available_version(latest_release)
+            items = [
+                v for v in versions
+                if str(v.get('type', '')).lower() == 'release'
+            ]
             if items:
                 self._add_available_header(f'正式版 ({len(items)})')
         for v in items:
@@ -1654,40 +1796,87 @@ class VersionPage(QWidget):
         if self._modpack_page is not None:
             self.stack.removeWidget(self._modpack_page)
             self._modpack_page.deleteLater()
-        page = ModpackImportPage(info, path, default, self)
+        try:
+            installed = self.version_mgr.get_installed_versions(strict=False)
+        except Exception:
+            installed = []
+        page = ModpackImportPage(
+            info, path, default, self, installed_versions=installed
+        )
         page.back_requested.connect(self._close_modpack_import_page)
         page.start_requested.connect(self._begin_modpack_import)
         self._modpack_page = page
         self.stack.addWidget(page)
         self.stack.setCurrentWidget(page)
 
-    def _begin_modpack_import(self, name):
+    def _begin_modpack_import(self, mode, value):
         page = self._modpack_page
         if page is None:
             return
         if self._modpack_worker and self._modpack_worker.isRunning():
             page.show_error('已有整合包正在导入，请稍候')
             return
-        name = sanitize_version_name(name)
-        if not name:
-            page.show_error('版本名称不能为空')
-            return
-        target = Path(self.config.get_mc_dir()) / 'versions' / name
-        from core.version import INCOMPLETE_MARKER
-        if target.exists() and not (target / INCOMPLETE_MARKER).exists():
-            page.show_error(f'版本名称「{name}」已存在，请更换名称')
-            return
+        mode = 'existing' if str(mode).lower() == 'existing' else 'new'
+        existing_version = ''
+        if mode == 'existing':
+            existing_version = str(value or '').strip()
+            if not existing_version:
+                page.show_error('请选择要安装到的现有实例')
+                return
+            target = (
+                Path(self.config.get_mc_dir()) / 'versions' / existing_version
+            )
+            from core.version import INCOMPLETE_MARKER
+            if (
+                not target.is_dir()
+                or not (target / f'{existing_version}.json').is_file()
+            ):
+                page.show_error(f'目标版本「{existing_version}」不存在')
+                return
+            if (target / INCOMPLETE_MARKER).exists():
+                page.show_error(f'目标版本「{existing_version}」尚未安装完成')
+                return
+            name = existing_version
+        else:
+            name = sanitize_version_name(value)
+            if not name:
+                page.show_error('版本名称不能为空')
+                return
+            target = Path(self.config.get_mc_dir()) / 'versions' / name
+            from core.version import INCOMPLETE_MARKER
+            if target.exists() and not (target / INCOMPLETE_MARKER).exists():
+                page.show_error(f'版本名称「{name}」已存在，请更换名称')
+                return
+        self._modpack_mode = mode
         self._suspend_available_refresh()
         page.set_running(True)
-        page.set_status('正在准备导入整合包...')
+        page.set_status(
+            '正在准备安装到现有实例...'
+            if mode == 'existing' else '正在准备导入整合包...'
+        )
         self._current_modpack_path = str(page.path)
         import time as _time
         self._modpack_task_id = f'modpack-{int(_time.time() * 1000)}'
         self._modpack_floor = 3.0
-        DownloadManager.instance().start_task(self._modpack_task_id, f'{name} 整合包导入', steps=['解析整合包', '安装依赖', '下载并安装整合包文件', '写入版本配置'], cancel_callback=(lambda: None))
+        steps = (
+            ['解析整合包', '检查现有实例', '下载并安装整合包文件', '写入版本配置']
+            if mode == 'existing'
+            else ['解析整合包', '安装依赖', '下载并安装整合包文件', '写入版本配置']
+        )
+        task_title = (
+            f'{name} 整合包安装' if mode == 'existing'
+            else f'{name} 整合包导入'
+        )
+        DownloadManager.instance().start_task(
+            self._modpack_task_id, task_title, steps=steps,
+            cancel_callback=(lambda: None),
+        )
         DownloadManager.instance().update_step(self._modpack_task_id, 0, state='active')
         DownloadManager.instance().update_task(self._modpack_task_id, percent=3.0)
-        worker = ModpackImportWorker(str(page.path), self.config.get_mc_dir(), name, self)
+        worker = ModpackImportWorker(
+            str(page.path), self.config.get_mc_dir(), name, self,
+            existing_version=existing_version,
+        )
         self._modpack_worker = worker
         DownloadManager.instance().set_cancel_callback(self._modpack_task_id, worker.cancel)
         worker.status_updated.connect(self._on_modpack_status)
@@ -1813,7 +2002,9 @@ class VersionPage(QWidget):
         self.config.set('version_settings', settings)
         self.config.save()
         if self._modpack_page is not None:
-            self._modpack_page.show_success(version_id)
+            self._modpack_page.show_success(
+                version_id, getattr(self, '_modpack_mode', 'new')
+            )
         self._pending_modpack_version = version_id
         try:
             p = Path(self._current_modpack_path)
@@ -1829,6 +2020,7 @@ class VersionPage(QWidget):
             self._modpack_worker = None
         version_id = self._pending_modpack_version
         self._pending_modpack_version = ''
+        self._modpack_mode = 'new'
         self._load_installed_versions()
         self.version_installed.emit(version_id or '')
         if self._pending_available_refresh:

@@ -35,7 +35,10 @@ from core.downloading import DownloadClient, RemoteFile
 from core.installers import (InstallCancelled, ProgressMapper, create_alias, install_fabric, install_forge, install_neoforge, install_quilt, install_vanilla)
 from core.mods import CurseForgeSource, pcl_mod_mirror
 from core.net import (DownloadCancelled, DownloadError, DownloadGate)
-from core.version import (INCOMPLETE_MARKER, register_active_install, unregister_active_install)
+from core.version import (
+    INCOMPLETE_MARKER, detect_version_loader, register_active_install,
+    unregister_active_install,
+)
 
 
 @dataclass
@@ -574,11 +577,13 @@ class ModpackImportWorker(QThread):
     finished_ok = Signal(str)
     finished_error = Signal(str)
 
-    def __init__(self, path, mc_dir, pack_name='', parent=None):
+    def __init__(self, path, mc_dir, pack_name='', parent=None, existing_version=''):
         super().__init__(parent)
         self.path = str(path)
         self.mc_dir = str(Path(mc_dir))
         self.pack_name = pack_name
+        self.existing_version = str(existing_version or '').strip()
+        self._created_target = not bool(self.existing_version)
         self._cancelled = False
         # 整合包内大文件（100MB+ 的模组/资源包）在慢速网络下极易超过 90 秒，
         # 这里放宽到 15 分钟；真正的卡死仍由 20 秒读超时和用户取消处理。
@@ -611,38 +616,82 @@ class ModpackImportWorker(QThread):
         if self._cancelled:
             raise InstallCancelled()
 
+    def _verify_existing_target(self, info, target_dir, name):
+        try:
+            data = json.loads(
+                (target_dir / f'{name}.json').read_text(encoding='utf-8')
+            )
+        except (OSError, ValueError) as exc:
+            raise DownloadError(f'无法读取目标实例配置：{exc}') from exc
+        loader = detect_version_loader(name, data, target_dir)
+        if info.loader_id:
+            if not loader:
+                raise DownloadError(
+                    f'目标实例「{name}」没有可用的 Mod 加载器，'
+                    f'不能安装 {info.loader_id} 整合包'
+                )
+            if loader.lower() != str(info.loader_id).lower():
+                raise DownloadError(
+                    f'目标实例加载器为 {loader}，与整合包的 '
+                    f'{info.loader_id} 不一致'
+                )
+        target_mc = str(data.get('clientVersion') or '').strip()
+        if target_mc and info.mc_version and target_mc != info.mc_version:
+            raise DownloadError(
+                f'目标实例 Minecraft 版本为 {target_mc}，'
+                f'与整合包的 {info.mc_version} 不一致'
+            )
+
     def run(self):
         alias_dir = None
         try:
             info = inspect_modpack(self.path)
-            name = sanitize_version_name(self.pack_name or info.name or Path(self.path).stem) or '整合包'
             if not info.mc_version:
                 raise DownloadError('整合包未包含 Minecraft 版本信息，无法自动安装。请手动创建版本后导入文件。')
             versions_dir = Path(self.mc_dir) / 'versions'
             versions_dir.mkdir(parents=True, exist_ok=True)
-            target_dir = versions_dir / name
-            if target_dir.exists():
+            if self.existing_version:
+                name = self.existing_version
+                target_dir = versions_dir / name
+                if (
+                    not target_dir.is_dir()
+                    or not (target_dir / f'{name}.json').is_file()
+                ):
+                    raise DownloadError(f'目标版本不存在：{name}')
                 if (target_dir / INCOMPLETE_MARKER).exists():
-                    for _ in range(3):
-                        safe_rmtree(target_dir, ignore_errors=True)
-                        if not target_dir.exists():
-                            break
-                        time.sleep(0.2)
+                    raise DownloadError(f'目标版本尚未安装完成：{name}')
+                self._verify_existing_target(info, target_dir, name)
+                self._created_target = False
+            else:
+                name = sanitize_version_name(self.pack_name or info.name or Path(self.path).stem) or '整合包'
+                target_dir = versions_dir / name
                 if target_dir.exists():
-                    raise DownloadError(f'版本名称已存在：{name}\n请修改整合包名称后重试')
+                    if (target_dir / INCOMPLETE_MARKER).exists():
+                        for _ in range(3):
+                            safe_rmtree(target_dir, ignore_errors=True)
+                            if not target_dir.exists():
+                                break
+                            time.sleep(0.2)
+                    if target_dir.exists():
+                        raise DownloadError(f'版本名称已存在：{name}\n请修改整合包名称后重试')
+                self._created_target = True
             self._alias_id = name
-            self.status_updated.emit(f'正在导入整合包：{name}')
+            mode_text = '安装到现有实例' if self.existing_version else '导入整合包'
+            self.status_updated.emit(f'正在{mode_text}：{name}')
             self.log_message.emit(f'格式: {info.format_name()}，MC {info.mc_version}，加载器: {info.loader_id or "原版"} {info.loader_version}')
             self.log_message.emit(f'文件数: {info.file_count}')
             self._before_dirs = register_active_install(self._install_token, versions_dir)
             alias_dir = target_dir
             alias_dir.mkdir(parents=True, exist_ok=True)
-            (alias_dir / INCOMPLETE_MARKER).write_text('importing\n', encoding='utf-8')
             (alias_dir / 'mods').mkdir(exist_ok=True)
-            self._install_dependencies(info, name)
-            # 安装器可能整体重建了目标目录，重新写入未完成标记
-            (alias_dir / INCOMPLETE_MARKER).write_text('importing\n', encoding='utf-8')
-            self._mark_dependency_dirs()
+            if self._created_target:
+                (alias_dir / INCOMPLETE_MARKER).write_text('importing\n', encoding='utf-8')
+                self._install_dependencies(info, name)
+                # 安装器可能整体重建了目标目录，重新写入未完成标记
+                (alias_dir / INCOMPLETE_MARKER).write_text('importing\n', encoding='utf-8')
+                self._mark_dependency_dirs()
+            else:
+                self.status_updated.emit('使用现有实例，跳过加载器安装')
             self.progress_updated.emit(58)
             pack_files = self._resolve_files(info, alias_dir)
             self._download_files(info, pack_files, alias_dir)
@@ -660,6 +709,7 @@ class ModpackImportWorker(QThread):
                 'icon': icon_name,
                 'imported_at': time.strftime('%Y-%m-%d %H:%M:%S'),
                 'files': pack_files,
+                'install_mode': 'existing' if self.existing_version else 'new',
             }
             with open(alias_dir / 'pmgl_pack.json', 'w', encoding='utf-8') as fh:
                 json.dump(meta, fh, ensure_ascii=False, indent=2)
@@ -669,11 +719,12 @@ class ModpackImportWorker(QThread):
             settings[name] = entry
             self._config.set('version_settings', settings)
             self._config.save()
-            try:
-                (alias_dir / INCOMPLETE_MARKER).unlink(missing_ok=True)
-            except OSError:
-                pass
-            self._clear_dependency_markers()
+            if self._created_target:
+                try:
+                    (alias_dir / INCOMPLETE_MARKER).unlink(missing_ok=True)
+                except OSError:
+                    pass
+                self._clear_dependency_markers()
             self.progress_updated.emit(100)
             self.status_updated.emit('整合包导入完成')
             self.finished_ok.emit(name)
@@ -688,16 +739,18 @@ class ModpackImportWorker(QThread):
             unregister_active_install(self._install_token)
 
     def _cleanup_failed(self, alias_dir):
-        if alias_dir and alias_dir.exists():
+        # 安装到现有实例时绝不能删除整个版本目录；只允许回滚本次新建的实例。
+        if self._created_target and alias_dir and alias_dir.exists():
             for _ in range(3):
                 safe_rmtree(alias_dir, ignore_errors=True)
                 if not alias_dir.exists():
                     break
                 time.sleep(0.2)
-        self._remove_created_dependencies()
+        if self._created_target:
+            self._remove_created_dependencies()
 
     def _created_dependency_dirs(self):
-        if self._before_dirs is None:
+        if self.existing_version or self._before_dirs is None:
             return []
         versions_dir = Path(self.mc_dir) / 'versions'
         if not versions_dir.exists():

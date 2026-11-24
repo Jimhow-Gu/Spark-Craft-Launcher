@@ -1,13 +1,16 @@
 '''启动器背景绘制控件'''
 
+import logging
 import math
 import time
 from pathlib import Path
-from PySide6.QtCore import (QRect, QRectF, Qt, QUrl, Signal)
-from PySide6.QtGui import (QColor, QImage, QLinearGradient, QPainter, QPainterPath, QPixmap)
+from PySide6.QtCore import (QRect, QRectF, Qt, QUrl, QTimer, Signal)
+from PySide6.QtGui import (QBrush, QColor, QImage, QLinearGradient, QPainter, QPainterPath, QPixmap)
 from PySide6.QtWidgets import (QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene, QWidget)
-from core.background import (VIDEO_EXTENSIONS, current_image, get_settings)
+from core.background import (IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, current_image, get_settings)
 from ui.design import WINDOW_DARK, WINDOW_LIGHT
+
+logger = logging.getLogger('Background')
 
 class BackgroundWidget(QWidget):
     video_state_changed = Signal(bool)
@@ -31,6 +34,19 @@ class BackgroundWidget(QWidget):
         self._video_auto_key = None
         self._freeze_updates = False
         self._last_video_frame_time = 0.0
+        self._video_frame_ready = False
+        self._video_failed_path = ''
+        self._video_failure_logged = False
+        self._video_fallback_timer = QTimer(self)
+        self._video_fallback_timer.setSingleShot(True)
+        self._video_fallback_timer.setInterval(3500)
+        self._video_fallback_timer.timeout.connect(self._on_video_fallback_timeout)
+        # 解码器有时会持续输出全黑帧而不报错；首帧/后续帧亮度采样后，
+        # 连续黑帧超过 1.8 秒就判定失败，保留静态 fallback。
+        self._video_black_timer = QTimer(self)
+        self._video_black_timer.setSingleShot(True)
+        self._video_black_timer.setInterval(1800)
+        self._video_black_timer.timeout.connect(self._on_video_black_timeout)
         self._light = False
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         self.setAutoFillBackground(False)
@@ -49,21 +65,64 @@ class BackgroundWidget(QWidget):
         self._light = bool(light)
         self.update()
 
+    def _fallback_image_path(self, video_path):
+        '''视频首帧前/失败时使用的静态图：同名图 → 背景目录任意图。'''
+
+        path = Path(video_path)
+        for suffix in ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif'):
+            candidate = path.with_suffix(suffix)
+            if candidate.is_file():
+                return candidate
+        try:
+            candidates = sorted(
+                (
+                    item for item in path.parent.iterdir()
+                    if item.is_file()
+                    and item.suffix.lower() in IMAGE_EXTENSIONS
+                    and item != path
+                ),
+                key=lambda item: item.name.lower(),
+            )
+        except OSError:
+            candidates = []
+        return candidates[0] if candidates else None
+
+    def _load_video_fallback(self, video_path):
+        fallback = self._fallback_image_path(video_path)
+        self._source = None
+        self._source_path = ''
+        self._blurred = None
+        self._blur_radius = -1
+        self._scaled = None
+        self._scaled_key = None
+        if fallback is None:
+            return
+        pix = QPixmap(str(fallback))
+        if not pix.isNull():
+            self._source = pix
+            self._source_path = str(fallback)
+
     def reload(self, force: bool=False):
         settings = get_settings()
         path = current_image() if settings['enabled'] else None
         is_video = bool(path and Path(path).is_file() and Path(path).suffix.lower() in VIDEO_EXTENSIONS)
         if is_video:
-            self._source = None
-            self._source_path = ''
-            self._blurred = None
-            self._blur_radius = -1
-            self._scaled = None
-            self._scaled_key = None
-            if force or str(path) != self._video_path or self._video_player is None:
+            path_text = str(path)
+            if path_text == self._video_failed_path:
+                # 本轮已经失败过，永久保留 fallback，不再重试媒体后端。
+                if self._source is None:
+                    self._load_video_fallback(path_text)
+                self.update()
+                return
+            if path_text != self._video_path or self._source is None:
+                self._load_video_fallback(path_text)
+            if force or path_text != self._video_path or self._video_player is None:
                 self._start_video(path)
             else:
-                self._video_player.play()
+                try:
+                    self._video_player.play()
+                except RuntimeError:
+                    pass
             self.update()
             return
         self._stop_video()
@@ -176,6 +235,8 @@ class BackgroundWidget(QWidget):
 
     def _start_video(self, path):
         self._stop_video()
+        self._video_frame_ready = False
+        self._video_failure_logged = False
         try:
             from PySide6.QtMultimedia import (QAudioOutput, QMediaPlayer, QVideoSink)
             player = QMediaPlayer(self)
@@ -192,17 +253,88 @@ class BackgroundWidget(QWidget):
             audio.setVolume(self._video_volume)
             player.setAudioOutput(audio)
             player.setVideoOutput(sink)
-            sink.videoFrameChanged.connect(self._on_video_frame)
-            player.playbackStateChanged.connect(self._on_video_playback_state)
-            player.setSource(QUrl.fromLocalFile(str(path)))
-            player.setLoops(QMediaPlayer.Infinite)
+            # 先挂好状态和引用，再 setSource/play：部分后端会在 setSource
+            # 阶段同步发出 InvalidMedia，不能等赋值完成才处理。
             self._video_player = player
             self._video_sink = sink
             self._video_audio = audio
             self._video_path = str(path)
+            sink.videoFrameChanged.connect(self._on_video_frame)
+            player.playbackStateChanged.connect(self._on_video_playback_state)
+            player.errorOccurred.connect(self._on_video_error)
+            player.mediaStatusChanged.connect(self._on_video_media_status)
+            player.setSource(QUrl.fromLocalFile(str(path)))
+            player.setLoops(QMediaPlayer.Infinite)
+            self._video_fallback_timer.start()
             player.play()
-        except Exception:
+        except Exception as exc:
+            self._video_failed_path = str(path)
+            logger.warning('背景视频启动失败，保留静态 fallback: %s (%s)', path, exc)
             self._stop_video()
+
+    def _on_video_error(self, *_args):
+        path = self._video_path
+        if not path or path == self._video_failed_path:
+            return
+        self._video_failed_path = path
+        if not self._video_failure_logged:
+            self._video_failure_logged = True
+            logger.warning('背景视频解码失败，保留静态 fallback: %s', path)
+        self._stop_video()
+        self.update()
+
+    def _on_video_fallback_timeout(self):
+        if self._video_frame_ready or self._video_player is None:
+            return
+        path = self._video_path
+        if not path:
+            return
+        self._video_failed_path = path
+        if not self._video_failure_logged:
+            self._video_failure_logged = True
+            logger.warning('背景视频 3.5 秒无首帧，保留静态 fallback: %s', path)
+        self._stop_video()
+        self.update()
+
+    @staticmethod
+    def _is_black_image(image):
+        """判断一帧是否近似全黑；只抽样少量像素，避免拖慢主线程。"""
+
+        try:
+            if image is None or image.isNull():
+                return False
+            sample = image.scaled(
+                32, 18, Qt.IgnoreAspectRatio, Qt.FastTransformation
+            )
+            for y in range(sample.height()):
+                for x in range(sample.width()):
+                    color = sample.pixelColor(x, y)
+                    if max(color.red(), color.green(), color.blue()) > 16:
+                        return False
+            return True
+        except Exception:
+            return False
+
+    def _on_video_black_timeout(self):
+        path = self._video_path
+        if not path or path == self._video_failed_path:
+            return
+        self._video_failed_path = path
+        if not self._video_failure_logged:
+            self._video_failure_logged = True
+            logger.warning(
+                '背景视频持续黑帧（1.8 秒），保留静态 fallback: %s', path
+            )
+        self._stop_video()
+        self.update()
+
+    def _on_video_media_status(self, status):
+        try:
+            from PySide6.QtMultimedia import QMediaPlayer
+            if status == QMediaPlayer.InvalidMedia:
+                self._on_video_error()
+        except Exception:
+            pass
 
     def _on_video_playback_state(self, state):
         try:
@@ -215,6 +347,10 @@ class BackgroundWidget(QWidget):
         player = self._video_player
         sink = self._video_sink
         audio = self._video_audio
+        self._video_fallback_timer.stop()
+        self._video_black_timer.stop()
+        self._video_frame_ready = False
+        self._last_video_frame_time = 0.0
         self._video_player = None
         self._video_sink = None
         self._video_audio = None
@@ -261,7 +397,14 @@ class BackgroundWidget(QWidget):
         self._video_auto_key = None
 
     def _on_video_frame(self, frame):
-        if self._video_player is None or self._freeze_updates:
+        if self._video_player is None:
+            return
+        try:
+            if frame is None or not frame.isValid():
+                return
+        except Exception:
+            return
+        if self._freeze_updates:
             return
         # 1080p 背景视频在软件渲染/低配机器上会占满主线程；限制到约 12fps，
         # 保留动态背景但避免启动和交互时卡死。
@@ -271,22 +414,31 @@ class BackgroundWidget(QWidget):
         self._last_video_frame_time = now
         try:
             image = frame.toImage()
-            if not image.isNull():
-                dpr = max(1.0, float(self.devicePixelRatioF()))
-                max_w = max(320, int(self.width() * dpr))
-                max_h = max(240, int(self.height() * dpr))
-                if image.width() > max_w * 1.15 or image.height() > max_h * 1.15:
-                    image = image.scaled(
-                        max_w, max_h,
-                        Qt.KeepAspectRatioByExpanding,
-                        Qt.SmoothTransformation,
-                    )
-                self._video_image = image
-                self._invalidate_video_cache()
-                self.update()
-            return
+            if image.isNull():
+                return
+            if self._is_black_image(image):
+                # 全黑帧不覆盖 fallback；持续黑帧由 1.8 秒定时器判定失败。
+                if not self._video_black_timer.isActive():
+                    self._video_black_timer.start()
+                return
+            # 收到正常帧后取消黑帧判定，再恢复视频帧。
+            self._video_black_timer.stop()
+            self._video_frame_ready = True
+            self._video_fallback_timer.stop()
+            dpr = max(1.0, float(self.devicePixelRatioF()))
+            max_w = max(320, int(self.width() * dpr))
+            max_h = max(240, int(self.height() * dpr))
+            if image.width() > max_w * 1.15 or image.height() > max_h * 1.15:
+                image = image.scaled(
+                    max_w, max_h,
+                    Qt.KeepAspectRatioByExpanding,
+                    Qt.SmoothTransformation,
+                )
+            self._video_image = image
+            self._invalidate_video_cache()
+            self.update()
         except Exception:
-            pass
+            return
 
     def showEvent(self, event):
         if self._video_player is not None:
@@ -399,6 +551,14 @@ class BackgroundWidget(QWidget):
             source = self._scaled_source()
             source = self._blur_pixmap(source, settings['blur'])
         else:
+            gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
+            if self._light:
+                gradient.setColorAt(0.0, QColor('#f8fbfb'))
+                gradient.setColorAt(1.0, QColor('#dcefef'))
+            else:
+                gradient.setColorAt(0.0, QColor('#243434'))
+                gradient.setColorAt(1.0, QColor('#101616'))
+            painter.fillRect(rect, QBrush(gradient))
             painter.end()
             return
         opacity = max(0, min(100, settings['opacity'])) / 100.0
