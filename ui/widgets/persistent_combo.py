@@ -6,9 +6,10 @@ import time
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QComboBox
+from ui.widgets.rounded_combo import RoundedComboBox
 
 
-class PersistentComboBox(QComboBox):
+class PersistentComboBox(RoundedComboBox):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._keep_open_until = 0.0

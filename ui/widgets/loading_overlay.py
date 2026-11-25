@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -199,6 +200,7 @@ class LoadingOverlay(QWidget):
     '''覆盖在页面/列表上的加载卡片，支持进度、循环动画和失败状态。'''
 
     hidden = Signal()
+    retry_requested = Signal()
 
     def __init__(self, parent=None, *, block_input=True):
         super().__init__(parent)
@@ -208,6 +210,7 @@ class LoadingOverlay(QWidget):
         self._reason = ''
         self._percent = 0
         self._auto_max = 90
+        self._label_text = '正在加载'
         self.setAttribute(Qt.WA_StyledBackground, False)
         self.setAttribute(Qt.WA_NoMousePropagation, True)
         self.setProperty('_theme_ignore', True)
@@ -242,6 +245,16 @@ class LoadingOverlay(QWidget):
         self.status_label.setFont(ui_font(13, 500))
         self.status_label.setProperty('_theme_ignore', True)
         card_layout.addWidget(self.status_label)
+        self.retry_btn = QPushButton('重试')
+        self.retry_btn.setProperty('_theme_ignore', True)
+        self.retry_btn.setStyleSheet(
+            'QPushButton { background:#90D9D9; color:#122828; border:none;'
+            ' border-radius:6px; padding:5px 18px; font-weight:700; }'
+            'QPushButton:hover { background:#78CACA; }'
+        )
+        self.retry_btn.clicked.connect(self.retry_requested.emit)
+        self.retry_btn.hide()
+        card_layout.addWidget(self.retry_btn, 0, Qt.AlignHCenter)
         middle.addWidget(self.card)
         middle.addStretch(1)
         outer.addLayout(middle)
@@ -346,16 +359,21 @@ class LoadingOverlay(QWidget):
     def start(self, text='正在加载', percent=0, *, auto=False, auto_max=90):
         self._mode = 'loading'
         self._reason = ''
+        self._label_text = str(text or '正在加载').strip() or '正在加载'
         self._percent = max(0, min(100, int(percent or 0)))
         self._auto_max = max(1, min(99, int(auto_max)))
         self._error_timer.stop()
         self._auto_timer.stop()
         self._progress_anim.stop()
         self._display_percent = float(self._percent)
+        self.retry_btn.hide()
+        self.card.setFixedSize(250, 176)
         self.media.show()
         self.media.setStyleSheet('QFrame#LoadingMedia { background:transparent; border:none; }')
         self.image_label.start()
-        self.status_label.setText(f'正在加载 - {self._percent}%')
+        self.status_label.setText(
+            f'{self._label_text} - {self._percent}%'
+        )
         self._apply_theme()
         if self._host is not None:
             self.setGeometry(self._host.rect())
@@ -366,6 +384,15 @@ class LoadingOverlay(QWidget):
 
     def start_auto(self, text='正在加载', max_percent=90):
         self.start(text, 0, auto=True, auto_max=max_percent)
+
+    def set_text(self, text):
+        if self._mode != 'loading':
+            return
+        self._label_text = str(text or '正在加载').strip() or '正在加载'
+        try:
+            self.status_label.setText(self._label_text)
+        except RuntimeError:
+            pass
 
     def is_loading(self):
         return self._mode == 'loading'
@@ -391,7 +418,9 @@ class LoadingOverlay(QWidget):
             self._display_percent = float(value)
         except (TypeError, ValueError):
             return
-        self.status_label.setText(f'正在加载 - {int(round(self._display_percent))}%')
+        self.status_label.setText(
+            f'{self._label_text} - {int(round(self._display_percent))}%'
+        )
 
     def _animate_progress(self, target, duration=220):
         target = max(0, min(100, int(target)))
@@ -451,6 +480,8 @@ class LoadingOverlay(QWidget):
         self.image_label.show_error(_error_pixmap(58))
         self.media.setStyleSheet('QFrame#LoadingMedia { background:transparent; border:none; }')
         self.status_label.setText('加载失败')
+        self.retry_btn.show()
+        self.card.setFixedSize(250, 212)
         self.status_label.setStyleSheet(
             'color:#ff5a5a; background:transparent; border:none;'
         )
@@ -467,6 +498,8 @@ class LoadingOverlay(QWidget):
 
     def stop(self):
         self._mode = 'idle'
+        self.retry_btn.hide()
+        self.card.setFixedSize(250, 176)
         self._auto_timer.stop()
         self._error_timer.stop()
         self._progress_anim.stop()

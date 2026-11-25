@@ -2,6 +2,7 @@
 
 import logging
 import math
+import os
 import time
 from pathlib import Path
 from PySide6.QtCore import (QRect, QRectF, Qt, QUrl, QTimer, Signal)
@@ -37,6 +38,7 @@ class BackgroundWidget(QWidget):
         self._video_frame_ready = False
         self._video_failed_path = ''
         self._video_failure_logged = False
+        self._video_state_last = None
         self._video_fallback_timer = QTimer(self)
         self._video_fallback_timer.setSingleShot(True)
         self._video_fallback_timer.setInterval(3500)
@@ -142,7 +144,63 @@ class BackgroundWidget(QWidget):
         self.update()
 
     def video_available(self) -> bool:
-        return self._video_player is not None
+        player = self._video_player
+        if player is None:
+            return False
+        try:
+            from PySide6.QtMultimedia import QMediaPlayer
+            state = player.playbackState()
+            return state in (
+                QMediaPlayer.PlayingState, QMediaPlayer.PausedState
+            )
+        except Exception:
+            return False
+
+    def _emit_video_state(self, playing):
+        """只在真实播放状态变化时通知 UI，避免加载/失败阶段闪烁。"""
+
+        value = bool(playing)
+        if value == self._video_state_last:
+            return
+        self._video_state_last = value
+        self.video_state_changed.emit(value)
+
+    @staticmethod
+    def _media_backend_details():
+        backend = os.environ.get('QT_MEDIA_BACKEND', '') or '(unset)'
+        plugins = []
+        try:
+            import PySide6
+            plugin_dir = Path(PySide6.__file__).resolve().parent / 'plugins' / 'multimedia'
+            if plugin_dir.is_dir():
+                plugins = sorted(
+                    path.name for path in plugin_dir.glob('*.dll')
+                )
+        except Exception:
+            pass
+        return f'QT_MEDIA_BACKEND={backend}; multimedia={plugins or "unknown"}'
+
+    def _video_failure_details(self, player=None):
+        player = player or self._video_player
+        details = [self._media_backend_details()]
+        if player is not None:
+            try:
+                details.append(f'error={player.errorString()!r}')
+            except Exception:
+                pass
+            try:
+                status = player.mediaStatus()
+                name = getattr(status, 'name', str(status))
+                details.append(f'mediaStatus={name}')
+            except Exception:
+                pass
+            try:
+                error = player.error()
+                name = getattr(error, 'name', str(error))
+                details.append(f'errorCode={name}')
+            except Exception:
+                pass
+        return '; '.join(details)
 
     def video_playing(self) -> bool:
         player = self._video_player
@@ -205,10 +263,8 @@ class BackgroundWidget(QWidget):
             from PySide6.QtMultimedia import QMediaPlayer
             if player.playbackState() == QMediaPlayer.PlayingState:
                 player.pause()
-                self.video_state_changed.emit(False)
                 return False
             player.play()
-            self.video_state_changed.emit(True)
             return True
         except Exception:
             return False
@@ -219,7 +275,6 @@ class BackgroundWidget(QWidget):
             return
         try:
             player.pause()
-            self.video_state_changed.emit(False)
         except RuntimeError:
             pass
 
@@ -229,7 +284,6 @@ class BackgroundWidget(QWidget):
             return
         try:
             player.play()
-            self.video_state_changed.emit(True)
         except RuntimeError:
             pass
 
@@ -266,6 +320,7 @@ class BackgroundWidget(QWidget):
             player.setSource(QUrl.fromLocalFile(str(path)))
             player.setLoops(QMediaPlayer.Infinite)
             self._video_fallback_timer.start()
+            logger.info('背景视频启动: %s (%s)', path, self._media_backend_details())
             player.play()
         except Exception as exc:
             self._video_failed_path = str(path)
@@ -279,7 +334,10 @@ class BackgroundWidget(QWidget):
         self._video_failed_path = path
         if not self._video_failure_logged:
             self._video_failure_logged = True
-            logger.warning('背景视频解码失败，保留静态 fallback: %s', path)
+            logger.warning(
+                '背景视频解码失败，保留静态 fallback: %s (%s)',
+                path, self._video_failure_details(),
+            )
         self._stop_video()
         self.update()
 
@@ -292,7 +350,10 @@ class BackgroundWidget(QWidget):
         self._video_failed_path = path
         if not self._video_failure_logged:
             self._video_failure_logged = True
-            logger.warning('背景视频 3.5 秒无首帧，保留静态 fallback: %s', path)
+            logger.warning(
+                '背景视频 3.5 秒无首帧，保留静态 fallback: %s (%s)',
+                path, self._video_failure_details(),
+            )
         self._stop_video()
         self.update()
 
@@ -323,7 +384,8 @@ class BackgroundWidget(QWidget):
         if not self._video_failure_logged:
             self._video_failure_logged = True
             logger.warning(
-                '背景视频持续黑帧（1.8 秒），保留静态 fallback: %s', path
+                '背景视频持续黑帧（1.8 秒），保留静态 fallback: %s (%s)',
+                path, self._video_failure_details(),
             )
         self._stop_video()
         self.update()
@@ -339,7 +401,8 @@ class BackgroundWidget(QWidget):
     def _on_video_playback_state(self, state):
         try:
             from PySide6.QtMultimedia import QMediaPlayer
-            self.video_state_changed.emit(state == QMediaPlayer.PlayingState)
+            if state in (QMediaPlayer.PlayingState, QMediaPlayer.PausedState):
+                self._emit_video_state(state == QMediaPlayer.PlayingState)
         except Exception:
             pass
 
@@ -379,7 +442,7 @@ class BackgroundWidget(QWidget):
                 audio.deleteLater()
             except RuntimeError:
                 pass
-        self.video_state_changed.emit(False)
+        self._emit_video_state(False)
 
     def shutdown(self):
         """关闭启动器时释放 QMediaPlayer/QVideoSink/QAudioOutput。"""
@@ -444,7 +507,6 @@ class BackgroundWidget(QWidget):
         if self._video_player is not None:
             try:
                 self._video_player.play()
-                self.video_state_changed.emit(True)
             except RuntimeError:
                 pass
         super().showEvent(event)
@@ -453,7 +515,7 @@ class BackgroundWidget(QWidget):
         if self._video_player is not None:
             try:
                 self._video_player.pause()
-                self.video_state_changed.emit(False)
+                self._emit_video_state(False)
             except RuntimeError:
                 pass
         super().hideEvent(event)

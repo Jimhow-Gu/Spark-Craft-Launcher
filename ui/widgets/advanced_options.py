@@ -6,6 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPlainTextEdit, QLineEdit, QComboBox, QCheckBox, QPushButton, QMessageBox)
 from ui.widgets.themed_checkbox import ThemedCheckBox
+from ui.widgets.rounded_combo import RoundedComboBox
 from core.jvm import DEFAULT_JVM_ARGS, MEMORY_GC_OPTIONS
 from core.launch import (
     LaunchManager, format_java_label, normalize_java_executable,
@@ -82,7 +83,7 @@ class AdvancedOptionsPanel(QWidget):
         if self._show_java:
             java_row = QHBoxLayout()
             java_row.addWidget(self._label('Java 列表'))
-            self.java_combo = QComboBox()
+            self.java_combo = RoundedComboBox()
             self.java_combo.setStyleSheet(self._line_style())
             self.java_combo.currentIndexChanged.connect(self._save_java)
             java_row.addWidget(self.java_combo, 1)
@@ -95,7 +96,7 @@ class AdvancedOptionsPanel(QWidget):
             self.java_combo = None
         gc_row = QHBoxLayout()
         gc_row.addWidget(self._label('内存管理'))
-        self.gc_combo = QComboBox()
+        self.gc_combo = RoundedComboBox()
         self.gc_combo.setStyleSheet(self._line_style())
         for key, label in MEMORY_GC_OPTIONS:
             self.gc_combo.addItem(label, key)
@@ -126,7 +127,7 @@ class AdvancedOptionsPanel(QWidget):
 
     @staticmethod
     def _line_style():
-        return '\n            QLineEdit, QComboBox {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.12);\n                border-radius: 6px; color: #f0f0f0; padding: 5px 8px;\n            }\n            QComboBox::drop-down { border: none; }\n            QComboBox QAbstractItemView { background: #2a2a2a; color: #f0f0f0; }\n        '
+        return '\n            QLineEdit, QComboBox {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.12);\n                border-radius: 6px; color: #f0f0f0; padding: 5px 8px;\n            }\n            QComboBox::drop-down { border: none; }\n            \n        '
 
     def reload(self):
         self._loading = True

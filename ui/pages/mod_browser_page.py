@@ -7,6 +7,7 @@
 from __future__ import annotations
 import html
 import json
+import logging
 import math
 import re
 import threading
@@ -21,12 +22,15 @@ from PySide6.QtCore import (Qt, Signal, QThread, QTimer, QUrl, QSize, QObject, Q
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPalette, QPixmap)
 from PySide6.QtNetwork import (QNetworkAccessManager, QNetworkDiskCache, QNetworkReply, QNetworkRequest)
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QHeaderView, QAbstractItemView, QProgressBar, QSizePolicy, QRadioButton, QButtonGroup, QScrollArea, QToolButton, QDialogButtonBox, QStackedWidget)
+from ui.widgets.rounded_combo import RoundedComboBox
 from core.app_font import ui_font
 from ui.widgets.back_button import BackButton
 from ui.widgets.dark_dialog import DarkQuestionDialog
 from ui.widgets.height_animation import HeightAnimation
 from ui.widgets.loading_overlay import LoadingOverlay
 from ui.widgets.toast import show_toast
+
+logger = logging.getLogger('ModBrowser')
 from ui.widgets.rotating_chevron import RotatingChevronButton
 from ui.widgets.smooth_progress import SmoothProgressBar
 from ui.design import IMAGE_PLACEHOLDER_DARK, IMAGE_PLACEHOLDER_LIGHT, MUTED_DARK, MUTED_LIGHT
@@ -61,7 +65,7 @@ def _track_worker(worker):
     worker.finished.connect(_done)
     worker.start()
 
-class VersionComboBox(QComboBox):
+class VersionComboBox(RoundedComboBox):
     '''可输入的游戏版本选择框：只有右侧箭头能展开列表。'''
 
     def __init__(self, parent=None):
@@ -85,19 +89,9 @@ class VersionComboBox(QComboBox):
         self._apply_view_style()
 
     def _apply_view_style(self):
-        if self._light:
-            style = (
-                'QAbstractItemView { background:#fbfbfb; color:#1b1b1b;'
-                ' selection-background-color:#88DDDD; selection-color:white;'
-                ' border:1px solid #c8ccd2; }'
-            )
-        else:
-            style = (
-                'QAbstractItemView { background:#20232b; color:#f0f0f0;'
-                ' selection-background-color:#88DDDD; selection-color:white;'
-                ' border:1px solid rgba(255,255,255,0.18); }'
-            )
-        self.view().setStyleSheet(style)
+        # 全局 QComboBox/QAbstractItemView 样式负责 popup 的圆角与深浅色，
+        # 这里不能再设置局部样式，否则会覆盖 10px 外框圆角。
+        self.view().setStyleSheet('')
 
     def set_light(self, light):
         self._light = bool(light)
@@ -1415,6 +1409,7 @@ class ProjectFilesDialog(QDialog):
         layout.addLayout(btn_row)
         self.loading_overlay = LoadingOverlay(self.scroll.viewport())
         self.loading_overlay.attach_to(self.scroll.viewport())
+        self.loading_overlay.retry_requested.connect(self._retry_load)
         self.status_label.setText('')
         self._load_timeout = QTimer(self)
         self._load_timeout.setSingleShot(True)
@@ -1467,7 +1462,7 @@ class ProjectFilesDialog(QDialog):
             ))
 
     def _combo_style(self):
-        return '\n            QComboBox {\n                background: rgba(255,255,255,0.06);\n                border: 1px solid rgba(255,255,255,0.12);\n                border-radius: 6px; color: #f0f0f0; padding: 4px 8px;\n            }\n            QComboBox::drop-down { border: none; }\n            QComboBox QAbstractItemView { background: #2a2a2a; color: #f0f0f0; }\n        '
+        return '\n            QComboBox {\n                background: rgba(255,255,255,0.06);\n                border: 1px solid rgba(255,255,255,0.12);\n                border-radius: 6px; color: #f0f0f0; padding: 4px 8px;\n            }\n            QComboBox::drop-down { border: none; }\n            \n        '
 
     @staticmethod
     def _release_order(kind):
@@ -1577,7 +1572,8 @@ class ProjectFilesDialog(QDialog):
                     key = '未知版本'
                 groups.setdefault(key, []).append(file)
         except Exception as exc:
-            self.warning_label.setText(f'文件列表解析失败：{exc}')
+            logger.warning('文件列表解析失败: %s', exc, exc_info=True)
+            self.warning_label.setText('文件列表解析失败，请点击重试')
             self.warning_label.show()
             self.status_label.setText('加载失败')
             self.status_label.setStyleSheet('color: #ff7777; font-size: 12px;')
@@ -1646,13 +1642,14 @@ class ProjectFilesDialog(QDialog):
 
     def _on_error(self, message):
         text = str(message)
+        logger.warning('文件列表加载失败: %s', text)
         network_problem = is_network_error_text(text) or not network_available()
         if network_problem:
             reason = '未连接到互联网，无法获取文件列表'
         elif 'getaddrinfo failed' in text or 'NameResolutionError' in text:
             reason = '网络解析失败（DNS），请检查网络后重试'
         else:
-            reason = text or '获取文件列表失败'
+            reason = '加载失败，请点击重试'
         self.warning_label.hide()
         self.status_label.setText('')
         try:
@@ -2184,7 +2181,7 @@ class ModBrowserPage(QWidget):
         refresh_btn = QPushButton('刷新')
         refresh_btn.setStyleSheet(self._secondary_style())
         refresh_btn.clicked.connect(self.search)
-        top.addWidget(refresh_btn)
+        top.addWidget(refresh_btn, 0, Qt.AlignRight | Qt.AlignVCenter)
         layout.addLayout(top)
         filters = QFrame()
         filters.setStyleSheet('QFrame { background: rgba(30,41,41,0.84); border: 1px solid rgba(255,255,255,0.18); border-radius: 8px; }')
@@ -2198,12 +2195,12 @@ class ModBrowserPage(QWidget):
         self.search_input.setStyleSheet('\n            QLineEdit {\n                background: rgba(255,255,255,0.06);\n                border: 1px solid rgba(255,255,255,0.12);\n                border-radius: 6px; color: #f0f0f0; padding: 4px 8px;\n            }\n        ')
         self.search_input.returnPressed.connect(self._trigger_search)
         grid.addWidget(self.search_input, 0, 0, 1, 3)
-        self.source_combo = QComboBox()
+        self.source_combo = RoundedComboBox()
         self.source_combo.addItems(['Modrinth', 'CurseForge'])
         self.source_combo.setStyleSheet(self._combo_style())
         self.source_combo.currentIndexChanged.connect(self._on_source_changed)
         grid.addWidget(self.source_combo, 0, 3)
-        self.sort_combo = QComboBox()
+        self.sort_combo = RoundedComboBox()
         for key, label in SORTS.items():
             self.sort_combo.addItem(label, key)
         self.sort_combo.setStyleSheet(self._combo_style())
@@ -2240,19 +2237,19 @@ class ModBrowserPage(QWidget):
         self.mc_combo.currentIndexChanged.connect(self._on_filter_changed)
         self.mc_combo.lineEdit().editingFinished.connect(self._trigger_search)
         grid.addWidget(self.mc_combo, 1, 0)
-        self.loader_combo = QComboBox()
+        self.loader_combo = RoundedComboBox()
         self.loader_combo.addItem('全部加载器', '')
         for key, label in LOADERS.items():
             self.loader_combo.addItem(label, key)
         self.loader_combo.setStyleSheet(self._combo_style())
         self.loader_combo.currentIndexChanged.connect(self._trigger_search)
         grid.addWidget(self.loader_combo, 1, 1)
-        self.category_combo = QComboBox()
+        self.category_combo = RoundedComboBox()
         self.category_combo.addItem('全部分类', '')
         self.category_combo.setStyleSheet(self._combo_style())
         self.category_combo.currentIndexChanged.connect(self._trigger_search)
         grid.addWidget(self.category_combo, 1, 2)
-        self.name_match_combo = QComboBox()
+        self.name_match_combo = RoundedComboBox()
         self.name_match_combo.addItem('名称包含', 'contains')
         self.name_match_combo.addItem('名称开头', 'startswith')
         self.name_match_combo.setStyleSheet(self._combo_style())
@@ -2273,12 +2270,13 @@ class ModBrowserPage(QWidget):
         else:
             self.loader_combo.setEnabled(False)
         self.results_list = QListWidget()
-        self.results_list.setStyleSheet('\n            QListWidget {\n                background: transparent; border: none; outline: none;\n            }\n            QListWidget::item { border: none; padding: 3px 0; }\n            QListWidget::item:selected { background: transparent; }\n        ')
+        self.results_list.setStyleSheet('QListWidget { background: palette(base); border: 1px solid palette(mid); border-radius: 8px; outline: none; } QListWidget::item { border: none; padding: 3px 0; } QListWidget::item:selected { background: transparent; }')
         self.results_list.setSpacing(4)
         self.results_list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         layout.addWidget(self.results_list, 1)
         self.loading_overlay = LoadingOverlay(self.results_list.viewport())
         self.loading_overlay.attach_to(self.results_list.viewport())
+        self.loading_overlay.retry_requested.connect(self._retry_search)
         bottom = QHBoxLayout()
         self.status_label = QLabel('正在加载...')
         self.status_label.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 12px;')
@@ -2297,7 +2295,7 @@ class ModBrowserPage(QWidget):
         self.stack.setCurrentWidget(browser)
 
     def _combo_style(self):
-        return '\n            QComboBox {\n                background: rgba(255,255,255,0.06);\n                border: 1px solid rgba(255,255,255,0.12);\n                border-radius: 6px; color: #f0f0f0; padding: 3px 8px;\n            }\n            QComboBox::drop-down { border: none; }\n            QComboBox QAbstractItemView { background: #2a2a2a; color: #f0f0f0; }\n        '
+        return '\n            QComboBox {\n                background: rgba(255,255,255,0.06);\n                border: 1px solid rgba(255,255,255,0.12);\n                border-radius: 6px; color: #f0f0f0; padding: 3px 8px;\n            }\n            QComboBox::drop-down { border: none; }\n            \n        '
 
     def _primary_style(self):
         return 'QPushButton { background:#90D9D9; color:#122828; border:none; border-radius:6px; padding:6px 16px; } QPushButton:hover { background:#78CACA; }'
@@ -2475,6 +2473,11 @@ class ModBrowserPage(QWidget):
         worker.finished.connect((lambda w=worker: self._release_worker(w)))
         _track_worker(worker)
 
+    def _retry_search(self):
+        self._loaded_once = False
+        self.status_label.setText('正在重试...')
+        self.search()
+
     def _release_worker(self, worker):
         if worker in self._workers:
             self._workers.remove(worker)
@@ -2522,10 +2525,11 @@ class ModBrowserPage(QWidget):
         self._total = 0
         self._page = 1
         self.pagination.set_pages(1, 1)
+        logger.warning('社区资源加载失败: %s', message)
         if is_network_error_text(message) or not network_available():
             reason = '未连接到互联网，无法获取搜索结果'
         else:
-            reason = str(message or '').strip() or '获取搜索结果失败'
+            reason = '加载失败，请点击重试'
         self._render_token += 1
         self.results_list.setUpdatesEnabled(True)
         self._clear_results()
@@ -2546,6 +2550,28 @@ class ModBrowserPage(QWidget):
         self.results_list.setItemWidget(item, label)
         self.status_label.setText('未连接到互联网')
         self.status_label.setStyleSheet('color:rgba(255,255,255,0.5); font-size:12px;')
+
+    def _show_empty_results(self, text):
+        self._clear_results()
+        item = QListWidgetItem()
+        item.setFlags(Qt.NoItemFlags)
+        item.setSizeHint(QSize(100, 150))
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(10)
+        label = QLabel(str(text or '暂无内容'))
+        label.setAlignment(Qt.AlignCenter)
+        label.setStyleSheet('color: rgba(255,255,255,0.55); font-size: 13px; background: transparent;')
+        layout.addWidget(label)
+        if self.project_type == 'modpack':
+            button = QPushButton('安装已下载整合包')
+            button.setStyleSheet(self._secondary_style())
+            button.clicked.connect(self._choose_local_pack)
+            layout.addWidget(button, 0, Qt.AlignHCenter)
+        layout.addStretch(1)
+        self.results_list.addItem(item)
+        self.results_list.setItemWidget(item, host)
 
     def _clear_results(self):
         """显式销毁 QListWidgetItem 的 itemWidget，避免切页/刷新时卡片漂在 viewport 上。"""
@@ -2596,6 +2622,7 @@ class ModBrowserPage(QWidget):
         # 还盖在中间”的情况。
         self.loading_overlay.stop()
         if not projects:
+            self._show_empty_results('未找到匹配的内容')
             self.status_label.setText('未找到匹配的内容')
             self.status_label.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 12px;')
             return
@@ -2675,8 +2702,7 @@ class ModBrowserPage(QWidget):
             'QLabel { color:#f0f0f0; }'
             'QComboBox { background:rgba(255,255,255,0.08); color:#f0f0f0;'
             ' border:1px solid rgba(255,255,255,0.16); border-radius:6px; padding:4px 8px; }'
-            'QComboBox QAbstractItemView { background:#2a2d36; color:#f0f0f0;'
-            ' selection-background-color:#88DDDD; }'
+            ''
             'QPushButton { background:#3a3d47; color:#f0f0f0; border:none;'
             ' border-radius:6px; padding:6px 14px; }'
         )

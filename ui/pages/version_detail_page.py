@@ -4,6 +4,7 @@
 '''
 
 import json
+import logging
 import re
 import sys
 import time
@@ -11,7 +12,7 @@ from concurrent.futures import (FIRST_COMPLETED, ThreadPoolExecutor, wait)
 import requests
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QScrollArea, QMessageBox, QSpacerItem, QSizePolicy, QListWidget, QListWidgetItem, QFrame)
 from pathlib import Path
-from PySide6.QtCore import (Qt, Signal, QThread, QSize, QEasingCurve)
+from PySide6.QtCore import (Qt, Signal, QThread, QSize, QEasingCurve, QTimer)
 from PySide6.QtGui import QFont, QIcon
 from core.app_font import ui_font
 from core.net import network_available
@@ -27,6 +28,7 @@ try:
 except ImportError:
     HAS_LIB = False
 _DETACHED_WORKERS = set()
+logger = logging.getLogger('VersionDetail')
 _CLEANUP_REGISTERED = False
 
 class _LoaderCard(QFrame):
@@ -83,6 +85,7 @@ class LoadVersionsWorker(QThread):
         self.load_optifabric = bool(load_optifabric)
         self._cancelled = False
         self._optifine_objects = {}
+        self.errors = {}
         self.stability = {
             'forge': {}, 'neoforge': {}, 'fabric': {},
             'fabric_api': {}, 'optifine': {}, 'optifabric': {},
@@ -113,7 +116,8 @@ class LoadVersionsWorker(QThread):
                             self.stability['forge'][value] = True
                     if versions:
                         return versions[:30]
-            except Exception:
+            except Exception as exc:
+                self.errors['forge'] = str(exc)
                 continue
         # 官方 promotions 只提供 latest/recommended，作为镜像不可用时的兜底
         try:
@@ -132,8 +136,8 @@ class LoadVersionsWorker(QThread):
                 for value in versions:
                     self.stability['forge'][value] = True
                 return versions
-        except Exception:
-            pass
+        except Exception as exc:
+            self.errors['forge'] = str(exc)
         return []
 
     def _get_neoforge(self):
@@ -151,8 +155,8 @@ class LoadVersionsWorker(QThread):
                         versions.append(value)
                         self.stability['neoforge'][value] = True
                 return versions[:30]
-        except Exception:
-            pass
+        except Exception as exc:
+            self.errors['neoforge'] = str(exc)
         return []
 
     def _get_optifine(self):
@@ -166,7 +170,8 @@ class LoadVersionsWorker(QThread):
             for item in versions:
                 self.stability['optifine'][str(item.id)] = not item.is_preview
             return [v.id for v in versions]
-        except Exception:
+        except Exception as exc:
+            self.errors['optifine'] = str(exc)
             return []
 
     def _get_fabric(self):
@@ -203,8 +208,8 @@ class LoadVersionsWorker(QThread):
                 if all_versions:
                     merged = stable + [v for v in all_versions if v not in stable]
                     return merged[:30]
-            except Exception:
-                pass
+            except Exception as exc:
+                self.errors['fabric'] = str(exc)
         return []
 
     def _get_fabric_api(self):
@@ -242,8 +247,8 @@ class LoadVersionsWorker(QThread):
                     self.stability['fabric_api'][value] = (kind == 'release')
                 if versions:
                     return versions
-            except Exception:
-                pass
+            except Exception as exc:
+                self.errors['fabric_api'] = str(exc)
         return []
 
     def _get_optifabric(self):
@@ -253,7 +258,8 @@ class LoadVersionsWorker(QThread):
         try:
             from core.optifabric import fetch_versions
             return fetch_versions(self.version_id)
-        except Exception:
+        except Exception as exc:
+            self.errors['optifabric'] = str(exc)
             return []
 
     def run(self):
@@ -282,6 +288,7 @@ class LoadVersionsWorker(QThread):
                 self.partial.emit({key: result[key] for key in completed})
         executor.shutdown(wait=False, cancel_futures=True)
         result['optifine_objects'] = dict(self._optifine_objects)
+        result['_errors'] = dict(self.errors)
         if not self._cancelled:
             self.loaded.emit(result)
 
@@ -297,6 +304,7 @@ class VersionDetailPage(QWidget):
         self._selections = {'forge': None, 'neoforge': None, 'fabric': None, 'fabric_api': None, 'optifine': None, 'optifabric': None}
         self._loader_versions = {'forge': [], 'neoforge': [], 'fabric': [], 'fabric_api': [], 'optifine': [], 'optifabric': []}
         self._loaded_loader_ids = set()
+        self._loader_errors = {}
         self._loader_cancel_buttons = {}
         self._optifabric_files = {}
         self._optifabric_offered = False
@@ -326,6 +334,22 @@ class VersionDetailPage(QWidget):
         self._load_worker.partial.connect(self._on_partial_versions_loaded)
         self._load_worker.start()
         _register_cleanup()
+
+    def _sync_loading_overlay(self):
+        try:
+            self.loading_overlay.setGeometry(self.rect())
+            if self.loading_overlay.isVisible():
+                self.loading_overlay.raise_()
+        except RuntimeError:
+            pass
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._sync_loading_overlay)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_loading_overlay()
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -413,6 +437,7 @@ class VersionDetailPage(QWidget):
         self.content_scroll = scroll
         self.loading_overlay = LoadingOverlay(self, block_input=False)
         self.loading_overlay.attach_to(self)
+        self.loading_overlay.retry_requested.connect(self._retry_loader_versions)
         self.loading_overlay.hidden.connect(self._on_loading_hidden)
 
     @staticmethod
@@ -470,7 +495,7 @@ class VersionDetailPage(QWidget):
         container.clicked.connect((lambda lid=loader_id: self._on_loader_card_clicked(lid)))
         outer.addLayout(row)
         version_list = QListWidget()
-        version_list.setStyleSheet('\n            QListWidget { background:rgba(8,10,16,0.45);\n                          border:1px solid rgba(255,255,255,0.10);\n                          border-radius:6px; outline:none; }\n            QListWidget::item { padding:6px 10px; color:rgba(255,255,255,0.85);\n                                border-bottom:1px solid rgba(255,255,255,0.04); }\n            QListWidget::item:selected { background:rgba(136,221,221,0.45); color:white; }\n            QListWidget::item:hover { background:rgba(255,255,255,0.06); }\n        ')
+        version_list.setStyleSheet('\n            QListWidget { background:rgba(8,10,16,0.45);\n                          border:1px solid rgba(255,255,255,0.10);\n                          border-radius:6px; outline:none; }\n            QListWidget::item { padding:6px 10px; color:rgba(255,255,255,0.85);\n                                border-bottom:1px solid rgba(255,255,255,0.04); }\n            QListWidget::item:selected { background:rgba(136,221,221,0.32); color:white; border:1px solid rgba(136,221,221,0.55); border-radius:6px; margin:2px 4px; }\n            QListWidget::item:hover { background:rgba(255,255,255,0.06); }\n        ')
         version_list.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         version_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         version_list.setIconSize(QSize(16, 16))
@@ -666,6 +691,38 @@ class VersionDetailPage(QWidget):
         if loaded >= len(needed):
             self._finish_loading()
 
+    def _retry_loader_versions(self):
+        old = self._load_worker
+        if old is not None and old.isRunning():
+            try:
+                old.cancel()
+            except RuntimeError:
+                pass
+        self._load_worker = None
+        self._loader_versions = {
+            key: [] for key in (
+                'forge', 'neoforge', 'fabric', 'fabric_api',
+                'optifine', 'optifabric',
+            )
+        }
+        self._loaded_loader_ids.clear()
+        self._loader_errors = {}
+        self._optifine_objects = {}
+        self._optifine_display = {}
+        self._optifabric_offered = False
+        self._loading = True
+        try:
+            self.content_scroll.hide()
+        except RuntimeError:
+            pass
+        self.loading_overlay.start_auto('正在重新加载加载器版本', 92)
+        self._loading_watchdog.start()
+        worker = LoadVersionsWorker(self.version_id)
+        worker.loaded.connect(self._on_versions_loaded)
+        worker.partial.connect(self._on_partial_versions_loaded)
+        self._load_worker = worker
+        worker.start()
+
     def _finish_loading(self):
         if hasattr(self, '_loading_watchdog'):
             try:
@@ -696,8 +753,8 @@ class VersionDetailPage(QWidget):
             return
         self._loading = False
         self._loaded_loader_ids.update(self._needed_loader_keys())
-        self._update_loader_ui()
         self._refresh_all_compatible_tips()
+        self._update_loader_ui()
         self._finish_loading()
 
     def _on_partial_versions_loaded(self, versions_dict):
@@ -705,20 +762,21 @@ class VersionDetailPage(QWidget):
             return
         self._loader_versions.update(versions_dict)
         self._loaded_loader_ids.update(versions_dict.keys())
-        self._update_loader_ui()
         self._refresh_all_compatible_tips()
+        self._update_loader_ui()
         self._update_loading_progress()
 
     def _on_versions_loaded(self, versions_dict):
         self._loading = False
         objects = versions_dict.pop('optifine_objects', {}) or {}
+        self._loader_errors = versions_dict.pop('_errors', {}) or {}
         self._loader_versions = versions_dict
         self._loaded_loader_ids.update(versions_dict.keys())
         self._optifine_objects = objects
         self._optifine_display = {vid: ver.display() for vid, ver in objects.items()}
+        self._refresh_all_compatible_tips()
         self._update_loader_ui()
         self._validate_top_name()
-        self._refresh_all_compatible_tips()
         self._sync_top_name()
         self._finish_loading()
 
@@ -746,7 +804,17 @@ class VersionDetailPage(QWidget):
                     frame.setVisible(True)
                 continue
             if not versions:
-                if not network_available():
+                error = str(self._loader_errors.get(loader_id) or '').strip()
+                if error:
+                    if frame is not None:
+                        frame.setVisible(True)
+                    logger.warning('加载器 %s 获取失败: %s', loader_id, error)
+                    label.setText('加载失败，请点击重试')
+                    label.setStyleSheet('color: #ff8a8a; font-size: 13px;')
+                    btn.setText('失败')
+                    btn.setEnabled(False)
+                    btn.setStyleSheet('background:#3a3a3a;color:#888;border-radius:4px;')
+                elif not network_available():
                     if frame is not None:
                         frame.setVisible(True)
                     label.setText('网络获取失败，请检查网络')
@@ -755,9 +823,15 @@ class VersionDetailPage(QWidget):
                     btn.setEnabled(False)
                     btn.setStyleSheet('background:#3a3a3a;color:#888;border-radius:4px;')
                 else:
-                    # 没有匹配当前游戏版本的加载器时直接隐藏空行
+                    # 没有匹配当前游戏版本的加载器时保留行并显示明确状态，
+                    # 不再让列表只剩一个 Fabric。
                     if frame is not None:
-                        frame.setVisible(False)
+                        frame.setVisible(True)
+                    label.setText('无可用版本')
+                    label.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 13px;')
+                    btn.setText('无')
+                    btn.setEnabled(False)
+                    btn.setStyleSheet('background:#3a3a3a;color:#888;border-radius:4px;')
                 continue
             if frame is not None:
                 frame.setVisible(True)
@@ -1073,12 +1147,8 @@ class VersionDetailPage(QWidget):
         target = versions_dir / base
         if not target.exists() or (target / INCOMPLETE_MARKER).exists():
             return base
-        index = 2
-        while True:
-            candidate = versions_dir / f'{base} ({index})'
-            if not candidate.exists() or (candidate / INCOMPLETE_MARKER).exists():
-                return candidate.name
-            index += 1
+        # 不再自动追加 (2)；同名有效版本由名称校验提示用户修复/改名。
+        return base
 
     def _sync_top_name(self):
         if self._user_edited_top:

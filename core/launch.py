@@ -1789,22 +1789,90 @@ _FATAL_GRAPHICS_MARKERS = (
     'could not initialize glfw',
     'failed to create window:',
     'opengl is not supported',
+    'no supported graphics backend was found',
+    'driver does not support opengl',
+    'failed to create backend opengl',
+    'failed to create backend vulkan',
+    'failed to find graphics adapters',
+    'no context is current',
+    'device missing capabilities',
 )
 
 
+def graphics_adapter_names():
+    '''返回 Windows 显示适配器名称，用于启动失败提示。'''
+
+    if platform.system() != 'Windows':
+        return []
+    try:
+        import ctypes
+        from ctypes import wintypes
+        class DISPLAY_DEVICEW(ctypes.Structure):
+            _fields_ = [
+                ('cb', wintypes.DWORD),
+                ('DeviceName', wintypes.WCHAR * 32),
+                ('DeviceString', wintypes.WCHAR * 128),
+                ('StateFlags', wintypes.DWORD),
+                ('DeviceID', wintypes.WCHAR * 128),
+                ('DeviceKey', wintypes.WCHAR * 128),
+            ]
+        user32 = ctypes.windll.user32
+        result = []
+        index = 0
+        while index < 16:
+            device = DISPLAY_DEVICEW()
+            device.cb = ctypes.sizeof(device)
+            if not user32.EnumDisplayDevicesW(None, index, ctypes.byref(device), 0):
+                break
+            name = str(device.DeviceString or '').strip()
+            if name and name not in result:
+                result.append(name)
+            index += 1
+        return result
+    except Exception:
+        return []
+
+
+def graphics_preflight_message():
+    '''启动前的轻量显卡预检；只拦截明确不可用的基础显示适配器。'''
+
+    if platform.system() != 'Windows':
+        return ''
+    adapters = graphics_adapter_names()
+    if not adapters:
+        return (
+            '未能读取到显示适配器信息。请确认显卡驱动已安装；'
+            '如果游戏仍无法创建 OpenGL/Vulkan 窗口，请更新驱动后重试。'
+        )
+    if all('microsoft basic display' in name.lower() for name in adapters):
+        return (
+            '检测到当前只使用 Microsoft Basic Display Adapter，'
+            '没有可用的显卡驱动。请安装显卡厂商驱动并重启后再启动游戏。'
+        )
+    return ''
+
+
 def fatal_launch_message(text) -> str:
-    '''识别无法创建 OpenGL 窗口的致命日志；返回用户可执行的提示。'''
+    '''识别无法创建 OpenGL/Vulkan 窗口的致命日志；返回可执行提示。'''
 
     lowered = str(text or '').lower()
     if not any(marker in lowered for marker in _FATAL_GRAPHICS_MARKERS):
         return ''
-    return (
-        '游戏无法创建 OpenGL 窗口（GLFW 65542）。\n\n'
-        '请依次尝试：\n'
-        '1. 更新显卡驱动，并重启电脑；\n'
-        '2. 在 Windows「设置 → 系统 → 显示 → 图形」中把对应的 java.exe 设为「高性能」；\n'
-        '3. 如果正在使用远程桌面或虚拟机，请改用本机显示器和显卡后重试。'
-    )
+    adapters = graphics_adapter_names()
+    adapter_text = '、'.join(adapters[:3]) if adapters else '未检测到显示适配器'
+    lines = [
+        '游戏无法创建 OpenGL/Vulkan 窗口（GLFW 65542）。',
+        '',
+        f'检测到的显卡：{adapter_text}',
+        '',
+        '当前显卡/驱动没有提供游戏需要的图形能力，这不是启动器可以直接修复的问题。',
+        '请依次尝试：',
+        '1. 更新显卡驱动，并重启电脑；',
+        '2. 在 Windows「设置 → 系统 → 显示 → 图形」中把对应的 java.exe 设为「高性能」；',
+        '3. 如果正在使用远程桌面或虚拟机，请改用本机显示器和显卡后重试；',
+        '4. Radeon 520 等较老显卡若驱动无法支持游戏要求的 OpenGL/Vulkan 版本，请更换显卡或使用兼容的 Minecraft 版本。',
+    ]
+    return chr(10).join(lines)
 
 
 class LaunchWorker(QThread):
@@ -2032,6 +2100,22 @@ class LaunchWorker(QThread):
                 _reveal_hidden_game_window(pid)
                 hwnd = _game_window_handle(pid)
             if not hwnd:
+                if (
+                    self._graphics_error_seen
+                    and elapsed >= 20.0
+                    and not self._fatal_emitted
+                ):
+                    self._fatal_emitted = True
+                    logger.error('图形后端初始化失败，20 秒内没有游戏窗口，终止等待')
+                    self.launch_fatal.emit(
+                        self._graphics_error_message
+                        or fatal_launch_message('glfw error 65542')
+                    )
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    return
                 if not self._window_missing_emitted and elapsed >= self.NO_WINDOW_WARN_SECONDS:
                     self._window_missing_emitted = True
                     logger.warning(f'游戏进程已运行 {int(elapsed)} 秒，但仍未检测到游戏窗口')
@@ -2089,12 +2173,24 @@ class LaunchWorker(QThread):
         proc = None
         reader = None
         try:
+            warning = graphics_preflight_message()
+            if warning:
+                self._fatal_emitted = True
+                logger.error('显卡预检失败: %s', warning)
+                self.launch_fatal.emit(warning)
+                if not self._exited_emitted:
+                    self._exited_emitted = True
+                    self.process_exited.emit(-3)
+                return
             try:
                 # 不再使用 STARTUPINFO/SW_HIDE：部分显卡驱动或 Java 弹窗会继承隐藏状态，
                 # 导致进程存在但游戏窗口永远不可见。CREATE_NO_WINDOW 已足够隐藏 java 控制台。
                 creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
                 proc = subprocess.Popen(self.command, cwd=self._working_directory(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, encoding='utf-8', errors='replace', creationflags=creationflags)
                 self._process = proc
+                adapters = graphics_adapter_names()
+                if adapters:
+                    logger.info('检测到显卡: %s', '、'.join(adapters[:4]))
                 self.launch_success.emit()
                 reader = threading.Thread(target=self._read_output, args=(proc,), daemon=True)
                 reader.start()

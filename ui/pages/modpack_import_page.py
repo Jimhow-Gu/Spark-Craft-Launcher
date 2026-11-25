@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QProgressBar, QPushButton, QRadioButton, QVBoxLayout, QWidget,
 )
+from ui.widgets.rounded_combo import RoundedComboBox
 from core.app_font import ui_font
 from ui.widgets.back_button import BackButton
 from ui.widgets.smooth_progress import SmoothProgressBar
@@ -86,14 +87,13 @@ class ModpackImportPage(QWidget):
         target_label = QLabel('目标版本')
         target_label.setFixedWidth(70)
         target_label.setStyleSheet('color:rgba(255,255,255,0.72);')
-        self.existing_combo = QComboBox()
+        self.existing_combo = RoundedComboBox()
         self.existing_combo.setMinimumHeight(36)
         self.existing_combo.setStyleSheet(
             'QComboBox { background:rgba(255,255,255,0.06); color:#f0f0f0;'
             ' border:1px solid rgba(255,255,255,0.14); border-radius:7px;'
             ' padding:5px 10px; }'
-            'QComboBox QAbstractItemView { background:#2a2d36; color:#f0f0f0;'
-            ' selection-background-color:#88DDDD; }'
+            ''
         )
         for item in self.installed_versions:
             if isinstance(item, dict):

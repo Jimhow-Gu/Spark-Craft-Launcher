@@ -14,6 +14,7 @@ from ui.widgets.persistent_combo import PersistentComboBox
 from PySide6.QtCore import (Qt, Signal, QUrl, QTimer, QEasingCurve, QPropertyAnimation)
 from PySide6.QtGui import (QFont, QDesktopServices, QColor, QPainter, QPalette, QPainterPath, QPixmap)
 from PySide6.QtCore import QRectF
+from ui.widgets.rounded_combo import RoundedComboBox
 from core.app_font import ui_font
 from core.config import ConfigManager
 from core.memory import safe_memory_limit_mb
@@ -110,7 +111,7 @@ class SettingsPage(QWidget):
         layout.setSpacing(20)
         title = QLabel('设置')
         title.setFont(ui_font(24, QFont.DemiBold))
-        title.setStyleSheet('color: #f0f0f0;')
+        title.setStyleSheet('color: palette(text);')
         layout.addWidget(title)
         theme_group = self._create_group('主题')
         theme_layout = theme_group.layout()
@@ -195,10 +196,10 @@ class SettingsPage(QWidget):
         java_group = self._create_group('Java 列表')
         java_group_layout = java_group.layout()
         java_row = QHBoxLayout()
-        self.java_combo = QComboBox()
+        self.java_combo = RoundedComboBox()
         self.java_combo.setMinimumHeight(36)
         self.java_combo.setPlaceholderText('请点击「检测Java」扫描系统')
-        self.java_combo.setStyleSheet('\n            QComboBox {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.1);\n                border-radius: 6px;\n                color: #f0f0f0;\n                padding: 4px 8px;\n            }\n            QComboBox::drop-down { border: none; }\n            QComboBox QAbstractItemView { background: #2a2a2a; color: #f0f0f0; border: 1px solid rgba(255,255,255,0.1); }\n        ')
+        self.java_combo.setStyleSheet('\n            QComboBox {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.1);\n                border-radius: 6px;\n                color: #f0f0f0;\n                padding: 4px 8px;\n            }\n            QComboBox::drop-down { border: none; }\n            \n        ')
         self.java_combo.currentIndexChanged.connect(self._on_java_selected)
         java_row.addWidget(self.java_combo, 1)
         detect_btn = QPushButton('检测Java')
@@ -319,7 +320,7 @@ class SettingsPage(QWidget):
             launch_layout.addLayout(row)
             return row
 
-        self.default_iso_combo = QComboBox()
+        self.default_iso_combo = RoundedComboBox()
         for text, value in (('关闭', 'off'), ('隔离可安装 Mod 的版本', 'modded'), ('隔离非正式版', 'non_release'), ('隔离可安装 Mod 的版本与非正式版', 'modded_non_release'), ('隔离所有版本', 'all')):
             self.default_iso_combo.addItem(text, value)
         self.default_iso_combo.setStyleSheet(self.java_combo.styleSheet())
@@ -335,19 +336,19 @@ class SettingsPage(QWidget):
         self.custom_info_edit.setStyleSheet('QLineEdit { background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:6px; color:#f0f0f0; padding:5px 8px; }')
         self.custom_info_edit.editingFinished.connect(self._save_launch_options)
         add_launch_row('自定义信息', self.custom_info_edit)
-        self.launcher_visibility_combo = QComboBox()
+        self.launcher_visibility_combo = RoundedComboBox()
         for text, value in (('游戏启动后仍保持不变', 'keep'), ('游戏启动后立即关闭', 'close'), ('游戏启动后隐藏，游戏退出后自动关闭', 'hide_close'), ('游戏启动后隐藏，游戏退出后重新打开', 'hide_restore'), ('游戏启动后最小化', 'minimize')):
             self.launcher_visibility_combo.addItem(text, value)
         self.launcher_visibility_combo.setStyleSheet(self.java_combo.styleSheet())
         self.launcher_visibility_combo.currentIndexChanged.connect(self._save_launch_options)
         add_launch_row('启动器可见性', self.launcher_visibility_combo)
-        self.process_priority_combo = QComboBox()
+        self.process_priority_combo = RoundedComboBox()
         for text, value in (('高（优先保证游戏运行，游戏性能更佳，但可能造成其他程序卡顿）', 'high'), ('中（平衡）', 'normal'), ('低（优先保证其他程序运行，但可能让游戏卡顿，适合挂机时使用）', 'low')):
             self.process_priority_combo.addItem(text, value)
         self.process_priority_combo.setStyleSheet(self.java_combo.styleSheet())
         self.process_priority_combo.currentIndexChanged.connect(self._save_launch_options)
         add_launch_row('进程优先级', self.process_priority_combo)
-        self.game_window_size_combo = QComboBox()
+        self.game_window_size_combo = RoundedComboBox()
         for text, value in (('全屏', 'fullscreen'), ('默认', 'default'), ('与启动器尺寸一致', 'launcher'), ('自定义尺寸', 'custom'), ('最大化', 'maximized')):
             self.game_window_size_combo.addItem(text, value)
         self.game_window_size_combo.setStyleSheet(self.java_combo.styleSheet())
@@ -405,15 +406,15 @@ class SettingsPage(QWidget):
         title_text_layout.setSpacing(8)
         title_row = QHBoxLayout()
         title_text_label = QLabel('标题栏文本')
-        title_text_label.setFixedWidth(90)
-        title_text_label.setStyleSheet('color: rgba(255,255,255,0.7);')
+        title_text_label.setFixedWidth(120)
+        title_text_label.setStyleSheet('color: palette(text);')
         title_row.addWidget(title_text_label)
         self.window_title_edit = QLineEdit()
         self.window_title_edit.setPlaceholderText('Spark Craft Launcher')
         self.window_title_edit.setStyleSheet(
-            'QLineEdit { background:rgba(255,255,255,0.05);'
-            ' border:1px solid rgba(255,255,255,0.1); border-radius:6px;'
-            ' color:#f0f0f0; padding:5px 8px; }'
+            'QLineEdit {'
+            ' border:1px solid palette(mid); border-radius:6px;'
+            ' color:palette(text); background:palette(base); padding:5px 8px; }'
         )
         title_row.addWidget(self.window_title_edit, 1)
         self.window_title_edit.textChanged.connect(self._schedule_title_update)
@@ -424,8 +425,8 @@ class SettingsPage(QWidget):
         title_text_layout.addLayout(title_row)
         color_row = QHBoxLayout()
         color_label = QLabel('标题颜色')
-        color_label.setFixedWidth(90)
-        color_label.setStyleSheet('color: rgba(255,255,255,0.7);')
+        color_label.setFixedWidth(120)
+        color_label.setStyleSheet('color: palette(text);')
         self.window_title_color_edit = QLineEdit()
         self.window_title_color_edit.setPlaceholderText('#88DDDD')
         self.window_title_color_edit.setFixedWidth(120)
@@ -433,7 +434,7 @@ class SettingsPage(QWidget):
         self.window_title_color_edit.editingFinished.connect(self._apply_window_title)
         self.title_color_preview = QLabel('')
         self.title_color_preview.setFixedSize(60, 26)
-        self.title_color_preview.setStyleSheet('background:#88DDDD; border-radius:6px; border:1px solid rgba(255,255,255,0.2);')
+        self.title_color_preview.setStyleSheet('background:#88DDDD; border-radius:6px; border:1px solid palette(mid);')
         color_row.addWidget(color_label)
         color_row.addWidget(self.window_title_color_edit)
         color_row.addWidget(self.title_color_preview)
@@ -445,11 +446,12 @@ class SettingsPage(QWidget):
         image_row = QHBoxLayout(self.title_image_widget)
         image_row.setContentsMargins(0, 0, 0, 0)
         image_label = QLabel('标题栏图片')
-        image_label.setFixedWidth(90)
-        image_label.setStyleSheet('color: rgba(255,255,255,0.7);')
+        image_label.setFixedWidth(120)
+        image_label.setStyleSheet('color: palette(text);')
         self.title_image_edit = QLineEdit()
         self.title_image_edit.setPlaceholderText('选择标题栏图片')
         self.title_image_edit.setStyleSheet(self.window_title_edit.styleSheet())
+        self.title_image_edit.textChanged.connect(self._on_title_image_changed)
         choose_title_image_btn = QPushButton('选择图片')
         choose_title_image_btn.setStyleSheet(self._secondary_button_style())
         choose_title_image_btn.clicked.connect(self._choose_title_image)
@@ -465,7 +467,7 @@ class SettingsPage(QWidget):
         bg_layout.addWidget(self.bg_count_label)
         fit_row = QHBoxLayout()
         fit_row.addWidget(QLabel('自适应方式'))
-        self.bg_fit_combo = QComboBox()
+        self.bg_fit_combo = RoundedComboBox()
         for key, label in FIT_OPTIONS:
             self.bg_fit_combo.addItem(label, key)
         self.bg_fit_combo.setStyleSheet(self.java_combo.styleSheet())
@@ -474,7 +476,7 @@ class SettingsPage(QWidget):
         bg_layout.addLayout(fit_row)
         loop_row = QHBoxLayout()
         loop_row.addWidget(QLabel('循环模式'))
-        self.bg_loop_combo = QComboBox()
+        self.bg_loop_combo = RoundedComboBox()
         for key, label in LOOP_MODES:
             self.bg_loop_combo.addItem(label, key)
         self.bg_loop_combo.setToolTip('顺序/随机在当前媒体类型内切换；全部顺序/全部随机包含图片和视频')
@@ -608,7 +610,7 @@ class SettingsPage(QWidget):
         community_layout = community_group.layout()
         source_row = QHBoxLayout()
         source_row.addWidget(QLabel('来源'))
-        self.community_source_combo = QComboBox()
+        self.community_source_combo = RoundedComboBox()
         self.community_source_combo.addItem('尽量使用官方源', 'official')
         self.community_source_combo.addItem('尽量使用镜像源（可能缺少刚刚更新的版本）', 'mirror')
         self.community_source_combo.addItem('仅在官方源加载缓慢时改用镜像源', 'auto')
@@ -618,7 +620,7 @@ class SettingsPage(QWidget):
         community_layout.addLayout(source_row)
         name_row = QHBoxLayout()
         name_row.addWidget(QLabel('文件名格式'))
-        self.mod_filename_combo = QComboBox()
+        self.mod_filename_combo = RoundedComboBox()
         self.mod_filename_combo.addItem('[机械动力] create-1.21.1-6.0.4', 'bracket_title')
         self.mod_filename_combo.addItem('【机械动力】 create-1.21.1-6.0.4', 'bracket_title_cn')
         self.mod_filename_combo.addItem('[机械动力]create-1.21.1-6.0.4', 'bracket_title_compact')
@@ -631,7 +633,7 @@ class SettingsPage(QWidget):
         community_layout.addLayout(name_row)
         manage_row = QHBoxLayout()
         manage_row.addWidget(QLabel('Mod 管理样式'))
-        self.mod_manage_combo = QComboBox()
+        self.mod_manage_combo = RoundedComboBox()
         self.mod_manage_combo.addItem('标题显示译名，详情显示文件名', 'title_translated')
         self.mod_manage_combo.addItem('标题显示文件名，详情显示译名', 'title_filename')
         self.mod_manage_combo.setStyleSheet(self.java_combo.styleSheet())
@@ -646,7 +648,7 @@ class SettingsPage(QWidget):
         file_label = QLabel('文件下载源')
         file_label.setFixedWidth(90)
         file_label.setStyleSheet('color: rgba(255,255,255,0.7);')
-        self.file_source_combo = QComboBox()
+        self.file_source_combo = RoundedComboBox()
         for text, value in source_options:
             self.file_source_combo.addItem(text, value)
         self.file_source_combo.setMinimumWidth(300)
@@ -659,7 +661,7 @@ class SettingsPage(QWidget):
         version_label = QLabel('版本列表源')
         version_label.setFixedWidth(90)
         version_label.setStyleSheet('color: rgba(255,255,255,0.7);')
-        self.version_source_combo = QComboBox()
+        self.version_source_combo = RoundedComboBox()
         for text, value in source_options:
             self.version_source_combo.addItem(text, value)
         self.version_source_combo.setMinimumWidth(300)
@@ -943,7 +945,7 @@ class SettingsPage(QWidget):
         group_layout.setContentsMargins(24, 16, 24, 18)
         group_layout.setSpacing(12)
         title_label = QLabel(title)
-        title_label.setStyleSheet('color: rgba(255,255,255,0.85); font-size: 15px; font-weight:900;')
+        title_label.setStyleSheet('color: palette(text); font-size: 15px; font-weight:900;')
         group_layout.addWidget(title_label)
         return group
 
@@ -1568,7 +1570,7 @@ class SettingsPage(QWidget):
             self.window_title_color_edit.setText(color)
         self.config.set('global_window_title', title)
         self.config.set('global_title_color', color)
-        self.title_color_preview.setStyleSheet(f'background:{color}; border-radius:6px; border:1px solid rgba(255,255,255,0.2);')
+        self.title_color_preview.setStyleSheet(f'background:{color}; border-radius:6px; border:1px solid palette(mid);')
         self.title_changed.emit(title)
 
     def _reset_window_title(self):
@@ -1576,7 +1578,7 @@ class SettingsPage(QWidget):
         self.window_title_color_edit.setText('#88DDDD')
         self.config.set('global_window_title', '')
         self.config.set('global_title_color', '#88DDDD')
-        self.title_color_preview.setStyleSheet('background:#88DDDD; border-radius:6px; border:1px solid rgba(255,255,255,0.2);')
+        self.title_color_preview.setStyleSheet('background:#88DDDD; border-radius:6px; border:1px solid palette(mid);')
         self.title_changed.emit('')
 
     def _current_title_mode(self):
@@ -1606,6 +1608,12 @@ class SettingsPage(QWidget):
         mode = self._current_title_mode()
         self.config.set('title_bar_mode', mode)
         self.config.save()
+        self.title_changed.emit(self.config.get('global_window_title', ''))
+
+    def _on_title_image_changed(self, text):
+        path = str(text or '').strip()
+        self.config.set('global_title_image', path)
+        # 清空路径后立即让主窗口丢掉旧 QPixmap，而不是等下一次选择图片。
         self.title_changed.emit(self.config.get('global_window_title', ''))
 
     def _choose_title_image(self):
@@ -1680,7 +1688,7 @@ class SettingsPage(QWidget):
         self.window_title_edit.blockSignals(False)
         title_color = self.config.get('global_title_color', '#88DDDD') or '#88DDDD'
         self.window_title_color_edit.setText(title_color)
-        self.title_color_preview.setStyleSheet(f'background:{title_color}; border-radius:6px; border:1px solid rgba(255,255,255,0.2);')
+        self.title_color_preview.setStyleSheet(f'background:{title_color}; border-radius:6px; border:1px solid palette(mid);')
         title_mode = str(self.config.get('title_bar_mode', 'text') or 'text')
         for radio in self.title_mode_radios:
             radio.blockSignals(True)

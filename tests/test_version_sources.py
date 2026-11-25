@@ -69,6 +69,28 @@ class VersionSourceTests(unittest.TestCase):
         )
         self.assertGreaterEqual(MIN_VERSION_COUNT, 200)
 
+    def test_merge_can_prefer_mirror_source(self):
+        official = {
+            'versions': [{
+                'id': '1.0', 'type': 'release',
+                'releaseTime': '2025-01-01T00:00:00Z',
+                'url': 'official',
+            }],
+        }
+        mirror = {
+            'versions': [{
+                'id': '1.0', 'type': 'release',
+                'releaseTime': '2025-01-01T00:00:00Z',
+                'url': 'mirror',
+            }],
+        }
+        merged = merge_manifests(
+            [official, mirror],
+            [PISTON + V1_PATH, BMCLAPI + V1_PATH],
+            prefer='bmclapi',
+        )
+        self.assertEqual(merged['versions'][0]['url'], 'mirror')
+
     def test_min_versions_filters_small_manifest(self):
         merged = merge_manifests(
             [{'versions': [{'id': 'x', 'type': 'release'}]}],

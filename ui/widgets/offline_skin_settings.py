@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
     QPushButton, QVBoxLayout, QWidget,
 )
+from ui.widgets.rounded_combo import RoundedComboBox
 
 
 class OfflineSkinSettings(QWidget):
@@ -27,7 +28,7 @@ class OfflineSkinSettings(QWidget):
             ' border:1px solid rgba(255,255,255,0.12); border-radius:6px;'
             ' color:#f0f0f0; padding:4px 8px; }'
             'QComboBox::drop-down { border:none; }'
-            'QComboBox QAbstractItemView { background:#2a2a2a; color:#f0f0f0; }'
+            ''
         )
         edit_style = (
             'QLineEdit { background:rgba(255,255,255,0.05);'
@@ -36,7 +37,7 @@ class OfflineSkinSettings(QWidget):
         )
 
         row = QHBoxLayout()
-        self.skin_mode_combo = QComboBox()
+        self.skin_mode_combo = RoundedComboBox()
         self.skin_mode_combo.addItem('随机（Steve / Alex）', 'random')
         self.skin_mode_combo.addItem('Steve', 'steve')
         self.skin_mode_combo.addItem('Alex', 'alex')
@@ -46,7 +47,7 @@ class OfflineSkinSettings(QWidget):
         self.skin_mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         row.addWidget(QLabel('皮肤来源'))
         row.addWidget(self.skin_mode_combo, 1)
-        self.skin_model_combo = QComboBox()
+        self.skin_model_combo = RoundedComboBox()
         self.skin_model_combo.addItem('经典 (Steve)', 'classic')
         self.skin_model_combo.addItem('纤细 (Alex)', 'slim')
         self.skin_model_combo.setStyleSheet(combo_style)

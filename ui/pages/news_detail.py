@@ -11,7 +11,8 @@ from PySide6.QtCore import QEvent, QTimer, Qt, Signal, QUrl
 from PySide6.QtGui import QPalette, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QScrollArea, QTextBrowser, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QTextBrowser,
+    QVBoxLayout, QWidget,
 )
 
 from core.app_font import ui_font
@@ -193,6 +194,16 @@ class VersionDetailPage(QWidget):
         self.loading_text = QLabel('正在加载版本详情...')
         status.addWidget(self.loading_icon)
         status.addWidget(self.loading_text)
+        self.retry_btn = QPushButton('重试')
+        self.retry_btn.setStyleSheet(
+            'QPushButton { background:transparent; color:#88DDDD;'
+            ' border:1px solid rgba(136,221,221,0.55); border-radius:6px;'
+            ' padding:3px 12px; }'
+            'QPushButton:hover { background:rgba(136,221,221,0.18); }'
+        )
+        self.retry_btn.clicked.connect(self._retry)
+        self.retry_btn.hide()
+        status.addWidget(self.retry_btn)
         status.addStretch(1)
         card_layout.addLayout(status)
         self._apply_header_theme(light)
@@ -249,6 +260,7 @@ class VersionDetailPage(QWidget):
             self.loading_icon.show()
             self.loading_text.setText('正在检查版本详情更新...')
         url = str(self._data.get('detail_url') or '')
+        self._detail_url = url
         if not url and version:
             url = f'https://mcnews.meloong.com/VersionDetail.xaml?ver={version}'
         if not url:
@@ -256,6 +268,12 @@ class VersionDetailPage(QWidget):
             self.loading_text.setText('没有可用的版本详情地址')
             return
         self._request(url, version)
+
+    def _retry(self):
+        self.retry_btn.hide()
+        self.loading_icon.show()
+        self.loading_text.setText('正在重新加载版本详情...')
+        self._request(self._detail_url, str(self._data.get('version') or ''))
 
     def _request(self, url, version):
         request = QNetworkRequest(QUrl(url))
@@ -494,12 +512,13 @@ class VersionDetailPage(QWidget):
             self._html_light = light
         except Exception as exc:
             logger.warning('渲染版本详情失败', exc_info=True)
-            reason = str(exc).strip() or type(exc).__name__
             self.loading_icon.hide()
-            self.loading_text.setText(f'版本详情内容加载失败：{reason}')
+            self.loading_text.setText('版本详情内容加载失败，请点击重试')
+            self.retry_btn.show()
             return
         self.loading_icon.hide()
         self.loading_text.setText('')
+        self.retry_btn.hide()
 
     def _on_loaded(self, text, version):
         try:
@@ -511,11 +530,13 @@ class VersionDetailPage(QWidget):
         self._render(text)
 
     def _on_error(self, message):
+        logger.warning('版本详情加载失败: %s', message)
         self.loading_icon.hide()
         if self.browser.toPlainText().strip():
             self.loading_text.setText('网络不可用，当前显示缓存内容')
         else:
-            self.loading_text.setText(f'版本详情加载失败：{message}')
+            self.loading_text.setText('版本详情加载失败，请点击重试')
+        self.retry_btn.show()
 
     def shutdown(self):
         self.loading_icon.stop()

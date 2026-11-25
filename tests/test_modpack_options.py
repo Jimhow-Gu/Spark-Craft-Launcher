@@ -19,6 +19,7 @@ from core.modpack import ModpackImportWorker
 import core.modpack as modpack
 from core.net import DownloadError
 from ui.pages.modpack_import_page import ModpackImportPage
+from ui.version_meta import display_name as version_display_name
 
 
 def _info():
@@ -118,6 +119,18 @@ class ModpackImportOptionTests(unittest.TestCase):
             self.assertEqual(errors, [])
             self.assertTrue((target / 'keep.jar').is_file())
             self.assertTrue((target / 'pmgl_pack.json').is_file())
+
+            class Config:
+                def get(self, key, default=None):
+                    return default
+
+                def get_mc_dir(self):
+                    return str(root)
+
+            self.assertEqual(
+                version_display_name(Config(), '1.20.1-fabric'),
+                'Test Pack',
+            )
 
     def test_existing_target_loader_and_version_validation(self):
         with tempfile.TemporaryDirectory() as tmp:

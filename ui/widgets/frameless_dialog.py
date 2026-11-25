@@ -222,7 +222,7 @@ class FramelessListDialog(FramelessDialog):
         self.list = QListWidget()
         self.list.setSelectionMode(QAbstractItemView.SingleSelection)
         self.list.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.list.setStyleSheet('\n            QListWidget { background:rgba(30,41,41,0.62);\n                          border:1px solid rgba(255,255,255,0.16); border-radius:8px;\n                          outline:none; }\n            QListWidget::item { padding:8px 12px; color:rgba(255,255,255,0.85);\n                                border-bottom:1px solid rgba(255,255,255,0.05); }\n            QListWidget::item:selected { background:rgba(136,221,221,0.35); }\n        ')
+        self.list.setStyleSheet('\n            QListWidget { background:rgba(30,41,41,0.62);\n                          border:1px solid rgba(255,255,255,0.16); border-radius:8px;\n                          outline:none; }\n            QListWidget::item { padding:8px 12px; color:rgba(255,255,255,0.85);\n                                border-bottom:1px solid rgba(255,255,255,0.05); }\n            QListWidget::item:selected { background:rgba(136,221,221,0.28); border:1px solid rgba(136,221,221,0.55); border-radius:6px; margin:2px 4px; }\n        ')
         for label, data in items:
             item = QListWidgetItem(str(label))
             item.setData(Qt.UserRole, data)

@@ -51,6 +51,13 @@ class UpdateMarkerTests(unittest.TestCase):
         self.assertEqual(update.consume_updated_marker(), '')
         self.assertTrue(self._path('failed_update.json').is_file())
 
+    def test_failed_notice_is_consumed(self):
+        update._failed_update_marker('1.11.4', 'copy failed')
+        notice = update.consume_failed_update_notice()
+        self.assertIn('自动更新失败', notice)
+        self.assertIn('copy failed', notice)
+        self.assertEqual(update.consume_failed_update_notice(), '')
+
     def test_new_exe_helper_replaces_target(self):
         source = self.root / 'downloaded-new.exe'
         source.write_bytes(b'MZ' + b'new-build')

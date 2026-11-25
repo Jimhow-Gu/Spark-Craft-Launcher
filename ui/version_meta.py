@@ -66,7 +66,20 @@ def version_settings(config, version_id):
 
 def display_name(config, version_id):
     nicknames = config.get('version_nicknames', {}) or {}
-    return str(nicknames.get(version_id) or version_id)
+    nickname = str(nicknames.get(version_id) or '').strip()
+    if nickname:
+        return nickname
+    try:
+        mc_dir = Path(config.get_mc_dir())
+    except Exception:
+        return str(version_id)
+    version_dir = mc_dir / 'versions' / str(version_id)
+    pack = _read_json(version_dir / 'pmgl_pack.json')
+    for key in ('display_name', 'launch_name', 'name'):
+        value = str(pack.get(key) or '').strip()
+        if value:
+            return value
+    return str(version_id)
 
 
 def _read_json(path):

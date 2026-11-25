@@ -12,26 +12,27 @@ class TextContextMenuFilter(QObject):
 
     MENU_STYLE = """
         QMenu {
-            background: #20232b;
-            color: #f0f0f0;
-            border: 1px solid rgba(255,255,255,0.18);
-            border-radius: 8px;
-            padding: 5px;
+            background: palette(base);
+            color: palette(text);
+            border: 1px solid palette(mid);
+            border-radius: 10px;
+            padding: 4px;
         }
         QMenu::item {
             padding: 6px 26px 6px 18px;
-            border-radius: 5px;
+            border-radius: 6px;
         }
         QMenu::item:selected {
             background: #88DDDD;
-            color: white;
+            color: #102020;
+            border-radius: 6px;
         }
         QMenu::item:disabled {
-            color: rgba(255,255,255,0.32);
+            color: palette(mid);
         }
         QMenu::separator {
             height: 1px;
-            background: rgba(255,255,255,0.12);
+            background: palette(mid);
             margin: 4px 8px;
         }
     """

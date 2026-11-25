@@ -16,6 +16,7 @@ from ui.version_meta import (
     LOADER_LABELS, default_icon_value, detect_installed_loader, display_name,
     version_data, version_description, version_icon, version_settings,
 )
+from ui.widgets.rounded_combo import RoundedComboBox
 from core.app_font import ui_font
 from ui.widgets.back_button import BackButton
 from ui.design import MUTED_DARK, MUTED_LIGHT, ON_ACCENT
@@ -277,7 +278,7 @@ class GameSettingsPage(QWidget):
         personal_layout.setHorizontalSpacing(14)
         personal_layout.setVerticalSpacing(10)
         personal_layout.addWidget(QLabel('图标'), 0, 0)
-        self.icon_combo = QComboBox()
+        self.icon_combo = RoundedComboBox()
         self.icon_combo.setStyleSheet(self._combo_style())
         for label, value in (
             ('原版图标', 'release'), ('快照图标', 'snapshot'),
@@ -288,7 +289,7 @@ class GameSettingsPage(QWidget):
         self.icon_combo.currentIndexChanged.connect(self._on_icon_changed)
         personal_layout.addWidget(self.icon_combo, 0, 1)
         personal_layout.addWidget(QLabel('分类'), 1, 0)
-        self.category_combo = QComboBox()
+        self.category_combo = RoundedComboBox()
         self.category_combo.setStyleSheet(self._combo_style())
         for label, value in (
             ('自动', 'auto'), ('原版', 'vanilla'),
@@ -321,7 +322,7 @@ class GameSettingsPage(QWidget):
         server_layout.setHorizontalSpacing(14)
         server_layout.setVerticalSpacing(10)
         server_layout.addWidget(QLabel('登录方式'), 0, 0)
-        self.login_mode_combo = QComboBox()
+        self.login_mode_combo = RoundedComboBox()
         self.login_mode_combo.addItem('跟随全局', 'global')
         self.login_mode_combo.addItem('正版账号', 'microsoft')
         self.login_mode_combo.addItem('第三方账号（LittleSkin 等）', 'thirdparty')
@@ -342,7 +343,7 @@ class GameSettingsPage(QWidget):
         startup_layout.setHorizontalSpacing(14)
         startup_layout.setVerticalSpacing(10)
         startup_layout.addWidget(QLabel('版本隔离'), 0, 0)
-        self.iso_combo = QComboBox()
+        self.iso_combo = RoundedComboBox()
         self.iso_combo.addItem('关闭', False)
         self.iso_combo.addItem('开启', True)
         self.iso_combo.setStyleSheet(self._combo_style())
@@ -355,7 +356,7 @@ class GameSettingsPage(QWidget):
         self.title_edit.setStyleSheet(self._lineedit_style())
         startup_layout.addWidget(self.title_edit, 1, 1)
         startup_layout.addWidget(QLabel('Java'), 2, 0)
-        self.java_combo = QComboBox()
+        self.java_combo = RoundedComboBox()
         self.java_combo.setStyleSheet(self._combo_style())
         self.java_combo.currentIndexChanged.connect(self._on_java_changed)
         startup_layout.addWidget(self.java_combo, 2, 1)
@@ -486,7 +487,7 @@ class GameSettingsPage(QWidget):
         main_layout.addWidget(tab_host, 1)
 
     def _combo_style(self):
-        return '\n            QComboBox {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.1);\n                border-radius: 6px;\n                color: #f0f0f0;\n                padding: 4px 8px;\n            }\n            QComboBox::drop-down { border: none; }\n            QComboBox QAbstractItemView { background: #2a2a2a; color: #f0f0f0; border: 1px solid rgba(255,255,255,0.1); }\n        '
+        return '\n            QComboBox {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.1);\n                border-radius: 6px;\n                color: #f0f0f0;\n                padding: 4px 8px;\n            }\n            QComboBox::drop-down { border: none; }\n            \n        '
 
     def _lineedit_style(self):
         return '\n            QLineEdit {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.1);\n                border-radius: 6px;\n                color: #f0f0f0;\n                padding: 4px 8px;\n            }\n        '

@@ -8,6 +8,7 @@ FileDownloadTask），按 Python 多线程场景独立实现：统一候选源�
 
 from __future__ import annotations
 
+import logging
 import os
 import platform
 import shutil
@@ -22,6 +23,9 @@ from urllib.parse import urlparse
 
 from core.config import ConfigManager
 from core.net import (DownloadCancelled, DownloadError, DownloadGate, HttpClient, hash_file, is_network_error_text)
+from core.version_sources import OFFICIAL, PISTON
+
+logger = logging.getLogger('Downloading')
 
 BMCLAPI = 'https://bmclapi2.bangbang93.com'
 OPENBMCLAPI = 'https://openbmclapi.bangbang93.com'
@@ -127,17 +131,34 @@ def library_applies(lib):
 
 
 def version_manifest_urls(source=None):
-    official = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
-    mirrors = [
-        f'{BMCLAPI}/mc/game/version_manifest_v2.json',
-        f'{OPENBMCLAPI}/mc/game/version_manifest_v2.json',
+    '''按下载源设置返回版本清单候选；官方源不混入镜像请求。'''
+
+    source = (source or current_source() or 'auto').lower()
+    official = [
+        PISTON + '/mc/game/version_manifest.json',
+        OFFICIAL + '/mc/game/version_manifest.json',
+        PISTON + '/mc/game/version_manifest_v2.json',
+        OFFICIAL + '/mc/game/version_manifest_v2.json',
     ]
-    return ordered_candidates(official, mirrors, source)
+    mirrors = [
+        BMCLAPI + '/mc/game/version_manifest.json',
+        OPENBMCLAPI + '/mc/game/version_manifest.json',
+        BMCLAPI + '/mc/game/version_manifest_v2.json',
+        OPENBMCLAPI + '/mc/game/version_manifest_v2.json',
+    ]
+    if source == 'official':
+        return unique(official)
+    if source == 'bmclapi':
+        return unique(mirrors + official)
+    return unique(official + mirrors)
 
 
 def version_json_urls(version_id, source=None):
-    '''官方没有按版本 ID 直接取 JSON 的接口，完全依赖 BMCLAPI 元数据。'''
+    '''按版本 ID 直取 JSON 的镜像候选；官方源不会回退到镜像。'''
 
+    source = (source or current_source() or 'auto').lower()
+    if source == 'official':
+        return []
     mirrors = [
         f'{BMCLAPI}/version/{version_id}/json',
         f'{OPENBMCLAPI}/version/{version_id}/json',
@@ -145,37 +166,178 @@ def version_json_urls(version_id, source=None):
     return ordered_candidates('', mirrors, source)
 
 
-def fetch_version_json(version_id, http=None, source=None, timeout=20):
-    '''优先 BMCLAPI/OpenBMCLAPI，最后回退到官方 manifest 条目。'''
+def fetch_version_json(version_id, http=None, source=None, timeout=20, log_cb=None):
+    '''同时使用 v1/v2 多源查找版本 JSON，并记录每个源的失败原因。'''
 
     http = http or HttpClient(timeout=timeout, retries=2)
-    errors = []
+
+    def log(text):
+        try:
+            logger.info('%s', text)
+        except Exception:
+            pass
+        if log_cb is not None:
+            try:
+                log_cb(text)
+            except Exception:
+                pass
+
+    def fetch_json(url, timeout_value):
+        started = time.monotonic()
+        try:
+            response = http.get(url, timeout=timeout_value)
+            data = response.json()
+            log(
+                f'版本源成功: {url} HTTP {response.status_code} '
+                f'{time.monotonic() - started:.2f}s'
+            )
+            return data
+        except Exception as exc:
+            log(
+                f'版本源失败: {url} {type(exc).__name__}: {exc} '
+                f'{time.monotonic() - started:.2f}s'
+            )
+            raise
+
+    source_preference = (source or current_source() or 'auto').lower()
+
+    def source_rank(url):
+        lowered = str(url or '').lower()
+        mirror_first = source_preference == 'bmclapi'
+        if 'piston-meta' in lowered or 'launchermeta' in lowered:
+            return 2 if mirror_first else 0
+        if 'bmclapi2' in lowered:
+            return 0 if mirror_first else 1
+        if 'openbmclapi' in lowered:
+            return 1 if mirror_first else 2
+        return 3
+
+    def fetch_manifest(url):
+        started = time.monotonic()
+        client = HttpClient(timeout=min(max(6, timeout), 12), retries=1)
+        try:
+            response = client.get(
+                url, timeout=min(max(6, timeout), 12)
+            )
+            data = response.json()
+            if isinstance(data, dict) and data.get('versions'):
+                log(
+                    f'版本清单成功: {url} HTTP {response.status_code} '
+                    f'{len(data.get("versions") or [])} 个版本 '
+                    f'{time.monotonic() - started:.2f}s'
+                )
+                return data
+            log(
+                f'版本清单忽略: {url} HTTP {response.status_code} '
+                f'返回无 versions {time.monotonic() - started:.2f}s'
+            )
+        except Exception as exc:
+            log(
+                f'版本清单失败: {url} '
+                f'{type(exc).__name__}: {exc} '
+                f'{time.monotonic() - started:.2f}s'
+            )
+        finally:
+            client.close()
+        return None
+
+    v1_urls = [
+        url for url in version_manifest_urls(source)
+        if not url.endswith('/mc/game/version_manifest_v2.json')
+    ]
+    v2_urls = [
+        url for url in version_manifest_urls(source)
+        if url.endswith('/mc/game/version_manifest_v2.json')
+    ]
+    v1_manifests = []
+    with ThreadPoolExecutor(max_workers=max(1, min(4, len(v1_urls)))) as pool:
+        futures = {pool.submit(fetch_manifest, url): url for url in v1_urls}
+        for future in as_completed(futures):
+            url = futures[future]
+            try:
+                data = future.result()
+            except Exception:
+                data = None
+            if data:
+                v1_manifests.append((url, data))
+    v1_manifests.sort(key=lambda item: source_rank(item[0]))
+
+    def try_manifests(manifest_pairs):
+        entries = []
+        for source_url, manifest in manifest_pairs:
+            if not isinstance(manifest, dict):
+                continue
+            entry = next(
+                (
+                    version for version in manifest.get('versions', [])
+                    if isinstance(version, dict)
+                    and str(version.get('id') or '') == str(version_id)
+                ),
+                None,
+            )
+            if entry and entry.get('url'):
+                entries.append((source_url, entry))
+        entries.sort(key=lambda item: source_rank(item[0]))
+        for source_url, entry in entries:
+            urls = [str(entry.get('url') or '')]
+            if source_preference != 'official':
+                urls.extend((
+                    rewrite_mojang_url(
+                        str(entry.get('url') or ''), BMCLAPI
+                    ),
+                    rewrite_mojang_url(
+                        str(entry.get('url') or ''), OPENBMCLAPI
+                    ),
+                ))
+            for url in unique(urls):
+                if not url:
+                    continue
+                try:
+                    data = fetch_json(url, timeout)
+                except Exception:
+                    continue
+                if isinstance(data, dict) and data.get('id'):
+                    log(f'版本 JSON 已获取: {version_id} <- {source_url}')
+                    return data
+        return None
+
+    data = try_manifests(v1_manifests)
+    if data is not None:
+        return data
+
+    # v1 全部失败或没有该版本时，才尝试 v2 与按 ID 直取的镜像。
+    manifest_pairs = []
+    if v2_urls:
+        with ThreadPoolExecutor(
+            max_workers=max(1, min(4, len(v2_urls)))
+        ) as pool:
+            futures = {pool.submit(fetch_manifest, url): url for url in v2_urls}
+            for future in as_completed(futures):
+                url = futures[future]
+                try:
+                    manifest = future.result()
+                except Exception:
+                    manifest = None
+                if manifest:
+                    manifest_pairs.append((url, manifest))
+        data = try_manifests(manifest_pairs)
+        if data is not None:
+            return data
+
+    last_error = ''
     for url in version_json_urls(version_id, source):
         try:
-            data = http.get_json(url, timeout=timeout)
+            data = fetch_json(url, timeout)
         except Exception as exc:
-            errors.append(str(exc))
+            last_error = f'{type(exc).__name__}: {exc}'
             continue
         if isinstance(data, dict) and data.get('id'):
             return data
-    for manifest_url in version_manifest_urls(source):
-        try:
-            manifest = http.get_json(manifest_url, timeout=timeout)
-            entry = next((v for v in manifest.get('versions', []) if v.get('id') == version_id), None)
-            if not entry or not entry.get('url'):
-                continue
-            for candidate in (entry['url'], rewrite_mojang_url(entry['url']), rewrite_mojang_url(entry['url'], OPENBMCLAPI)):
-                try:
-                    data = http.get_json(candidate, timeout=timeout)
-                except Exception as exc:
-                    errors.append(str(exc))
-                    continue
-                if isinstance(data, dict) and data.get('id'):
-                    return data
-        except Exception as exc:
-            errors.append(str(exc))
-    raise DownloadError(f'无法获取版本 {version_id} 的 JSON 元数据：{errors[-1] if errors else "未知错误"}')
-
+        last_error = '返回内容缺少 id'
+    raise DownloadError(
+        f'无法获取版本 {version_id} 的 JSON 元数据：'
+        f'{last_error or "所有官方/镜像源均失败"}'
+    )
 
 def client_urls(version_id, downloads=None, source=None):
     client = (downloads or {}).get('client') or {}

@@ -45,15 +45,18 @@ def _version_key(item: dict) -> tuple:
     )
 
 
-def _source_rank(url: str) -> int:
-    """同一版本 id 的来源优先级：官方 0，BMCL 1，其他镜像 2。"""
+def _source_rank(url: str, prefer: str = 'official') -> int:
+    """同一版本 id 的来源优先级；镜像优先时官方只作为字段补全来源。"""
     normalized = _base(url).lower()
+    mirror_preferred = str(prefer or '').lower() in (
+        'bmclapi', 'mirror', 'mirror_first'
+    )
     if normalized.startswith(PISTON) or normalized.startswith(OFFICIAL):
-        return 0
+        return 2 if mirror_preferred else 0
     if normalized.startswith(BMCLAPI):
-        return 1
+        return 0 if mirror_preferred else 1
     if normalized.startswith(OPENBMCLAPI):
-        return 2
+        return 1 if mirror_preferred else 2
     return 3
 
 
@@ -99,11 +102,13 @@ def merge_manifests(
     manifests: Iterable[dict],
     sources: Sequence[str] | None = None,
     min_versions: int = 0,
+    prefer: str = 'official',
 ) -> dict:
     """合并多个 version_manifest，按版本 id 去重。
 
     - sources 与 manifests 一一对应时，用 URL 判断来源优先级；
-    - 同 id：官方优先；同来源取 releaseTime 更新的一份；低优先级来源补齐缺失字段；
+    - prefer='bmclapi' 时镜像优先，官方数据只补齐缺失字段；
+    - 同 id：首选来源优先；同来源取 releaseTime 更新的一份；低优先级来源补齐缺失字段；
     - min_versions > 0 时，版本数不足的 manifest 直接丢弃（PCL 用 200）。
     """
     by_id: dict[str, dict] = {}
@@ -123,7 +128,7 @@ def merge_manifests(
             continue
 
         source = source_list[index] if index < len(source_list) else ""
-        rank = _source_rank(source)
+        rank = _source_rank(source, prefer)
 
         for version in versions:
             if not isinstance(version, dict):

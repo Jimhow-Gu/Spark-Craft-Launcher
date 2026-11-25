@@ -12,6 +12,7 @@ from pathlib import Path
 from PySide6.QtCore import (Qt, Signal, QTimer, QThread, QSize, QEvent)
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QFrame, QListWidget, QListWidgetItem, QGroupBox, QScrollArea, QMessageBox, QStackedWidget, QSizePolicy, QApplication)
 from PySide6.QtGui import (QFont, QColor, QPalette, QPixmap, QIcon)
+from ui.widgets.rounded_combo import RoundedComboBox
 from core.app_font import ui_font
 from ui.widgets.painted_icons import painted_icon, set_button_icon
 from ui.widgets.launch_progress_button import LaunchProgressButton
@@ -460,6 +461,7 @@ class HomePage(QWidget):
         self.mod_manager_btn.setStyleSheet(self.settings_btn.styleSheet())
         self.mod_manager_btn.clicked.connect(self._open_mod_manager_home)
         self.mod_manager_btn.hide()
+        self._apply_home_action_styles()
         btn_row.addWidget(self.select_version_btn, 1)
         btn_row.addWidget(self.action_btn, 2)
         btn_row.addWidget(self.mod_manager_btn, 1)
@@ -498,7 +500,7 @@ class HomePage(QWidget):
         dir_label = QLabel('游戏目录')
         dir_label.setStyleSheet('color: rgba(255,255,255,0.55); font-size: 12px;')
         top_bar.addWidget(dir_label)
-        self.selector_dir_combo = QComboBox()
+        self.selector_dir_combo = RoundedComboBox()
         self.selector_dir_combo.setMinimumWidth(280)
         self.selector_dir_combo.setMinimumHeight(32)
         self.selector_dir_combo.setStyleSheet(
@@ -506,8 +508,7 @@ class HomePage(QWidget):
             ' border: 1px solid rgba(255,255,255,0.18); border-radius: 7px;'
             ' padding: 4px 10px; }'
             'QComboBox::drop-down { border: none; }'
-            'QComboBox QAbstractItemView { background: #24262c; color: #f0f0f0;'
-            ' border: 1px solid rgba(255,255,255,0.14); }'
+            ''
         )
         self.selector_dir_combo.activated.connect(self._on_selector_dir_changed)
         self.selector_dir_combo.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -607,7 +608,7 @@ class HomePage(QWidget):
         return '\n            QGroupBox {\n                background: rgba(30,41,41,0.84);\n                border: 1px solid rgba(255,255,255,0.22);\n                border-radius: 12px;\n                margin-top: 0px;\n                padding-top: 8px;\n            }\n        '
 
     def _list_style(self):
-        return '\n            QListWidget {\n                background: rgba(30,41,41,0.62);\n                border: 1px solid rgba(255,255,255,0.16);\n                border-radius: 10px;\n            }\n            QListWidget::item {\n                padding: 0px;\n                border-bottom: 1px solid rgba(255,255,255,0.05);\n            }\n            QListWidget::item:selected {\n                background: rgba(136,221,221,0.2);\n                border-left: 3px solid #88DDDD;\n            }\n        '
+        return '\n            QListWidget {\n                background: rgba(30,41,41,0.62);\n                border: 1px solid rgba(255,255,255,0.16);\n                border-radius: 10px;\n            }\n            QListWidget::item {\n                padding: 0px;\n                border-bottom: 1px solid rgba(255,255,255,0.05);\n            }\n            QListWidget::item:selected {\n                background: rgba(136,221,221,0.22);\n                border: 1px solid rgba(136,221,221,0.55); border-radius: 6px; margin: 2px 4px;\n            }\n        '
 
     def _categorize_versions(self, versions):
         mod = []
@@ -1445,7 +1446,35 @@ class HomePage(QWidget):
             except RuntimeError:
                 continue
 
+    def _apply_home_action_styles(self, light=None):
+        if light is None:
+            light = QApplication.palette().color(QPalette.Window).lightness() > 128
+        if light:
+            style = (
+                'QPushButton { background:rgba(0,0,0,0.06); color:#1b1b1b;'
+                ' border:1px solid rgba(0,0,0,0.20); border-radius:8px; }'
+                'QPushButton:hover { background:rgba(136,221,221,0.24);'
+                ' border-color:#4f9e9e; color:#102424; }'
+                'QPushButton:pressed { background:rgba(136,221,221,0.34); }'
+                'QPushButton:disabled { background:rgba(0,0,0,0.04);'
+                ' color:rgba(0,0,0,0.35); border-color:rgba(0,0,0,0.08); }'
+            )
+        else:
+            style = (
+                'QPushButton { background:#3a3a3a; color:white;'
+                ' border:1px solid rgba(255,255,255,0.14); border-radius:8px; }'
+                'QPushButton:hover { background:#4a4a4a; border-color:#88DDDD; }'
+                'QPushButton:pressed { background:#2a2a2a; }'
+                'QPushButton:disabled { background:#2a2a2a; color:#777;'
+                ' border-color:rgba(255,255,255,0.06); }'
+            )
+        for name in ('select_version_btn', 'settings_btn', 'mod_manager_btn'):
+            button = getattr(self, name, None)
+            if button is not None:
+                button.setStyleSheet(style)
+
     def set_light(self, light):
+        self._apply_home_action_styles(bool(light))
         self._refresh_running_row_styles()
 
     def changeEvent(self, event):

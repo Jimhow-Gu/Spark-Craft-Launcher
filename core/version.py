@@ -30,6 +30,7 @@ import certifi
 from core.config import ConfigManager
 from core.paths import safe_rmtree
 from core.net import DownloadCancelled, HttpClient
+from core.logging_setup import LOG_DIR
 from core.paths import scl_dir
 logger = logging.getLogger('VersionManager')
 PROJECT_TEMP = scl_dir() / 'temp_install'
@@ -1022,6 +1023,7 @@ class FullInstallWorker(QThread):
         self._install_token = f'full-{id(self)}-{int(time.time() * 1000)}'
         self._phase_lock = threading.Lock()
         self._phase_last = {}
+        self._install_log_path = None
 
     def cancel(self):
         self._cancelled = True
@@ -1029,6 +1031,34 @@ class FullInstallWorker(QThread):
     def _check_cancel(self):
         if self._cancelled:
             raise Exception('安装已取消')
+
+    def _install_log_cb(self, text):
+        logger.info('%s', text)
+        path = self._install_log_path
+        if path is None:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open('a', encoding='utf-8') as handle:
+                handle.write(
+                    f'[{time.strftime("%Y-%m-%d %H:%M:%S")}] {text}' + chr(10)
+                )
+        except OSError:
+            pass
+
+    def _init_install_log(self, mc_version, custom):
+        safe = re.sub(r'[^0-9A-Za-z._-]+', '_', custom or mc_version)
+        self._install_log_path = LOG_DIR / f'install_{mc_version}_{safe}.log'
+        try:
+            self._install_log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._install_log_path.write_text(
+                f'[{time.strftime("%Y-%m-%d %H:%M:%S")}] '
+                f'版本={mc_version} 实例={custom} '
+                f'选择={self.selections}' + chr(10),
+                encoding='utf-8',
+            )
+        except OSError:
+            pass
 
     def _status(self, text):
         self.status_updated.emit(str(text))
@@ -1150,7 +1180,7 @@ class FullInstallWorker(QThread):
         except OSError:
             pass
         self._status('正在补全 OptiFine 依赖库...')
-        install_vanilla(self.custom_name, self.mc_dir, status_cb=self._status, progress_cb=(lambda p: self._progress(90 + int(p * 0.1))), phase_cb=self._game_phase, log_cb=(lambda s: logger.info(s)), cancel=(lambda: self._cancelled))
+        install_vanilla(self.custom_name, self.mc_dir, status_cb=self._status, progress_cb=(lambda p: self._progress(90 + int(p * 0.1))), phase_cb=self._game_phase, log_cb=self._install_log_cb, cancel=(lambda: self._cancelled))
         self._phase('game', 100)
         self._status(f'OptiFine {info.type} {info.patch} 安装完成')
 
@@ -1201,6 +1231,7 @@ class FullInstallWorker(QThread):
             raise Exception('版本名称不能为空')
         if re.search('[<>:"/\\\\|?*\\x00-\\x1f]', custom) or custom.endswith((' ', '.')):
             raise Exception('版本名称不能包含 < > : " / \\ | ? * 等字符，也不能以空格或点结尾')
+        self._init_install_log(mc_version, custom)
         versions_dir = Path(self.mc_dir) / 'versions'
         target_dir = versions_dir / custom
         marker = target_dir / INCOMPLETE_MARKER
@@ -1262,17 +1293,17 @@ class FullInstallWorker(QThread):
                             f'OptiFabric 需要旧版 Fabric Loader，已改用 {_LEGACY_LOADER}...'
                         )
             self._status(f'正在安装 Fabric {fabric_version}...')
-            install_fabric(mc_version, fabric_version, self.mc_dir, custom, status_cb=self._status, progress_cb=(lambda p: self._progress(int(p * loader_span / 100))), phase_cb=self._phase, log_cb=(lambda s: logger.info(s)), cancel=(lambda: self._cancelled))
+            install_fabric(mc_version, fabric_version, self.mc_dir, custom, status_cb=self._status, progress_cb=(lambda p: self._progress(int(p * loader_span / 100))), phase_cb=self._phase, log_cb=self._install_log_cb, cancel=(lambda: self._cancelled))
         elif main_loader == 'forge':
             self._status(f'正在安装 Forge {selections["forge"]}...')
-            install_forge(mc_version, selections['forge'], self.mc_dir, custom, status_cb=self._status, progress_cb=(lambda p: self._progress(int(p * loader_span / 100))), phase_cb=self._phase, log_cb=(lambda s: logger.info(s)), cancel=(lambda: self._cancelled))
+            install_forge(mc_version, selections['forge'], self.mc_dir, custom, status_cb=self._status, progress_cb=(lambda p: self._progress(int(p * loader_span / 100))), phase_cb=self._phase, log_cb=self._install_log_cb, cancel=(lambda: self._cancelled))
         elif main_loader == 'neoforge':
             self._status(f'正在安装 NeoForge {selections["neoforge"]}...')
-            install_neoforge(mc_version, selections['neoforge'], self.mc_dir, custom, status_cb=self._status, progress_cb=(lambda p: self._progress(int(p * loader_span / 100))), phase_cb=self._phase, log_cb=(lambda s: logger.info(s)), cancel=(lambda: self._cancelled))
+            install_neoforge(mc_version, selections['neoforge'], self.mc_dir, custom, status_cb=self._status, progress_cb=(lambda p: self._progress(int(p * loader_span / 100))), phase_cb=self._phase, log_cb=self._install_log_cb, cancel=(lambda: self._cancelled))
         else:
             self._status(f'正在安装原版 {mc_version}...')
             self._phase('game', 5)
-            install_vanilla(mc_version, self.mc_dir, status_cb=self._status, progress_cb=(lambda p: self._progress(int(p * 20 / 100))), phase_cb=self._vanilla_phase, log_cb=(lambda s: logger.info(s)), cancel=(lambda: self._cancelled))
+            install_vanilla(mc_version, self.mc_dir, status_cb=self._status, progress_cb=(lambda p: self._progress(int(p * 20 / 100))), phase_cb=self._vanilla_phase, log_cb=self._install_log_cb, cancel=(lambda: self._cancelled))
             self._phase('game_libs', 0)
             self._phase('game_libs', 100)
             self._phase('game', 100)
@@ -1315,7 +1346,7 @@ class FullInstallWorker(QThread):
                     if not forge_version:
                         raise Exception(f'OptiFine 独立安装失败，且无法确定备用 Forge 版本：{exc}')
                     self._status(f'OptiFine 安装方式 B：安装 Forge {forge_version} 并作为模组加载...')
-                    install_forge(mc_version, forge_version, self.mc_dir, custom, status_cb=self._status, progress_cb=(lambda p: self._progress(25 + int(p * 55 / 100))), phase_cb=self._phase, log_cb=(lambda s: logger.info(s)), cancel=(lambda: self._cancelled))
+                    install_forge(mc_version, forge_version, self.mc_dir, custom, status_cb=self._status, progress_cb=(lambda p: self._progress(25 + int(p * 55 / 100))), phase_cb=self._phase, log_cb=self._install_log_cb, cancel=(lambda: self._cancelled))
                     self._install_optifine_mod(opti, custom, opti_manager, progress_base=80, progress_span=15)
                     self._status('OptiFine 已通过方式 B（Forge 模组）安装完成')
         self._check_cancel()
@@ -1364,6 +1395,7 @@ class FullInstallWorker(QThread):
                     self.finished_error.emit('安装已取消')
                 else:
                     logger.error(f'FullInstallWorker 异常: {e}', exc_info=True)
+                    self._install_log_cb(f'安装失败: {e}')
                     self.finished_error.emit(str(e))
         finally:
             unregister_active_install(self._install_token)
@@ -1382,6 +1414,8 @@ class FullInstallWorker(QThread):
 
     def _cleanup_failed_install(self):
         '''删除本次安装新产生的全部版本目录以及重试中的目标目录。'''
+
+        self._install_log_cb('开始清理未完成安装目录')
 
         versions_dir = Path(self.mc_dir) / 'versions'
         before = self._before_dirs
@@ -1402,6 +1436,7 @@ class FullInstallWorker(QThread):
                 if marker is not None:
                     if marker.exists():
                         safe_rmtree(target, ignore_errors=True)
+                        self._install_log_cb('已清理未完成目标版本目录')
                         return
             return
         except OSError:

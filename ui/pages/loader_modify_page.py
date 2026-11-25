@@ -1283,7 +1283,7 @@ class LoaderModifyPage(QWidget):
             'QListWidget::item { background:transparent; border:none;'
             ' border-radius:6px; margin:1px 2px; }'
             'QListWidget::item:hover { background:rgba(255,255,255,0.07); }'
-            'QListWidget::item:selected { background:rgba(136,221,221,0.40); }'
+            'QListWidget::item:selected { background:rgba(136,221,221,0.3); border:1px solid rgba(136,221,221,0.5); border-radius:6px; margin:2px 4px; }'
             'QScrollBar:vertical { background:transparent; width:8px; margin:2px; }'
             'QScrollBar::handle:vertical { background:rgba(255,255,255,0.22);'
             ' border-radius:4px; min-height:22px; }'

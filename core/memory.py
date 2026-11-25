@@ -41,17 +41,33 @@ def memory_info_gb():
 
 
 def count_mods(mc_dir, version_id=''):
+    """按启动器实际加载目录统计 Mod，并递归计算 JiJ 嵌套模块。"""
+
     base = Path(mc_dir)
-    candidates = []
+    version_id = str(version_id or '').strip()
+    dirs = []
+    isolated = None
     if version_id:
-        version_dir = base / 'versions' / str(version_id)
-        candidates.append(version_dir / 'mods')
-        # 兼容旧版隔离目录 versions/<id>/game/mods。
-        candidates.append(version_dir / 'game' / 'mods')
-    candidates.append(base / 'mods')
-    counts = []
+        try:
+            from core.config import ConfigManager
+            settings = ConfigManager().get('version_settings', {}) or {}
+            entry = settings.get(version_id, {}) or {}
+            isolated = bool(entry.get('isolated')) if 'isolated' in entry else None
+        except Exception:
+            isolated = None
+    if version_id and isolated is True:
+        version_dir = base / 'versions' / version_id
+        dirs.extend((version_dir / 'mods', version_dir / 'game' / 'mods'))
+    elif version_id and isolated is False:
+        dirs.append(base / 'mods')
+    else:
+        if version_id:
+            version_dir = base / 'versions' / version_id
+            dirs.extend((version_dir / 'mods', version_dir / 'game' / 'mods'))
+        dirs.append(base / 'mods')
     seen = set()
-    for directory in candidates:
+    unique_dirs = []
+    for directory in dirs:
         try:
             key = str(directory.resolve()).lower()
         except OSError:
@@ -59,18 +75,33 @@ def count_mods(mc_dir, version_id=''):
         if key in seen:
             continue
         seen.add(key)
+        if directory.is_dir():
+            unique_dirs.append(directory)
+    if unique_dirs:
         try:
-            if not directory.is_dir():
-                continue
+            from core.mod_scan import scan_mod_ids
+            ids = set()
+            for directory in unique_dirs:
+                ids |= scan_mod_ids(directory)
+            if ids:
+                from core.mod_scan import fabric_system_ids
+                return len(ids | fabric_system_ids(ids))
+        except Exception:
+            pass
+    # 没有可读 Jar 时才用整合包清单/顶层文件数量兜底。
+    counts = []
+    for directory in unique_dirs:
+        try:
             counts.append(sum(
-                1 for path in directory.iterdir()
-                if path.is_file() and path.suffix.lower() in MOD_EXTENSIONS
+                1 for path in directory.rglob('*')
+                if path.is_file()
+                and path.suffix.lower() in MOD_EXTENSIONS
+                and not path.name.lower().endswith(('.jar.disabled', '.litemod.disabled'))
             ))
         except OSError:
             continue
-    # 整合包清单里的 Mod 文件数也参与取最大值，兼容 Mod 不在标准目录的情况。
     if version_id:
-        manifest = base / 'versions' / str(version_id) / 'pmgl_pack.json'
+        manifest = base / 'versions' / version_id / 'pmgl_pack.json'
         try:
             import json as _json
             data = _json.loads(manifest.read_text(encoding='utf-8'))
@@ -87,7 +118,6 @@ def count_mods(mc_dir, version_id=''):
         except (OSError, ValueError, TypeError):
             pass
     return max(counts) if counts else 0
-
 
 
 def safe_memory_limit_mb():

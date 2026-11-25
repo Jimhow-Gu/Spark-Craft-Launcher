@@ -54,7 +54,7 @@ class DownloadManager(QObject):
 
     def start_task(self, task_id, title, steps=None, cancel_callback=None):
         with self._lock:
-            self._tasks[task_id] = {'id': task_id, 'title': title, 'percent': 0.5, 'status': '准备中...', 'speed': '0 B/s', 'remaining': '0', 'success': None, 'message': '', 'done': False, 'created': time.time(), 'steps': [{'text': str(item.get('text', '')) if isinstance(item, dict) else str(item), 'state': item.get('state', 'pending') if isinstance(item, dict) else 'pending', 'percent': float(item.get('percent', 0)) if isinstance(item, dict) else 0.0} for item in steps or []]}
+            self._tasks[task_id] = {'id': task_id, 'title': title, 'percent': 0.0, 'status': '准备中...', 'speed': '0 B/s', 'remaining': '0', 'success': None, 'message': '', 'done': False, 'created': time.time(), 'steps': [{'text': str(item.get('text', '')) if isinstance(item, dict) else str(item), 'state': item.get('state', 'pending') if isinstance(item, dict) else 'pending', 'percent': float(item.get('percent', 0)) if isinstance(item, dict) else 0.0} for item in steps or []]}
             if task_id not in self._order:
                 self._order.append(task_id)
             if cancel_callback is not None:

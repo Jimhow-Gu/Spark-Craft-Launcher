@@ -131,9 +131,10 @@ def parse_news_page(text):
             info_attrs = info_match.group(1) if info_match else ''
             items.append({
                 'kind': 'history',
-                'title': '历史版本更新日志',
+                'title': _attr(info_attrs, 'Title') or '历史版本更新日志',
                 'info': _attr(info_attrs, 'Info') or '点击查看更多更新日志',
-                'url': 'https://zh.minecraft.wiki/w/Java版版本记录',
+                'event_type': _attr(info_attrs, 'EventType'),
+                'event_data': _attr(info_attrs, 'EventData'),
             })
             continue
     return items
@@ -400,7 +401,7 @@ class NewsCard(RoundedFrame):
 
 
 class HistoryCard(QFrame):
-    def __init__(self, data, parent=None):
+    def __init__(self, data, page, parent=None):
         super().__init__(parent)
         self.setStyleSheet(
             'QFrame { background: rgba(30,41,41,0.88);'
@@ -429,7 +430,10 @@ class HistoryCard(QFrame):
             ' padding:5px 14px; } QPushButton:hover { background:rgba(136,221,221,0.24); }'
         )
         button.clicked.connect(
-            lambda: QDesktopServices.openUrl(QUrl(str(data.get('url') or NEWS_SOURCE_URL)))
+            lambda: page.open_archive_list(
+                str(data.get('event_data') or ''),
+                str(data.get('title') or '历史版本更新日志'),
+            )
         )
         layout.addWidget(button)
 
@@ -486,6 +490,8 @@ class NewsPage(QWidget):
         news_layout.setSpacing(0)
         self.stack.addWidget(self.news_view)
         self._detail_pages = {}
+        self._archive_pages = []
+        self._archive_version_pages = []
         self.header_widget = QWidget()
         header = QHBoxLayout(self.header_widget)
         header.setContentsMargins(40, 24, 40, 8)
@@ -715,6 +721,7 @@ class NewsPage(QWidget):
             self.load()
         elif not visible:
             self._release_detail_pages()
+            self._release_archive_pages()
         if visible and hasattr(self, 'back_to_top_btn'):
             QTimer.singleShot(0, self._position_back_to_top)
             QTimer.singleShot(0, self._update_back_to_top)
@@ -732,8 +739,10 @@ class NewsPage(QWidget):
         # 离开主页后详情页不会被再次显示（返回主页会先回到新闻列表），
         # 及时释放大文档和图片，避免长期占用内存。
         self._release_detail_pages()
+        self._release_archive_pages()
 
     def shutdown(self):
+        self._release_archive_pages()
         self._auto_refresh_timer.stop()
         self._stop_back_to_top_scroll()
         for detail in list(self._detail_pages.values()):
@@ -879,22 +888,21 @@ class NewsPage(QWidget):
                 QTimer.singleShot(0, self._scroll_to_top)
         except Exception as exc:
             logger.warning('渲染新闻内容失败', exc_info=True)
-            reason = str(exc).strip() or type(exc).__name__
-            self._on_news_error(f'新闻内容解析失败：{reason}')
+            self._on_news_error('新闻内容解析失败')
 
     def _on_news_error(self, message):
-        # 保留已缓存的新闻卡片，立即提示刷新失败。
+        # 完整异常只写日志；UI 统一显示可重试的失败状态。
         self._last_error_reason = str(message or '未知错误')
+        logger.warning('新闻页面加载失败: %s', self._last_error_reason)
         self._refresh_manual = False
         if not self._cards:
-            self._show_error(message)
+            self._show_error('加载失败，请点击重试')
         if self.isVisible():
             self._show_refresh_error_toast()
 
     def _show_refresh_error_toast(self):
-        reason = str(getattr(self, '_last_error_reason', '') or '未知错误')[:220]
         try:
-            show_toast(f'新闻页面刷新失败！原因：{reason}', 'error', self)
+            show_toast('新闻页面刷新失败，请稍后重试', 'error', self)
         except Exception:
             pass
 
@@ -940,7 +948,7 @@ class NewsPage(QWidget):
                 self.cards_layout.addWidget(NewsSection('历 史 版 本'))
         history = next((item for item in items if item.get('kind') == 'history'), None)
         if history:
-            self.cards_layout.addWidget(HistoryCard(history))
+            self.cards_layout.addWidget(HistoryCard(history, self))
         self.cards_layout.addStretch(1)
         self._cards = items
 
@@ -994,6 +1002,43 @@ class NewsPage(QWidget):
             return None
         return pixmap
 
+    def open_archive_list(self, url, title='', back_page=None):
+        url = str(url or '').strip()
+        if not url:
+            show_toast('历史版本页面地址缺失', 'error', self, 3500)
+            return None
+        from ui.pages.news_archive import ArchiveListPage
+        page = ArchiveListPage(url, title, self.stack)
+        page.back_requested.connect(
+            (lambda p=page, b=back_page: self._return_from_archive(p, b))
+        )
+        page.open_archive.connect(
+            (lambda next_url, next_title, p=page:
+             self.open_archive_list(next_url, next_title, p))
+        )
+        page.open_version.connect(
+            (lambda data, p=page: self.open_archive_version(data, p))
+        )
+        self.stack.addWidget(page)
+        self._archive_pages.append(page)
+        self.stack.setCurrentWidget(page)
+        return page
+
+    def _return_from_archive(self, page, back_page=None):
+        target = back_page or self.news_view
+        if self.stack.indexOf(target) >= 0:
+            self.stack.setCurrentWidget(target)
+
+    def open_archive_version(self, data, back_page):
+        page = VersionDetailPage(dict(data or {}), self.stack)
+        page.back_requested.connect(
+            (lambda p=page, b=back_page: self._return_from_archive(p, b))
+        )
+        self.stack.addWidget(page)
+        self._archive_version_pages.append(page)
+        self.stack.setCurrentWidget(page)
+        return page
+
     def open_version_detail(self, data):
         '''在主页内部切换到版本详情页，不使用独立窗口。'''
 
@@ -1022,10 +1067,27 @@ class NewsPage(QWidget):
         self.stack.setCurrentWidget(page)
 
     def show_news_home(self):
+        self._release_archive_pages()
         self.stack.setCurrentWidget(self.news_view)
         self.load()
         QTimer.singleShot(0, self._position_back_to_top)
         QTimer.singleShot(0, self._update_back_to_top)
+
+    def _release_archive_pages(self):
+        pages = self._archive_pages + self._archive_version_pages
+        self._archive_pages = []
+        self._archive_version_pages = []
+        if not pages:
+            return
+        if self.stack.currentWidget() in pages:
+            self.stack.setCurrentWidget(self.news_view)
+        for page in pages:
+            self.stack.removeWidget(page)
+            try:
+                page.shutdown()
+            except RuntimeError:
+                pass
+            page.deleteLater()
 
     def _release_detail_pages(self):
         if not self._detail_pages:

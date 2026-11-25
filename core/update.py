@@ -1364,6 +1364,48 @@ def _same_executable_path(left, right):
         return False
 
 
+def _terminate_process(pid, allowed_path=None):
+    """结束指定 PID；传入 allowed_path 时必须先确认路径一致。"""
+
+    if not pid or int(pid) <= 0:
+        return False
+    if allowed_path:
+        actual = _process_executable_path(int(pid))
+        if not _same_executable_path(actual, allowed_path):
+            write_update_log(
+                f'kill skipped: pid={pid} path={actual!r} '
+                f'allowed={allowed_path!r}'
+            )
+            return False
+    if os.name == 'nt':
+        try:
+            subprocess.run(
+                ['taskkill', '/F', '/PID', str(int(pid))],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+                timeout=10,
+            )
+            return True
+        except Exception as exc:
+            write_update_log(f'kill failed: pid={pid}: {exc}')
+    return False
+
+
+def _wait_or_kill(pid, timeout_ms, label, allowed_path=None):
+    if not pid or int(pid) <= 0:
+        return True
+    if _wait_pid_exit(int(pid), timeout_ms):
+        write_update_log(f'{label} pid={pid} exited')
+        return True
+    write_update_log(f'{label} pid={pid} wait timeout; terminating')
+    _terminate_process(int(pid), allowed_path)
+    if _wait_pid_exit(int(pid), 5000):
+        write_update_log(f'{label} pid={pid} terminated')
+        return True
+    write_update_log(f'{label} pid={pid} still alive after terminate')
+    return False
+
+
 def launch_update_helper(asset_path, version):
     """由旧进程拉起下载到的新 exe，让新 exe 作为 updater。
 
@@ -1438,11 +1480,22 @@ def run_update_helper(argv):
         f'old_pid={old_pid} parent_pid={parent_pid}'
     )
     try:
-        if not _wait_pid_exit(old_pid, 45000):
-            raise DownloadError('等待旧启动器退出超时')
+        if not _wait_or_kill(old_pid, 45000, 'old launcher', target):
+            raise DownloadError('等待旧启动器退出超时，且无法结束旧进程')
         if parent_pid and parent_pid != old_pid:
-            if not _wait_pid_exit(parent_pid, 15000):
-                raise DownloadError('等待 PyInstaller 父进程退出超时')
+            parent_path = _process_executable_path(parent_pid)
+            if _same_executable_path(parent_path, target):
+                if not _wait_or_kill(
+                    parent_pid, 15000, 'launcher parent', target
+                ):
+                    raise DownloadError(
+                        '等待 PyInstaller 父进程退出超时，且无法结束父进程'
+                    )
+            else:
+                write_update_log(
+                    f'update helper: skip parent kill pid={parent_pid} '
+                    f'path={parent_path!r}'
+                )
         if source != target:
             temp = target.with_name(target.name + '.new')
             last_error = None
@@ -1466,6 +1519,7 @@ def run_update_helper(argv):
             if not replaced:
                 raise DownloadError(f'替换启动器失败：{last_error}')
         _updated_update_marker(version)
+        write_update_log('update helper: replacement succeeded')
         try:
             _pending_update_path().unlink(missing_ok=True)
         except OSError:
@@ -1683,6 +1737,31 @@ def prepare_update(asset_path, version):
     return launch_update_helper(asset_path, version)
 
 
+def consume_failed_update_notice():
+    """读取并清除更新失败回执，供启动器明确提示用户。"""
+
+    marker = _update_marker_path(FAILED_MARKER)
+    if not marker.is_file():
+        return ''
+    message = ''
+    try:
+        data = json.loads(marker.read_text(encoding='utf-8-sig'))
+        reason = str(data.get('reason') or '').strip()
+        version = str(data.get('version') or '').strip()
+        message = '自动更新失败'
+        if version:
+            message += f'（{version}）'
+        if reason:
+            message += f'：{reason}'
+    except (OSError, ValueError, TypeError):
+        message = '自动更新失败，请手动下载最新版本'
+    try:
+        marker.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return message
+
+
 def consume_updated_marker():
     '''只消费安装脚本写下的成功回执；pending 是“正在安装”而非成功。'''
 
@@ -1716,5 +1795,5 @@ __all__ = [
     'pending_update_exists', 'clear_launcher_caches',
     'fetch_latest_release', 'is_newer', 'is_onedir_install', 'is_unpublished_build',
     'prepare_update', 'update_kind', 'write_downloaded_update', 'write_update_log',
-    'consume_manual_update_notice',
+    'consume_failed_update_notice', 'consume_manual_update_notice',
 ]

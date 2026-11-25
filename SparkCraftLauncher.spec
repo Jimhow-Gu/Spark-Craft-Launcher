@@ -85,6 +85,10 @@ _drop_names = {
     "qt6opengl.dll",
     # 触摸屏插件未使用。
     "qtuiotouchplugin.dll",
+    # 统一使用 Windows Media Foundation；普通内部构建也不得带入 FFmpeg。
+    "ffmpegmediaplugin.dll",
+    "avcodec-61.dll", "avformat-61.dll", "avutil-59.dll",
+    "swscale-8.dll", "swresample-5.dll",
 }
 
 
@@ -106,34 +110,7 @@ a.datas = [
     and str(entry[0]).replace(chr(92), "/").lower() not in _drop_datas
 ]
 
-# PyInstaller 遇到带 CFG 的 Qt DLL 会自动跳过 UPX；用户要求 Qt DLL 也压缩，
-# 这里先把这些 DLL 复制到临时目录并用 UPX --force 压缩，再交给打包器。
-_force_upx_names = {
-    # Qt 核心 DLL 带 CFG，PyInstaller 默认跳过；只强制压缩这些已验证可用的核心库。
-    # 平台/多媒体插件（qwindows、ffmpegmediaplugin 等）压缩后会报
-    # “no Qt platform plugin could be initialized”，无论是否保留 load config 都不能压。
-    "qt6gui.dll", "qt6widgets.dll", "qt6multimedia.dll",
-    "qt6svg.dll", "qt6opengl.dll",
-}
-_upx = shutil.which("upx")
-if _upx:
-    _upx_cache = Path(tempfile.mkdtemp(prefix="scl-upx-"))
-    for _index, (_dest, _src, _typ) in enumerate(list(a.binaries)):
-        _base = os.path.basename(str(_src)).lower()
-        if _base not in _force_upx_names:
-            continue
-        _target = _upx_cache / _base
-        try:
-            shutil.copy2(_src, _target)
-            _result = subprocess.run(
-                [_upx, "--force", "--lzma", "--strip-loadconf", "-q", str(_target)],
-                capture_output=True,
-                text=True,
-            )
-            if _result.returncode == 0:
-                a.binaries[_index] = (_dest, str(_target), _typ)
-        except OSError:
-            continue
+# 不启用 UPX；保持 Qt/运行时 DLL 原样，避免平台/多媒体插件初始化失败。
 
 pyz = PYZ(a.pure)
 
@@ -148,7 +125,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     # 用户要求压缩 Qt/FFmpeg 等 DLL；Python/VC 运行时保留原样以提高稳定性。
-    upx=True,
+    upx=False,
     upx_exclude=[
         "python310.dll", "python3.dll",
         "VCRUNTIME140.dll", "VCRUNTIME140_1.dll", "MSVCP140.dll",

@@ -20,6 +20,7 @@ import re
 import shutil
 import threading
 import time
+import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -697,6 +698,21 @@ class ModpackImportWorker(QThread):
             self._download_files(info, pack_files, alias_dir)
             self._extract_overrides(info, alias_dir)
             icon_name = self._extract_pack_icon(info, alias_dir)
+            installed_ids = set()
+            try:
+                from core.mod_scan import scan_mod_ids
+                installed_ids = scan_mod_ids(alias_dir / 'mods')
+                pack_jar_count = sum(
+                    1 for record in pack_files
+                    if str(record.get('path') or '').lower().startswith('mods/')
+                    and str(record.get('path') or '').lower().endswith(('.jar', '.litemod'))
+                )
+                self.log_message.emit(
+                    f'整合包 Mod 校验: 清单 {pack_jar_count} 个文件，'
+                    f'识别 {len(installed_ids)} 个 modid'
+                )
+            except Exception as exc:
+                self.log_message.emit(f'整合包 Mod 校验失败: {exc}')
             meta = {
                 'format': info.kind,
                 'name': info.name,
@@ -709,8 +725,13 @@ class ModpackImportWorker(QThread):
                 'icon': icon_name,
                 'imported_at': time.strftime('%Y-%m-%d %H:%M:%S'),
                 'files': pack_files,
+                'display_name': info.name or name,
+                'launch_name': info.name or name,
+                'mod_count': len(installed_ids),
                 'install_mode': 'existing' if self.existing_version else 'new',
             }
+            if self.existing_version and not self._backup_existing_file(alias_dir / 'pmgl_pack.json'):
+                raise DownloadError('无法备份现有版本元数据，已中止安装')
             with open(alias_dir / 'pmgl_pack.json', 'w', encoding='utf-8') as fh:
                 json.dump(meta, fh, ensure_ascii=False, indent=2)
             settings = self._config.get('version_settings', {})
@@ -910,6 +931,22 @@ class ModpackImportWorker(QThread):
             })
         return records
 
+    def _backup_existing_file(self, dest):
+        dest = Path(dest)
+        if not dest.is_file():
+            return True
+        try:
+            backup = dest.with_name(
+                f'{dest.name}.bak-{time.strftime("%Y%m%d-%H%M%S")}'
+                f'-{uuid.uuid4().hex[:8]}'
+            )
+            shutil.copy2(dest, backup)
+            self.log_message.emit(f'已备份现有文件: {dest.name} -> {backup.name}')
+            return True
+        except OSError as exc:
+            self.log_message.emit(f'备份现有文件失败: {dest.name} ({exc})')
+            return False
+
     def _download_files(self, info, records, alias_dir):
         if not records:
             return
@@ -939,6 +976,12 @@ class ModpackImportWorker(QThread):
                 dest = _safe_join(base, record['path'])
             except DownloadError:
                 continue
+            if (
+                self.existing_version
+                and str(base) != str(self.mc_dir)
+                and not self._backup_existing_file(dest)
+            ):
+                raise DownloadError(f'无法备份现有文件，已中止安装: {dest}')
             remotes.append(RemoteFile(
                 label=f'整合包文件 {record["path"]}',
                 dest=dest, urls=record['urls'], sha1=record['sha1'] or '',
@@ -1059,6 +1102,12 @@ class ModpackImportWorker(QThread):
                     continue
                 base = self.mc_dir if rel.lower().startswith(('libraries/', 'assets/')) else alias_dir
                 dest = _safe_join(base, rel)
+                if (
+                    self.existing_version
+                    and str(base) != str(self.mc_dir)
+                    and not self._backup_existing_file(dest)
+                ):
+                    raise DownloadError(f'无法备份现有文件，已中止安装: {dest}')
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(actual[name]) as src, open(dest, 'wb') as dst:
                     while True:
@@ -1096,6 +1145,8 @@ class ModpackImportWorker(QThread):
                             continue
                         if not self._is_image_bytes(data):
                             continue
+                        if self.existing_version and not self._backup_existing_file(alias_dir / 'icon.png'):
+                            raise DownloadError('无法备份现有图标，已中止安装')
                         (alias_dir / 'icon.png').write_bytes(data)
                         self.log_message.emit(f'已提取整合包图标: {name}')
                         return 'icon.png'

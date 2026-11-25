@@ -92,7 +92,11 @@ class RepairEngine:
 
     def _fetch_version_json(self, version_id, dest):
         self.status(f'正在获取版本 {version_id} 的元数据...')
-        data = fetch_version_json(version_id, http=self.http, source=self._file_source)
+        self.phase('json', 5)
+        data = fetch_version_json(
+            version_id, http=self.http, source=self._file_source,
+            log_cb=self.log,
+        )
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_suffix('.json.tmp')
         with open(tmp, 'w', encoding='utf-8') as fh:

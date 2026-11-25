@@ -16,6 +16,7 @@ from ui.widgets.mc_head import render_head
 from PySide6.QtCore import (Qt, Signal, QUrl, QThread, QTimer, QSize, QObject, QEasingCurve, QEvent, QPropertyAnimation, QRectF, QPoint, Property)
 from PySide6.QtGui import (QFont, QPixmap, QPainter, QColor, QPainterPath, QImage, QAction, QIcon, QPalette, QPen)
 from PySide6.QtNetwork import (QNetworkAccessManager, QNetworkReply, QNetworkRequest)
+from ui.widgets.rounded_combo import RoundedComboBox
 from core.app_font import ui_font
 from core.config import ConfigManager
 from core.secret import unprotect_secret
@@ -100,7 +101,7 @@ def _animate_combo_list(combo):
     animation.start()
 
 
-class AvatarComboBox(QComboBox):
+class AvatarComboBox(RoundedComboBox):
     '''关闭状态下手动绘制当前头像，避免 QComboBox 按文字行高裁掉头像下半部分。'''
 
     def __init__(self, parent=None):
@@ -225,7 +226,7 @@ class AutoSelectLineEdit(QLineEdit):
             QTimer.singleShot(0, self.selectAll)
 
 
-class HistoryComboBox(QComboBox):
+class HistoryComboBox(RoundedComboBox):
     '''可编辑历史列表：右侧绘制箭头，展开时旋转。'''
 
     def __init__(self, parent=None):
@@ -578,7 +579,7 @@ class AccountSwitchDialog(FramelessDialog):
         self.list = QListWidget()
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.list.setTextElideMode(Qt.ElideRight)
-        self.list.setStyleSheet('\n            QListWidget { background: rgba(30,41,41,0.62); border:1px solid rgba(255,255,255,0.16); border-radius:8px; }\n            QListWidget::item { padding:10px 12px; color:#ddd; border-bottom:1px solid rgba(255,255,255,0.05); }\n            QListWidget::item:selected { background: rgba(136,221,221,0.35); }\n        ')
+        self.list.setStyleSheet('\n            QListWidget { background: rgba(30,41,41,0.62); border:1px solid rgba(255,255,255,0.16); border-radius:8px; }\n            QListWidget::item { padding:10px 12px; color:#ddd; border-bottom:1px solid rgba(255,255,255,0.05); }\n            QListWidget::item:selected { background: rgba(136,221,221,0.3); border:1px solid rgba(136,221,221,0.5); border-radius:6px; margin:2px 4px; }\n        ')
         type_labels = {'microsoft': '正版账号', 'thirdparty': '第三方', 'offline': '离线'}
         current_row = 0
         for index, account in enumerate(self.accounts):
@@ -820,7 +821,7 @@ class CapeDialog(FramelessDialog):
         self.list = QListWidget()
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.list.setTextElideMode(Qt.ElideRight)
-        self.list.setStyleSheet('\n            QListWidget { background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.1);\n                          border-radius:8px; outline:none; }\n            QListWidget::item { padding:7px 12px; color:#ddd; }\n            QListWidget::item:selected { background:rgba(136,221,221,0.35); }\n        ')
+        self.list.setStyleSheet('\n            QListWidget { background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.1);\n                          border-radius:8px; outline:none; }\n            QListWidget::item { padding:7px 12px; color:#ddd; }\n            QListWidget::item:selected { background:rgba(136,221,221,0.3); border:1px solid rgba(136,221,221,0.5); border-radius:6px; margin:2px 4px; }\n        ')
         none_item = QListWidgetItem('○  无披风')
         none_item.setData(Qt.UserRole, {'id': '', 'name': '无披风'})
         self.list.addItem(none_item)
@@ -1151,7 +1152,7 @@ class AccountPage(QWidget):
         self.tp_inline_email = HistoryComboBox()
         self.tp_inline_email.setEditable(True)
         self.tp_inline_email.setMinimumHeight(34)
-        self.tp_inline_email.setStyleSheet(f'QComboBox {{ {inline_input_style} }}QComboBox QAbstractItemView {{ background:#24262c; color:#f0f0f0; selection-background-color:#88DDDD; border:1px solid rgba(255,255,255,0.14); }}')
+        self.tp_inline_email.setStyleSheet(f'QComboBox {{ {inline_input_style} }}')
         tp_email_edit = AutoSelectLineEdit(self.tp_inline_email)
         tp_email_edit.setStyleSheet(
             'background:transparent; border:none; color:#f0f0f0; padding:1px;'
@@ -1262,10 +1263,8 @@ class AccountPage(QWidget):
             ' border:1px solid rgba(255,255,255,0.16); border-radius:6px;'
             ' color:#f0f0f0; padding:5px 10px; font-size:13px; }'
             'QComboBox::drop-down { border:none; width:22px; }'
-            'QComboBox QAbstractItemView { background:#24262c; color:#f0f0f0;'
-            ' border:1px solid rgba(255,255,255,0.16);'
-            ' selection-background-color:#88DDDD; }'
-            'QComboBox QAbstractItemView::item { min-height:28px; padding:3px 8px; }'
+            ''
+            ''
         )
         offline_edit = AutoSelectLineEdit(self.offline_name_combo)
         offline_edit.setStyleSheet(
@@ -1320,7 +1319,7 @@ class AccountPage(QWidget):
         self.ms_accounts_combo.setMinimumWidth(210)
         self.ms_accounts_combo.setMaximumWidth(360)
         self.ms_accounts_combo.setMaxVisibleItems(10)
-        self.ms_accounts_combo.setStyleSheet('\n            QComboBox {\n                background: rgba(30,41,41,0.62); color:#f0f0f0;\n                border:1px solid rgba(255,255,255,0.16); border-radius:8px;\n                padding:5px 10px; font-size:13px;\n            }\n            QComboBox:hover { border-color: rgba(136,221,221,0.55); }\n            QComboBox::drop-down { border:none; width:22px; }\n            QComboBox QAbstractItemView {\n                background:#24262c; color:#f0f0f0; outline:none;\n                border:1px solid rgba(255,255,255,0.16);\n                selection-background-color:#88DDDD;\n            }\n            QComboBox QAbstractItemView::item { min-height:32px; padding:4px 8px; }\n        ')
+        self.ms_accounts_combo.setStyleSheet('\n            QComboBox {\n                background: rgba(30,41,41,0.62); color:#f0f0f0;\n                border:1px solid rgba(255,255,255,0.16); border-radius:8px;\n                padding:5px 10px; font-size:13px;\n            }\n            QComboBox:hover { border-color: rgba(136,221,221,0.55); }\n            QComboBox::drop-down { border:none; width:22px; }\n            \n            \n        ')
         self.ms_accounts_combo.setFixedHeight(40)
         ms_accounts_layout.addWidget(self.ms_accounts_combo, 1)
         self.ms_saved_login_btn = QPushButton('登录')
@@ -1403,9 +1402,7 @@ class AccountPage(QWidget):
             ' color:#f0f0f0; padding:5px 9px; font-size:13px; }'
             'QComboBox:focus { border-color:#90D9D9; }'
             'QComboBox::drop-down { border:none; width:22px; }'
-            'QComboBox QAbstractItemView { background:#24262c; color:#f0f0f0;'
-            ' border:1px solid rgba(255,255,255,0.16);'
-            ' selection-background-color:#88DDDD; }'
+            ''
         )
         # 服务器设置表单保持一列标签、一列输入框，整体居中。
         self.tp_server_form = QWidget()
@@ -1427,7 +1424,7 @@ class AccountPage(QWidget):
             form_layout.addWidget(widget, row, 1)
             return widget
 
-        self.tp_method_combo = QComboBox()
+        self.tp_method_combo = RoundedComboBox()
         self.tp_method_combo.addItem('LittleSkin 登录', 'littleskin')
         self.tp_method_combo.addItem('自定义 Authlib Injector', 'custom')
         self.tp_method_combo.setStyleSheet(server_input_style)

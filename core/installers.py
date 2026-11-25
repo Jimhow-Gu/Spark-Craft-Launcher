@@ -159,7 +159,20 @@ def _run_installer(java_path, installer, args, mc_dir, *, status_cb, log_path, m
     log_path.parent.mkdir(parents=True, exist_ok=True)
     status_cb('正在运行安装器（下载依赖可能需要几分钟）...')
     with open(log_path, 'w', encoding='utf-8', errors='replace') as log_fh:
-        proc = subprocess.Popen(cmd, stdout=log_fh, stderr=subprocess.STDOUT, cwd=str(log_path.parent), creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
+        log_fh.write(
+            f'[{time.strftime("%Y-%m-%d %H:%M:%S")}] installer={installer}'
+            + chr(10) + f'command={cmd}' + chr(10)
+        )
+        log_fh.flush()
+        try:
+            proc = subprocess.Popen(cmd, stdout=log_fh, stderr=subprocess.STDOUT, cwd=str(log_path.parent), creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
+        except Exception as exc:
+            log_fh.write(
+                f'installer start failed: {type(exc).__name__}: {exc}'
+                + chr(10)
+            )
+            log_fh.flush()
+            raise
         start = time.time()
         while proc.poll() is None:
             if cancel():
@@ -173,6 +186,8 @@ def _run_installer(java_path, installer, args, mc_dir, *, status_cb, log_path, m
                 except Exception:
                     raise DownloadError('安装器运行超时')
             time.sleep(0.3)
+        log_fh.write(f'installer exit code={proc.returncode}' + chr(10))
+        log_fh.flush()
         return proc.returncode
     return proc.returncode
 

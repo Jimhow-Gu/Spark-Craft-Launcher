@@ -20,6 +20,10 @@ from core.launch import LaunchManager
 from core.net import HttpClient, hash_file
 from core.download_manager import DownloadManager
 from core.mods import download_candidates
+from core.mod_scan import (
+    fabric_system_ids, fabric_system_infos, has_fabric_modules,
+    iter_mod_files, nested_mod_infos, scan_mod_ids,
+)
 from core.mod_translations import bilingual_html, bilingual_plain, chinese_only, english_only, translation_db
 from core.paths import move_to_recycle_bin
 from ui.widgets.back_button import BackButton
@@ -217,6 +221,7 @@ def scan_mod_file(path):
 
 class ModScanWorker(QThread):
     done = Signal(list)
+    summary = Signal(int)
     progress = Signal(int)
     error = Signal(str)
     def __init__(self, mods_dir):
@@ -231,17 +236,9 @@ class ModScanWorker(QThread):
         translation_db.ensure_loaded(wait=3)
         result = []
         try:
-            files = []
-            if self.mods_dir.exists():
-                for path in sorted(self.mods_dir.iterdir(), key=(lambda p: p.name.lower())):
-                    if self._cancelled:
-                        return
-                    if not path.is_file():
-                        continue
-                    lower = path.name.lower()
-                    if not (lower.endswith('.jar') or lower.endswith('.jar.disabled')):
-                        continue
-                    files.append(path)
+            files = iter_mod_files(self.mods_dir, include_disabled=True)
+            if self._cancelled:
+                return
             total = max(1, len(files))
             self.progress.emit(0)
             for index, path in enumerate(files):
@@ -249,11 +246,22 @@ class ModScanWorker(QThread):
                     return
                 result.append(scan_mod_file(path))
                 self.progress.emit(int((index + 1) * 100 / total))
+            result.extend(nested_mod_infos(self.mods_dir))
+            ids = scan_mod_ids(self.mods_dir)
+            if has_fabric_modules(ids):
+                result.extend(fabric_system_infos())
         except Exception as exc:
             if not self._cancelled:
                 self.error.emit(str(exc))
             return
         if not self._cancelled:
+            try:
+                ids = scan_mod_ids(self.mods_dir)
+                self.summary.emit(
+                    len(ids | fabric_system_ids(ids))
+                )
+            except Exception:
+                pass
             self.done.emit(result)
 
 
@@ -447,8 +455,14 @@ class ModRowWidget(QWidget):
         )
         text.addWidget(title)
         tags = info.get('loader') or 'Mod'
+        if info.get('system'):
+            tags = f'系统模块 · {tags}'
+        elif info.get('nested'):
+            tags = f'Jar-in-Jar · {tags}'
         desc = info.get('description') or ''
         detail = f'[{tags}]  {info.get("filename", "")}'
+        if info.get('nested') or info.get('system'):
+            detail += '    （只读，不能单独禁用/删除）'
         if desc:
             detail += f'：{desc[:160]}'
         if info.get('update_available'):
@@ -528,6 +542,7 @@ class ModManagerPage(QWidget):
         self.launch_mgr = LaunchManager()
         self.mods_dir = Path(mods_dir) if mods_dir else self.launch_mgr.get_mods_dir(version_id)
         self._all_mods = []
+        self._total_mod_count = 0
         self._filter = 'all'
         self._scan_worker = None
         settings = self.launch_mgr.get_version_settings(version_id) or {}
@@ -613,7 +628,7 @@ class ModManagerPage(QWidget):
         self.list.setAcceptDrops(False)
         self.list.viewport().setAcceptDrops(False)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.list.setStyleSheet('\n            QListWidget { background: rgba(30,41,41,0.62);\n                          border:1px solid rgba(255,255,255,0.16); border-radius:8px; outline:none; }\n            QListWidget::item { border-bottom:1px solid rgba(255,255,255,0.06); }\n            QListWidget::item:selected { background: rgba(136,221,221,0.3); }\n            QListWidget::item:hover { background: rgba(255,255,255,0.06); }\n        ')
+        self.list.setStyleSheet('\n            QListWidget { background: rgba(30,41,41,0.62);\n                          border:1px solid rgba(255,255,255,0.16); border-radius:8px; outline:none; }\n            QListWidget::item { border-bottom:1px solid rgba(255,255,255,0.06); }\n            QListWidget::item:selected { background: rgba(136,221,221,0.28); border:1px solid rgba(136,221,221,0.5); border-radius:6px; margin:2px 4px; }\n            QListWidget::item:hover { background: rgba(255,255,255,0.06); }\n        ')
         self.list.itemSelectionChanged.connect(self._on_selection_changed)
         layout.addWidget(self.list, 1)
         self.loading_overlay = LoadingOverlay(self.list.viewport())
@@ -807,6 +822,7 @@ class ModManagerPage(QWidget):
             self._scan_worker = None
         worker = ModScanWorker(self.mods_dir)
         worker.done.connect(self._on_scanned)
+        worker.summary.connect(self._on_mod_summary)
         worker.progress.connect(self.loading_overlay.set_progress)
         worker.error.connect(self._on_scan_error)
         worker.finished.connect((lambda w=worker: self._on_scan_finished(w)))
@@ -842,6 +858,15 @@ class ModManagerPage(QWidget):
                 pass
             setattr(self, attr, None)
 
+    def _on_mod_summary(self, total):
+        self._total_mod_count = max(0, int(total or 0))
+        self.all_tab.setText(f'全部 ({self._total_mod_count or len(self._all_mods)})')
+        if self._filter == 'all':
+            self.status_label.setText(
+                f'共 {self._total_mod_count or len(self._all_mods)} 个 Mod'
+                f'（{len(self._all_mods)} 个文件，含 Jar-in-Jar）'
+            )
+
     def _on_scanned(self, mods):
         self.loading_overlay.finish()
         self._all_mods = mods
@@ -849,11 +874,14 @@ class ModManagerPage(QWidget):
             info['update_available'] = False
             info.pop('latest_file', None)
             info.pop('latest_version', None)
-        self.all_tab.setText(f'全部 ({len(mods)})')
+        total = self._total_mod_count or len(mods)
+        self.all_tab.setText(f'全部 ({total})')
         self.update_tab.setText('可更新 (0)')
         disabled_count = sum((1 for m in mods if not m.get('enabled', True)))
         self.disabled_tab.setText(f'已禁用 ({disabled_count})')
-        self.status_label.setText(f'共 {len(mods)} 个 Mod：{self.mods_dir}')
+        self.status_label.setText(
+            f'共 {total} 个 Mod（{len(mods)} 个文件）：{self.mods_dir}'
+        )
         self._populate()
         if self._mod_update_disabled:
             self.status_label.setText('当前版本已开启「禁止更新Mod」')
@@ -907,7 +935,10 @@ class ModManagerPage(QWidget):
             worker.cancel()
         mc_version, loader = self._version_context()
         self.status_label.setText('正在检查 Mod 更新...')
-        worker = ModUpdateWorker(self._all_mods, mc_version, loader)
+        worker = ModUpdateWorker(
+            [m for m in self._all_mods if not m.get('nested')],
+            mc_version, loader,
+        )
         worker.status.connect(self.status_label.setText)
         worker.done.connect((lambda results, w=worker: self._on_updates_checked(results, w)))
         worker.finished.connect((lambda w=worker: self._on_update_check_finished(w)))
@@ -980,9 +1011,15 @@ class ModManagerPage(QWidget):
                     except Exception:
                         item.setText(f'元数据损坏：{info.get("filename") or info.get("name") or "未知 Mod"}')
                         item.setForeground(QBrush(QColor('#ff9c9c')))
-                    if str(info.get('path')) in selected_paths:
+                    if (
+                        not info.get('nested')
+                        and str(info.get('path')) in selected_paths
+                    ):
                         item.setSelected(True)
-                self.status_label.setText(f'共 {len(mods)} 个 Mod：{self.mods_dir}')
+                total = self._total_mod_count or len(mods)
+                self.status_label.setText(
+                    f'共 {total} 个 Mod（{len(mods)} 个文件）：{self.mods_dir}'
+                )
         finally:
             self.list.blockSignals(False)
             self.list.verticalScrollBar().setValue(scroll_pos)
@@ -998,16 +1035,23 @@ class ModManagerPage(QWidget):
 
     def _on_selection_changed(self):
         selected = self._selected()
+        operable = [m for m in selected if not m.get('nested')]
         count = len(selected)
-        self.selected_label.setText(f'已选择 {count} 个文件')
+        self.selected_label.setText(
+            f'已选择 {count} 个 Mod'
+            + (f'（{len(operable)} 个可操作文件）' if len(operable) != count else '')
+        )
         self.action_bar.setVisible(count > 0)
-        self.enable_btn.setEnabled(any((not m.get('enabled') for m in selected)))
-        self.disable_btn.setEnabled(any((m.get('enabled') for m in selected)))
-        self.update_btn.setEnabled(bool(selected) and not self._mod_update_disabled and any((m.get('update_available') for m in selected)))
-        self.delete_btn.setEnabled(bool(selected))
+        self.enable_btn.setEnabled(any((not m.get('enabled') for m in operable)))
+        self.disable_btn.setEnabled(any((m.get('enabled') for m in operable)))
+        self.update_btn.setEnabled(
+            bool(operable) and not self._mod_update_disabled
+            and any((m.get('update_available') for m in operable))
+        )
+        self.delete_btn.setEnabled(bool(operable))
 
     def _set_enabled(self, enabled):
-        selected = self._selected()
+        selected = [m for m in self._selected() if not m.get('nested')]
         changed = 0
         errors = []
         for info in selected:
@@ -1037,7 +1081,7 @@ class ModManagerPage(QWidget):
         self.refresh()
 
     def _delete_selected(self):
-        selected = self._selected()
+        selected = [m for m in self._selected() if not m.get('nested')]
         if not selected:
             return
         reply = ask_dark_question(self, '删除 Mod', f'确定将选中的 {len(selected)} 个 Mod 文件移到回收站吗？', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
@@ -1067,7 +1111,7 @@ class ModManagerPage(QWidget):
         if self._mod_update_disabled:
             self._notify('当前版本已开启「禁止更新Mod」。如需更新，请在游戏设置的「高级选项」中取消勾选。', 'info', '更新已禁用')
             return
-        selected = self._selected()
+        selected = [m for m in self._selected() if not m.get('nested')]
         if not selected:
             return
         updatable = [info for info in selected if info.get('update_available') if info.get('latest_file')]

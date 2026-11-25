@@ -21,6 +21,7 @@ from PySide6.QtGui import (
     QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap,
 )
 from PySide6.QtWidgets import (QButtonGroup, QComboBox, QDialog, QFileDialog, QFrame, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QProgressBar, QPushButton, QScrollArea, QStackedWidget, QVBoxLayout, QWidget)
+from ui.widgets.rounded_combo import RoundedComboBox
 from core.app_font import ui_font
 from ui.widgets.frameless_dialog import FramelessInputDialog
 from core.config import ConfigManager
@@ -29,11 +30,12 @@ from core.launch import LaunchManager
 from core.modpack import (ModpackImportWorker, inspect_modpack, sanitize_version_name, is_windows_reserved_name)
 from core.version import (FullInstallWorker, VersionManager, VersionDeleteWorker, VersionResidualCleanupWorker, cleanup_deleted_version, detect_version_loader)
 from core.version_sources import (
-    MIN_VERSION_COUNT, V2_PATH, manifest_candidates, merge_manifests,
+    MIN_VERSION_COUNT, PISTON, V1_PATH, V2_PATH, merge_manifests,
 )
 from core.net import HttpClient, is_network_error_text, network_available
 from core.paths import scl_dir
 from ui.widgets.toast import notify_network_failure
+from ui.version_meta import display_name as version_display_name
 from ui.widgets.loading_overlay import LoadingOverlay
 from ui.widgets.smooth_progress import SmoothProgressBar
 from .mod_browser_page import ModBrowserPage
@@ -80,21 +82,49 @@ class _SpeedProbeWorker(QThread):
 
 class LoadVersionsWorker(QThread):
     loaded = Signal(list)
+    cached = Signal(list)
     progress = Signal(int)
-    def __init__(self, mirror_urls, version_type):
+    status = Signal(str)
+    def __init__(self, mirror_urls, version_type, prefer='official'):
         super().__init__()
         if isinstance(mirror_urls, str):
             mirror_urls = [mirror_urls]
         self.mirror_urls = [u for u in mirror_urls or [] if u]
         self.version_type = version_type
+        self.prefer = (
+            'bmclapi' if str(prefer or '').lower() in ('bmclapi', 'mirror')
+            else 'official'
+        )
         self._cancelled = False
 
     def cancel(self):
         self._cancelled = True
 
-    @staticmethod
-    def _cache_path():
-        return scl_dir() / 'cache' / 'version_manifest.json'
+    def _cache_path(self):
+        suffix = 'mirror' if self.prefer == 'bmclapi' else 'official'
+        return scl_dir() / 'cache' / f'version_manifest_{suffix}.json'
+
+    def _manifest_urls(self, path):
+        """按设置源生成清单地址；“仅官方源”不再偷偷请求镜像。"""
+
+        bases = list(self.mirror_urls or [])
+        urls = []
+        for raw in bases:
+            base = str(raw or '').strip().rstrip('/')
+            if not base:
+                continue
+            if base.lower().endswith('.json'):
+                if path == V1_PATH:
+                    urls.append(base)
+                continue
+            urls.append(base + path)
+        if any(
+            'piston-meta.mojang.com' in base
+            or 'launchermeta.mojang.com' in base
+            for base in (str(item or '').lower() for item in bases)
+        ):
+            urls.insert(0, PISTON + path)
+        return list(dict.fromkeys(url for url in urls if url))
 
     def _load_cached_manifest(self):
         try:
@@ -134,7 +164,10 @@ class LoadVersionsWorker(QThread):
                 if isinstance(data, dict) and data.get('versions'):
                     return url, data
             except Exception:
-                pass
+                try:
+                    self.status.emit('版本源超时，正在切换...')
+                except Exception:
+                    pass
             finally:
                 http.close()
             return url, None
@@ -159,30 +192,25 @@ class LoadVersionsWorker(QThread):
                 pool.shutdown(wait=False, cancel_futures=True)
             return manifests, sources
 
-        v1_urls = manifest_candidates(
-            extra=self.mirror_urls, include_v2=False
-        )
+        v1_urls = self._manifest_urls(V1_PATH)
         manifests, sources = fetch_group(v1_urls)
         merged = (
             merge_manifests(
-                manifests, sources, min_versions=MIN_VERSION_COUNT
+                manifests, sources, min_versions=MIN_VERSION_COUNT,
+                prefer=self.prefer,
             )
             if manifests else {}
         )
         if len(merged.get('versions') or []) < MIN_VERSION_COUNT:
             # 只有主源全部失败或数量异常时才尝试 v2，避免日常重复请求。
-            v2_urls = [
-                url for url in manifest_candidates(
-                    extra=self.mirror_urls, include_v2=True
-                )
-                if url.endswith(V2_PATH)
-            ]
+            v2_urls = self._manifest_urls(V2_PATH)
             fallback_manifests, fallback_sources = fetch_group(v2_urls)
             if fallback_manifests:
                 merged = merge_manifests(
                     manifests + fallback_manifests,
                     sources + fallback_sources,
                     min_versions=MIN_VERSION_COUNT,
+                    prefer=self.prefer,
                 ) or merged
         if merged.get('versions'):
             self._save_cached_manifest(merged)
@@ -192,6 +220,15 @@ class LoadVersionsWorker(QThread):
     def run(self):
         versions = []
         try:
+            cached = self._load_cached_manifest()
+            if cached and not self._cancelled:
+                cached_versions = [
+                    v for v in cached.get('versions', [])
+                    if self.version_type == 'all'
+                    or v.get('type') == self.version_type
+                ]
+                if cached_versions:
+                    self.cached.emit(cached_versions)
             self.progress.emit(5)
             manifest = self._fetch_manifest()
             if self._cancelled:
@@ -467,11 +504,11 @@ class VersionPage(QWidget):
         header = QHBoxLayout()
         header.addWidget(title)
         header.addStretch(1)
-        self.game_dir_combo = QComboBox()
+        self.game_dir_combo = RoundedComboBox()
         self.game_dir_combo.setMinimumWidth(260)
         self.game_dir_combo.setMaximumWidth(430)
         self.game_dir_combo.setToolTip('选择游戏文件夹，切换后自动加载其中的 MC 版本')
-        self.game_dir_combo.setStyleSheet('\n            QComboBox { background:rgba(255,255,255,0.06); color:#f0f0f0;\n                        border:1px solid rgba(255,255,255,0.12); border-radius:7px;\n                        padding:5px 10px; }\n            QComboBox:hover { border-color:rgba(255,255,255,0.25); }\n            QComboBox QAbstractItemView { background:#2b2b2b; color:#f0f0f0;\n                        selection-background-color:#88DDDD; }\n        ')
+        self.game_dir_combo.setStyleSheet('\n            QComboBox { background:rgba(255,255,255,0.06); color:#f0f0f0;\n                        border:1px solid rgba(255,255,255,0.12); border-radius:7px;\n                        padding:5px 10px; }\n            QComboBox:hover { border-color:rgba(255,255,255,0.25); }\n            \n        ')
         self.game_dir_combo.currentIndexChanged.connect(self._on_game_dir_changed)
         self.game_dir_combo.setContextMenuPolicy(Qt.CustomContextMenu)
         self.game_dir_combo.customContextMenuRequested.connect(self._show_game_dir_menu)
@@ -494,7 +531,7 @@ class VersionPage(QWidget):
         hint.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 12px;')
         layout.addWidget(hint)
         self.installed_list = QListWidget()
-        self.installed_list.setStyleSheet('\n            QListWidget {\n                background: rgba(30,41,41,0.62);\n                border: 1px solid rgba(255,255,255,0.16);\n                border-radius: 10px;\n            }\n            QListWidget::item {\n                padding: 0px 12px;\n                color: rgba(255,255,255,0.85);\n                border-bottom: 1px solid rgba(255,255,255,0.05);\n            }\n            QListWidget::item:selected {\n                background: rgba(136,221,221,0.2);\n                border-left: 3px solid #88DDDD;\n            }\n            QScrollBar:vertical {\n                background: rgba(255,255,255,0.06);\n                width: 13px;\n                margin: 2px;\n                border-radius: 6px;\n            }\n            QScrollBar::handle:vertical {\n                background: rgba(165,195,255,0.62);\n                min-height: 32px;\n                border-radius: 5px;\n            }\n            QScrollBar::handle:vertical:hover {\n                background: rgba(190,215,255,0.9);\n            }\n            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {\n                height: 0px;\n            }\n            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {\n                background: transparent;\n            }\n        ')
+        self.installed_list.setStyleSheet('\n            QListWidget {\n                background: rgba(30,41,41,0.62);\n                border: 1px solid rgba(255,255,255,0.16);\n                border-radius: 10px;\n            }\n            QListWidget::item {\n                padding: 0px 12px;\n                color: rgba(255,255,255,0.85);\n                border-bottom: 1px solid rgba(255,255,255,0.05);\n            }\n            QListWidget::item:selected {\n                background: rgba(136,221,221,0.22);\n                border: 1px solid rgba(136,221,221,0.55); border-radius: 6px; margin: 2px 4px;\n            }\n            QScrollBar:vertical {\n                background: rgba(255,255,255,0.06);\n                width: 13px;\n                margin: 2px;\n                border-radius: 6px;\n            }\n            QScrollBar::handle:vertical {\n                background: rgba(165,195,255,0.62);\n                min-height: 32px;\n                border-radius: 5px;\n            }\n            QScrollBar::handle:vertical:hover {\n                background: rgba(190,215,255,0.9);\n            }\n            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {\n                height: 0px;\n            }\n            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {\n                background: transparent;\n            }\n        ')
         self.installed_list.setIconSize(QSize(20, 20))
         self.installed_list.setTextElideMode(Qt.ElideRight)
         self.installed_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -676,8 +713,8 @@ class VersionPage(QWidget):
         return QIcon()
 
     def _make_installed_item(self, version_id: str, version_type: str, loader: str):
-        display_name = self._nicknames.get(version_id)
-        text = f'{display_name}  [{version_id}]' if display_name else version_id
+        display_name = version_display_name(self.config, version_id)
+        text = f'{display_name}  [{version_id}]' if display_name and display_name != version_id else version_id
         item = QListWidgetItem(text)
         item.setSizeHint(QSize(0, 38))
         item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
@@ -1070,7 +1107,7 @@ class VersionPage(QWidget):
         self._filter_group = QButtonGroup(self)
         self._filter_group.setExclusive(True)
         self._filter_buttons = {}
-        for key, label in (('release', '正式版'), ('snapshot', '快照版')):
+        for key, label in (('release', '正式版'), ('snapshot', '预览版')):
             btn = _CapsuleTabButton(label)
             btn.setCheckable(True)
             btn.setCursor(Qt.PointingHandCursor)
@@ -1094,9 +1131,16 @@ class VersionPage(QWidget):
             'QPushButton:disabled { background:#2a2a2a; color:#666; }'
         )
         filter_row.addWidget(filter_pill)
-        filter_row.addWidget(refresh_btn)
         filter_row.addStretch(1)
+        filter_row.addWidget(refresh_btn, 0, Qt.AlignRight | Qt.AlignVCenter)
         layout.addLayout(filter_row)
+        self.available_error_label = QLabel('')
+        self.available_error_label.setWordWrap(True)
+        self.available_error_label.setStyleSheet(
+            'color:#ff8a8a; font-size:12px; padding:2px 4px;'
+        )
+        self.available_error_label.hide()
+        layout.addWidget(self.available_error_label)
         QTimer.singleShot(0, lambda: self._update_filter_indicator(False))
         self.available_list = QListWidget()
         self.available_list.setIconSize(QSize(20, 20))
@@ -1107,6 +1151,7 @@ class VersionPage(QWidget):
         layout.addWidget(self.available_list, 1)
         self.available_loading = LoadingOverlay(self.available_list.viewport())
         self.available_loading.attach_to(self.available_list.viewport())
+        self.available_loading.retry_requested.connect(self._retry_available_versions)
         hint_label = QLabel('双击版本进入详情页，可选择 Fabric / Forge / NeoForge / OptiFine')
         hint_label.setStyleSheet('color: rgba(255,255,255,0.4); font-size: 12px;')
         layout.addWidget(hint_label)
@@ -1132,7 +1177,7 @@ class VersionPage(QWidget):
         return widget
 
     def _combo_style(self):
-        return '\n            QComboBox {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.1);\n                border-radius: 6px; color:#f0f0f0; padding:4px 8px;\n            }\n            QComboBox::drop-down { border:none; }\n            QComboBox QAbstractItemView { background:#2a2a2a; color:#f0f0f0; }\n        '
+        return '\n            QComboBox {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.1);\n                border-radius: 6px; color:#f0f0f0; padding:4px 8px;\n            }\n            QComboBox::drop-down { border:none; }\n            \n        '
 
     def _install_busy(self) -> bool:
         for job in list(self._install_jobs.values()):
@@ -1232,6 +1277,12 @@ class VersionPage(QWidget):
         ):
             return
         self._available_silent = bool(silent)
+        self._cached_versions_shown = False
+        self._available_load_failed = False
+        try:
+            self.available_error_label.hide()
+        except (AttributeError, RuntimeError):
+            pass
         self._load_gen += 1
         gen = self._load_gen
         old = self._load_worker
@@ -1250,10 +1301,18 @@ class VersionPage(QWidget):
             self.available_list.clear()
             self.available_loading.start('正在加载版本列表', 0)
         mirror_urls = self.config.get_version_mirrors() or ['https://launchermeta.mojang.com', 'https://bmclapi2.bangbang93.com', 'https://openbmclapi.bangbang93.com']
+        source = str(
+            self.config.get('version_list_source', 'auto') or 'auto'
+        ).lower()
+        prefer = 'bmclapi' if source == 'bmclapi' else 'official'
         self._load_filter = vtype
         self._loading = True
-        self._load_worker = LoadVersionsWorker(mirror_urls, 'all')
+        self._load_worker = LoadVersionsWorker(
+            mirror_urls, 'all', prefer=prefer
+        )
         self._load_worker.progress.connect(self.available_loading.set_progress)
+        self._load_worker.cached.connect((lambda versions, g=gen: self._on_cached_versions(versions, g)))
+        self._load_worker.status.connect(self._on_version_load_status)
         self._load_worker.loaded.connect((lambda versions, g=gen: self._on_versions_loaded(versions, g)))
         self._load_worker.start()
 
@@ -1266,7 +1325,7 @@ class VersionPage(QWidget):
         row = QHBoxLayout(holder)
         row.setContentsMargins(6, 5, 6, 3)
         row.setSpacing(0)
-        snapshot = '快照' in text
+        snapshot = ('快照' in text or '预览' in text)
         tag = QLabel(text)
         tag.setStyleSheet(
             'QLabel { color:%s; background:%s;'
@@ -1317,6 +1376,28 @@ class VersionPage(QWidget):
         except RuntimeError:
             pass
 
+    def _on_cached_versions(self, versions, generation=None):
+        if generation is not None and generation != self._load_gen:
+            return
+        if not versions:
+            return
+        self._cached_versions_shown = True
+        try:
+            self.available_error_label.hide()
+        except (AttributeError, RuntimeError):
+            pass
+        self._render_available_versions(versions)
+        try:
+            self.available_loading.stop()
+        except RuntimeError:
+            pass
+
+    def _on_version_load_status(self, text):
+        try:
+            self.available_loading.set_text(str(text))
+        except (AttributeError, RuntimeError):
+            pass
+
     def _on_versions_loaded(self, versions, generation=None):
         if generation is not None and generation != self._load_gen:
             return
@@ -1328,6 +1409,16 @@ class VersionPage(QWidget):
         if worker is not None:
             self._release_load_worker(worker)
         if not versions:
+            if getattr(self, '_cached_versions_shown', False):
+                self.available_loading.stop()
+                try:
+                    self.available_error_label.setText(
+                        '版本列表刷新失败，当前显示缓存内容；点击刷新重试'
+                    )
+                    self.available_error_label.show()
+                except (AttributeError, RuntimeError):
+                    pass
+                return
             if silent:
                 self.available_loading.stop()
             elif self._available_retry_count < 1:
@@ -1347,43 +1438,91 @@ class VersionPage(QWidget):
                 self.available_loading.fail(reason)
             return
         self._available_retry_count = 0
-        self.available_list.setUpdatesEnabled(False)
-        self.available_list.clear()
-        def _version_order(v):
-            return str(v.get('releaseTime') or v.get('time') or ''), _natural_key(str(v.get('id', '')))
-
-        versions = sorted(versions, key=_version_order, reverse=True)
-        filter_type = getattr(self, '_available_filter', 'release')
-        if filter_type == 'snapshot':
-            # 测试版不推荐、不置顶、不显示“当前版本”；仅保留高位到低位的
-            # 中性列表，用户需要自己选择。
-            items = [
-                v for v in versions
-                if str(v.get('type', '')).lower() == 'snapshot'
-            ]
-            if items:
-                self._add_available_header(f'快照与预览版 ({len(items)})')
-        else:
-            latest_release = next(
-                (v for v in versions if str(v.get('type', '')).lower() == 'release'),
-                None,
-            )
-            if latest_release is not None:
-                self._add_available_header('最新版本')
-                self._add_available_version(latest_release)
-            items = [
-                v for v in versions
-                if str(v.get('type', '')).lower() == 'release'
-            ]
-            if items:
-                self._add_available_header(f'正式版 ({len(items)})')
-        for v in items:
-            self._add_available_version(v)
-        self.available_list.setUpdatesEnabled(True)
-        # 列表已经填好，立即撤掉加载遮罩；不再走 100% 动画，避免遮罩
-        # 盖在已加载列表上。
+        self._available_load_failed = False
+        try:
+            self.available_error_label.hide()
+        except (AttributeError, RuntimeError):
+            pass
+        self._render_available_versions(versions)
         if not silent:
             self.available_loading.stop()
+
+    def _render_available_versions(self, versions):
+        self.available_list.setUpdatesEnabled(False)
+        self.available_list.clear()
+
+        def _natural_version(value):
+            return _natural_key(str(value or ''))
+
+        def _is_preview(version):
+            version_type = str(version.get('type') or '').lower()
+            if version_type in ('snapshot', 'old_beta', 'old_alpha'):
+                return True
+            return bool(re.search(
+                r'(?i)(snapshot|(?:^|[-_.])(?:pre|rc)\d*)',
+                str(version.get('id') or ''),
+            ))
+
+        def _preview_rank(version):
+            version_id = str(version.get('id') or '').lower()
+            return 1 if re.search(r'(?:^|[-_.])(?:pre|rc)\d*', version_id) else 0
+
+        source = list(versions or [])
+        releases = [
+            version for version in source
+            if str(version.get('type') or '').lower() == 'release'
+            and not _is_preview(version)
+        ]
+        previews = [version for version in source if _is_preview(version)]
+        releases.sort(
+            key=lambda version: _natural_version(version.get('id')),
+            reverse=True,
+        )
+        # 预览版内部 pre/rc 优先于 snapshot，各组内再按版本号自然倒序。
+        previews.sort(
+            key=lambda version: (
+                _preview_rank(version),
+                _natural_version(version.get('id')),
+            ),
+            reverse=True,
+        )
+        latest_release = releases[0] if releases else None
+        latest_preview = previews[0] if previews else None
+
+        if latest_release is not None or latest_preview is not None:
+            self._add_available_header('最新版本')
+            if latest_release is not None:
+                self._add_available_version(latest_release)
+            if latest_preview is not None:
+                self._add_available_version(latest_preview)
+
+        filter_type = getattr(self, '_available_filter', 'release')
+        if filter_type == 'snapshot':
+            self._add_available_header('预览版')
+            items = [
+                version for version in previews
+                if latest_preview is None
+                or str(version.get('id')) != str(latest_preview.get('id'))
+            ]
+        else:
+            self._add_available_header('正式版')
+            items = [
+                version for version in releases
+                if latest_release is None
+                or str(version.get('id')) != str(latest_release.get('id'))
+            ]
+        for version in items:
+            self._add_available_version(version)
+        self.available_list.setUpdatesEnabled(True)
+
+    def _retry_available_versions(self):
+        self._available_retry_count = 0
+        self._available_load_failed = False
+        try:
+            self.available_error_label.hide()
+        except (AttributeError, RuntimeError):
+            pass
+        self._load_available_versions_async()
 
     def _on_version_double_clicked(self, item):
         version_id = item.data(Qt.UserRole)
@@ -1772,16 +1911,8 @@ class VersionPage(QWidget):
         from core.version import INCOMPLETE_MARKER
         versions_dir = Path(self.config.get_mc_dir()) / 'versions'
         base = sanitize_version_name(base) or '整合包'
-        target = versions_dir / base
-        if not target.exists() or (target / INCOMPLETE_MARKER).exists():
-            return base
-        index = 2
-        while True:
-            candidate = f'{base} ({index})'
-            path = versions_dir / candidate
-            if not path.exists() or (path / INCOMPLETE_MARKER).exists():
-                return candidate
-            index += 1
+        # 同名版本不自动生成 (2)；由开始导入时判断为修复/合并现有实例。
+        return base
 
     def _start_modpack_import(self, path, suggested_name=''):
         if self._modpack_worker and self._modpack_worker.isRunning():
@@ -1845,8 +1976,9 @@ class VersionPage(QWidget):
             target = Path(self.config.get_mc_dir()) / 'versions' / name
             from core.version import INCOMPLETE_MARKER
             if target.exists() and not (target / INCOMPLETE_MARKER).exists():
-                page.show_error(f'版本名称「{name}」已存在，请更换名称')
-                return
+                # 同名有效实例按“修复/合并现有实例”处理，不生成 (2)。
+                existing_version = name
+                mode = 'existing'
         self._modpack_mode = mode
         self._suspend_available_refresh()
         page.set_running(True)
@@ -1888,7 +2020,6 @@ class VersionPage(QWidget):
         worker.finished.connect(self._on_modpack_thread_finished)
         worker.finished.connect(worker.deleteLater)
         worker.start()
-        self._open_modpack_download_manager()
 
     def _open_modpack_download_manager(self):
         self._show_section('modpack')
@@ -2006,6 +2137,9 @@ class VersionPage(QWidget):
                 version_id, getattr(self, '_modpack_mode', 'new')
             )
         self._pending_modpack_version = version_id
+        QTimer.singleShot(
+            450, lambda v=version_id: self._return_after_modpack_success(v)
+        )
         try:
             p = Path(self._current_modpack_path)
             if p.exists() and 'temp_install' in p.parts:
@@ -2013,6 +2147,16 @@ class VersionPage(QWidget):
         except OSError:
             pass
         self._current_modpack_path = ''
+
+    def _return_after_modpack_success(self, version_id=''):
+        version_id = str(version_id or '')
+        if not version_id:
+            return
+        self._show_section('installed')
+        item = self._version_items.get(version_id)
+        if item is not None:
+            self.installed_list.setCurrentItem(item)
+            self._on_installed_selection_changed()
 
     def _on_modpack_thread_finished(self):
         worker = self.sender()

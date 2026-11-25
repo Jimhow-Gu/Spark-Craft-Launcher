@@ -1,8 +1,15 @@
 import os
 os.environ["QT_OPENGL"] = "software"   # 降低 OpenGL 栈冲突风险
 # 使用 Windows Media Foundation，避免打包 Qt 自带的 FFmpeg 运行库。
-# 必须在任何 PySide6.QtMultimedia 导入之前设置。
+# 必须在任何 PySide6.QtMultimedia 导入之前设置；同时清掉可能从父进程
+# 继承的 FFmpeg 专用变量，避免 Qt 仍选 FFmpeg。
 os.environ["QT_MEDIA_BACKEND"] = "windows"
+for _ffmpeg_env in (
+    "QT_FFMPEG_DECODING_HW_DEVICE_TYPES",
+    "QT_FFMPEG_ENCODING_HW_DEVICE_TYPES",
+    "QT_MEDIA_BACKEND_FFMPEG",
+):
+    os.environ.pop(_ffmpeg_env, None)
 
 import ctypes
 import logging
@@ -256,6 +263,11 @@ def main():
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
     app = QApplication(sys.argv)
+    try:
+        from ui.widgets.rounded_combo import install_popup_rounding
+        app._rounded_popup_filter = install_popup_rounding(app)
+    except Exception:
+        pass
     # 机房/校园网通常通过系统代理上网；QtNetwork 默认不读取 Windows 代理，
     # 会导致登录和下载正常、头像却一直空白。这里统一启用系统代理。
     try:
@@ -488,7 +500,18 @@ def main():
         except Exception:
             pass
     try:
-        from core.update import consume_manual_update_notice
+        from core.update import (
+            consume_failed_update_notice, consume_manual_update_notice,
+        )
+        failed_update_notice = consume_failed_update_notice()
+        if failed_update_notice:
+            from ui.widgets.toast import show_toast
+            QTimer.singleShot(
+                1800,
+                lambda: show_toast(
+                    failed_update_notice, 'error', window, 9000
+                ),
+            )
         manual_update_notice = consume_manual_update_notice()
         if manual_update_notice:
             from ui.widgets.toast import show_toast
