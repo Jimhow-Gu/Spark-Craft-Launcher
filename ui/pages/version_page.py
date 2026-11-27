@@ -159,6 +159,72 @@ class LoadVersionsWorker(QThread):
         except OSError:
             pass
 
+    def _fetch_modrinth_manifest(self):
+        '''官方/Piston/BMCL 均不可达时，用 Modrinth 标签生成版本清单。'''
+
+        type_map = {
+            'release': 'release',
+            'snapshot': 'snapshot',
+            'alpha': 'old_alpha',
+            'beta': 'old_beta',
+        }
+        urls = (
+            'https://api.modrinth.com/v2/tag/game_version',
+            'https://mod.mcimirror.top/modrinth/v2/tag/game_version',
+        )
+        rows = None
+        for url in urls:
+            if self._cancelled:
+                return None
+            http = HttpClient(timeout=10, retries=1)
+            try:
+                data = http.get_json(url, timeout=10)
+                if isinstance(data, list) and data:
+                    rows = data
+                    break
+            except Exception:
+                continue
+            finally:
+                http.close()
+        if not rows:
+            return None
+        versions = []
+        seen = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            vid = str(row.get('version') or '').strip()
+            if not vid or vid in seen:
+                continue
+            seen.add(vid)
+            versions.append({
+                'id': vid,
+                'type': type_map.get(
+                    str(row.get('version_type') or '').lower(),
+                    'snapshot',
+                ),
+                'releaseTime': str(row.get('date') or ''),
+                'time': str(row.get('date') or ''),
+                'url': '',
+            })
+        if len(versions) < MIN_VERSION_COUNT:
+            return None
+        versions.sort(
+            key=lambda item: str(item.get('releaseTime') or ''),
+            reverse=True,
+        )
+        releases = [v for v in versions if v['type'] == 'release']
+        snapshots = [
+            v for v in versions
+            if v['type'] in ('snapshot', 'old_alpha', 'old_beta')
+        ]
+        latest = {}
+        if releases:
+            latest['release'] = releases[0]['id']
+        if snapshots:
+            latest['snapshot'] = snapshots[0]['id']
+        return {'latest': latest, 'versions': versions}
+
     def _fetch_manifest(self):
         '''并发拉取 Piston v1 + launchermeta v1 + BMCLAPI v1，合并去重；v2 仅兜底。'''
 
@@ -221,6 +287,18 @@ class LoadVersionsWorker(QThread):
                     min_versions=MIN_VERSION_COUNT,
                     prefer=self.prefer,
                 ) or merged
+        if len(merged.get('versions') or []) < MIN_VERSION_COUNT:
+            try:
+                self.status.emit('正在切换备用版本源...')
+            except Exception:
+                pass
+            fallback = self._fetch_modrinth_manifest()
+            if fallback:
+                merged = merge_manifests(
+                    [fallback], ['https://api.modrinth.com'],
+                    min_versions=MIN_VERSION_COUNT,
+                    prefer=self.prefer,
+                ) or fallback
         if merged.get('versions'):
             self._save_cached_manifest(merged)
             return merged

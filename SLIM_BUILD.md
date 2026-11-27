@@ -1,15 +1,17 @@
-# Spark Craft Launcher V1.11.4 DLL46 构建说明
+# Spark Craft Launcher V1.11.4 DLL47 构建说明
 
 ## 结论
 
-DLL46 已完成构建与冒烟测试。这一版完成版本类别下拉重写与自动收起修复、
-社区资源筛选行统一、加载器失败/超时修复，并汇总 Java 要求、整合包资源、
-新闻 Archive、列表动画和图形启动等本轮修复。
+DLL47 已完成构建与冒烟测试。这一版修复打包版无缓存时版本清单加载失败：
+官方/Piston/BMCL 全部不可用时自动切换到 Modrinth 标签生成版本列表，
+并保留 DLL46 的下拉、加载器、社区筛选等修复。
 
 | 产物 | 大小 | SHA256 |
 |---|---:|---|
-| DLL46 正式 onefile | 30,016,589 字节 | `1e17b827d12cd85c2099b541145442d5c85029b6239b0c1d5c0c4eb3f5bb5fc9` |
-| DLL46 正式 zip | 29,718,842 字节 | `c20f6d57e7a2fc03228bc6f70043960fe06a2352ca9940eecf69270a07209adc` |
+| DLL47 正式 onefile | 30,018,886 字节 | `6bb6613b085a32ae7d1203bd04da673ed2ff2404c4f9ff1d871d714cd821e659` |
+| DLL47 正式 zip | 29,721,103 字节 | `f1057ff2aeb14dbfa9beb7505019b47832e56ee825b8c9493d548c00d4097b2e` |
+| DLL46 onefile（历史基线） | 30,016,589 字节 | `1e17b827d12cd85c2099b541145442d5c85029b6239b0c1d5c0c4eb3f5bb5fc9` |
+| DLL46 zip（历史基线） | 29,718,842 字节 | `c20f6d57e7a2fc03228bc6f70043960fe06a2352ca9940eecf69270a07209adc` |
 | DLL45 onefile（历史基线） | 29,953,652 字节 | `22ad19940327c974be6bdfc46b826a0234fe2603ef159f77c569fb64d5e08bb1` |
 | DLL45 zip（历史基线） | 29,655,714 字节 | `86d3af445057b128594900615a28445768fd5a88d150271c1ee42a9b47e00b27` |
 | DLL44 onefile（历史基线） | 29,926,348 字节 | `f91f8787ce5c9f0d30fa5db2b564f04b535ecf63f1e02f393b20bbd747c7a48a` |
@@ -20,7 +22,8 @@ DLL46 已完成构建与冒烟测试。这一版完成版本类别下拉重写�
 | DLL40 onefile（历史基线） | 29,882,773 字节 | `89c75da5a249e5a34d31e18fb1f46630a8bd9a3097b67fff7fa13ed3188895e8` |
 | DLL39 onefile（历史基线） | 36,662,822 字节 | `289383100f2209b5d2105e1aa25d5f5e76c80ac5a0e24cf4bc2d66379f73455c` |
 
-- 构建号：`SCLREL1.11.4.R20261127.RP1.DLL46`
+- 构建号：`SCLREL1.11.4.R20261127.RP1.DLL47`
+- DLL47 起：打包版版本列表在官方/Piston/BMCL 全部超时后回退 Modrinth 标签源，生成完整版本清单并写入缓存。
 - DLL46 起：版本类别下拉改为自绘 Tool 弹层，杜绝自动收起；社区资源筛选统一为自绘下拉并移除“全部加载器”；Forge/NeoForge 增加 CurseForge/GitCode/本地安装器兜底，OptiFine 缩短探测并隐藏无版本项。
 - DLL45 起：背景视频 WMF 后端与黑帧/解码失败诊断、26.3 多源元数据和逐源日志、
   版本源真正切换、Mod 递归/JiJ 统计、现有实例整合包备份合并、新闻 Archive、
@@ -38,6 +41,13 @@ DLL46 已完成构建与冒烟测试。这一版完成版本类别下拉重写�
 - 构建入口：`python build_slim.py`（当前正式发布）；`python build_onedir.py` 仅保留内部/回滚构建
 - 安装包默认目录：`%LOCALAPPDATA%\Programs\SparkCraftLauncher`
 - 不使用 UPX，不删除静态图片解码插件。
+
+## DLL47 更新
+
+- 版本列表：新增 Modrinth `tag/game_version` 兜底源。官方、Piston、BMCL、OpenBMCL 全部不可达时，仍能生成 926 条完整版本清单并缓存。
+- 版本号映射：`release` / `snapshot` / `alpha` / `beta` 分别映射为正式版、快照、远古 Alpha/Beta；`releaseTime` 使用 Modrinth 日期，最新正式版/快照重新计算。
+- 兜底顺序：v1 主源 → v2 主源 → Modrinth 标签源 → 本地缓存；加载状态显示“正在切换备用版本源...”。
+- 打包版：修复无本地缓存时首启直接“获取版本列表失败，请检查网络连接”的问题；DLL46 的下拉、加载器、社区筛选修复保持不变。
 
 ## DLL46 更新
 

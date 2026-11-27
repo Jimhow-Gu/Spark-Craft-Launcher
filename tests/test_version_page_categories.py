@@ -7,6 +7,7 @@ import unittest
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
+from unittest.mock import patch
 from PySide6.QtWidgets import QApplication, QLabel
 
 from ui.pages.version_page import VersionPage
@@ -104,6 +105,42 @@ class VersionPageCategoryTests(unittest.TestCase):
             self.assertLess(phases[key], len(job['steps']))
         page.close()
         page.deleteLater()
+
+
+    def test_modrinth_manifest_fallback(self):
+        from ui.pages import version_page as page_module
+
+        rows = [
+            {'version': '1.20.1', 'version_type': 'release',
+             'date': '2023-06-12T00:00:00Z'},
+            {'version': '26.4-pre-1', 'version_type': 'snapshot',
+             'date': '2026-11-24T00:00:00Z'},
+        ]
+        rows.extend(
+            {'version': f'1.0.{i}', 'version_type': 'release',
+             'date': f'2020-01-{(i % 28) + 1:02d}T00:00:00Z'}
+            for i in range(210)
+        )
+
+        class FakeHttp:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get_json(self, *args, **kwargs):
+                return rows
+
+            def close(self):
+                pass
+
+        worker = page_module.LoadVersionsWorker([], 'all')
+        with patch.object(page_module, 'HttpClient', FakeHttp):
+            manifest = worker._fetch_modrinth_manifest()
+        self.assertIsNotNone(manifest)
+        self.assertEqual(manifest['latest']['release'], '1.20.1')
+        self.assertEqual(
+            manifest['latest']['snapshot'], '26.4-pre-1'
+        )
+        self.assertEqual(len(manifest['versions']), len(rows))
 
 
 if __name__ == '__main__':
