@@ -11,7 +11,7 @@ from pathlib import Path
 
 import requests
 from PySide6.QtCore import QRect, QThread, QTimer, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QPixmap
+from PySide6.QtGui import QDesktopServices, QPalette, QPixmap
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout,
     QWidget,
@@ -155,12 +155,51 @@ class ArchiveFetchWorker(QThread):
                 self.error.emit(str(exc))
 
 
+_ARCHIVE_INFO_COLORS = {
+    False: {
+        '正式版': '#B7E4C7',
+        '发布候选版': '#E8C98A',
+        '预发布版': '#A8C8C8',
+        '候选版': '#E8C98A',
+        '预览版': '#A8C8C8',
+        '快照版': '#A8C8C8',
+    },
+    True: {
+        '正式版': '#2E7D4F',
+        '发布候选版': '#8A5A12',
+        '预发布版': '#555555',
+        '候选版': '#8A5A12',
+        '预览版': '#555555',
+        '快照版': '#555555',
+    },
+}
+_ARCHIVE_INFO_PATTERN = re.compile(
+    r'(发布候选版|预发布版|正式版|候选版|预览版|快照版)'
+)
+
+
+def _archive_info_html(text, light=False):
+    escaped = html.escape(str(text or ''))
+    colors = _ARCHIVE_INFO_COLORS[bool(light)]
+    return _ARCHIVE_INFO_PATTERN.sub(
+        lambda match: (
+            f'<span style="color:{colors[match.group(1)]};'
+            f'font-weight:600;">{match.group(1)}</span>'
+        ),
+        escaped,
+    )
+
+
 class ArchiveRow(QFrame):
     clicked = Signal(dict)
 
     def __init__(self, item, parent=None):
         super().__init__(parent)
         self.item = dict(item or {})
+        self._info_text = str(self.item.get('info') or '')
+        self._light = (
+            self.palette().color(QPalette.Window).lightness() > 128
+        )
         self.setObjectName('ArchiveRow')
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet(
@@ -188,14 +227,32 @@ class ArchiveRow(QFrame):
         title = QLabel(str(self.item.get('title') or ''))
         title.setWordWrap(True)
         title.setStyleSheet('color: palette(text); font-size:14px; font-weight:700;')
-        info = QLabel(str(self.item.get('info') or ''))
+        info = QLabel(_archive_info_html(self._info_text, self._light))
+        info.setTextFormat(Qt.RichText)
         info.setWordWrap(True)
-        info.setStyleSheet('color: palette(mid); font-size:12px;')
+        self._info_label = info
+        self._apply_info_style()
         text.addWidget(title)
-        if info.text().strip():
+        if self._info_text.strip():
             text.addWidget(info)
         layout.addLayout(text, 1)
         self.setToolTip(str(self.item.get('tooltip') or ''))
+
+    def _apply_info_style(self):
+        color = '#555555' if self._light else '#A8C8C8'
+        self._info_label.setStyleSheet(
+            f'color:{color}; font-size:12.5px; font-weight:500;'
+        )
+
+    def set_light(self, light):
+        light = bool(light)
+        if light == self._light:
+            return
+        self._light = light
+        self._info_label.setText(
+            _archive_info_html(self._info_text, self._light)
+        )
+        self._apply_info_style()
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:

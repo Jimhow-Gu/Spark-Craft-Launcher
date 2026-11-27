@@ -24,6 +24,9 @@ LOADER_LABELS = {
 ICON_FILES = {
     'release': 'Release.png',
     'snapshot': 'Snapshoot.png',
+    'preview': 'CommandBlock.png',
+    'fool': 'GoldBlock.png',
+    'old': 'CobbleStone.png',
     'fabric': 'fabric.png',
     'forge': 'forge.png',
     'neoforge': 'neo_forge.png',
@@ -144,6 +147,14 @@ def version_description(mc_dir, version_id, config=None, version_type='', loader
     return text
 
 
+def _is_valid_image(path):
+    try:
+        from PySide6.QtGui import QPixmap
+        return not QPixmap(str(path)).isNull()
+    except Exception:
+        return True
+
+
 def version_icon(mc_dir, version_id, config=None, version_type='', loader=''):
     settings = version_settings(config, version_id) if config is not None else {}
     icon_value = str(settings.get('icon') or 'auto')
@@ -157,7 +168,25 @@ def version_icon(mc_dir, version_id, config=None, version_type='', loader=''):
             if path.is_file():
                 return path
     version_dir = Path(mc_dir) / 'versions' / str(version_id)
-    for relative in ('icon.png', 'pack.png', 'logo.png', 'loading/logo.png'):
+    pack_meta = _read_json(version_dir / 'pmgl_pack.json')
+    icon_name = str(pack_meta.get('icon') or '').strip()
+    if icon_name:
+        candidate = version_dir / icon_name
+        try:
+            candidate.resolve().relative_to(version_dir.resolve())
+        except (OSError, ValueError):
+            candidate = None
+        if (
+            candidate is not None and candidate.is_file()
+            and _is_valid_image(candidate)
+        ):
+            return candidate
+    for relative in (
+        'icon.png', 'icon.jpg', 'icon.jpeg', 'icon.webp',
+        'pack.png', 'pack.jpg', 'pack.jpeg',
+        'logo.png', 'logo.jpg', 'logo.jpeg',
+        'thumbnail.png', 'thumbnail.jpg', 'loading/logo.png',
+    ):
         path = version_dir / relative
         if path.is_file():
             return path
@@ -177,7 +206,21 @@ def version_icon(mc_dir, version_id, config=None, version_type='', loader=''):
     filename = ICON_FILES.get(active_loader)
     if not filename:
         vtype = str(version_type or data.get('type') or '').lower()
-        filename = 'Snapshoot.png' if vtype == 'snapshot' else 'Release.png'
+        try:
+            from core.version_classifier import classify_version
+            kind = classify_version({
+                'id': version_id,
+                'type': vtype,
+                'releaseTime': data.get('releaseTime') or '',
+            })
+        except Exception:
+            kind = ''
+        if kind in ('fool', 'old', 'preview'):
+            filename = ICON_FILES[kind]
+        else:
+            filename = (
+                'Snapshoot.png' if vtype == 'snapshot' else 'Release.png'
+            )
     path = _IMAGES_DIR / filename
     return path if path.is_file() else None
 
@@ -199,6 +242,17 @@ def default_icon_value(mc_dir, version_id, config=None):
     if category == 'modpack':
         return 'release'
     version_type = str(data.get('type') or 'release').lower()
+    try:
+        from core.version_classifier import classify_version
+        kind = classify_version({
+            'id': version_id,
+            'type': version_type,
+            'releaseTime': data.get('releaseTime') or '',
+        })
+    except Exception:
+        kind = ''
+    if kind in ('fool', 'old'):
+        return kind
     return 'snapshot' if version_type == 'snapshot' else 'release'
 
 

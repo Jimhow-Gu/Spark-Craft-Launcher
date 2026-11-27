@@ -71,7 +71,7 @@ class CollapsibleSection(QWidget):
         card_layout.addWidget(self.content)
         outer.addWidget(self.card)
         self._animation = HeightAnimation(self.content, self)
-        self._animation.setDuration(180)
+        self._animation.setDuration(160)
         self._animation.setEasingCurve(QEasingCurve.OutCubic)
         self._animation.finished.connect(self._on_animation_finished)
         self.header.clicked.connect(self.toggle)

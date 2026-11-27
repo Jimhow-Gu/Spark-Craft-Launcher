@@ -16,8 +16,11 @@ from PySide6.QtCore import (Qt, Signal, QThread, QSize, QEasingCurve, QTimer)
 from PySide6.QtGui import QFont, QIcon
 from core.app_font import ui_font
 from core.net import network_available
+from core.paths import scl_dir
 from ui.version_meta import loader_supported, version_tuple
+from ui.widgets.animated_list import AnimatedListView
 from ui.widgets.back_button import BackButton
+from ui.widgets.clickable_label import ClickableLabel
 from ui.widgets.height_animation import HeightAnimation
 from ui.widgets.loading_overlay import LoadingOverlay
 from ui.widgets.rotating_chevron import RotatingChevronButton
@@ -78,6 +81,7 @@ def _version_tuple(text) -> tuple:
 class LoadVersionsWorker(QThread):
     loaded = Signal(dict)
     partial = Signal(dict)
+    partial_errors = Signal(dict)
     def __init__(self, version_id, load_optional=True, load_optifabric=True):
         super().__init__()
         self.version_id = version_id
@@ -95,68 +99,363 @@ class LoadVersionsWorker(QThread):
         self._cancelled = True
 
     def _fetch_json(self, url, timeout=8):
-        resp = requests.get(url, headers={'User-Agent': 'PMGL-Launcher/1.1', 'Accept': 'application/json'}, timeout=timeout)
+        resp = requests.get(
+            url,
+            headers={
+                'User-Agent': 'PMGL-Launcher/1.1',
+                'Accept': 'application/json',
+            },
+            timeout=timeout,
+        )
+        if resp.status_code == 404:
+            return None
         resp.raise_for_status()
         return resp.json()
+
+    def _fetch_text(self, url, timeout=10):
+        resp = requests.get(
+            url,
+            headers={'User-Agent': 'PMGL-Launcher/1.1'},
+            timeout=timeout,
+        )
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.text
+
+    def _curseforge_forge_versions(self):
+        '''CurseForge 的公开 modloader 接口作为 Forge 网络兜底。'''
+
+        try:
+            data = self._fetch_json(
+                'https://api.curseforge.com/v1/minecraft/modloader',
+                timeout=8,
+            )
+        except Exception as exc:
+            return [], str(exc)
+        rows = data.get('data') if isinstance(data, dict) else data
+        if not isinstance(rows, list):
+            return [], ''
+        versions = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get('gameVersion') or '') != self.version_id:
+                continue
+            name = str(row.get('name') or '')
+            if name.startswith('forge-'):
+                value = name[len('forge-'):]
+                if value and value not in versions:
+                    versions.append(value)
+        versions.sort(key=_version_tuple, reverse=True)
+        return versions[:30], ''
+
+    def _gitcode_neoforge_versions(self):
+        '''GitCode 的 NeoForge 标签作为官方 Maven 的兜底。'''
+
+        version = _version_tuple(self.version_id)
+        if version == (1, 20, 1):
+            prefix = '47.'
+        elif version and version[0] >= 26:
+            prefix = f'{version[0]}.{version[1]}.'
+        elif version:
+            prefix = f'{version[1]}.{version[2]}.'
+        else:
+            prefix = ''
+        project = self._fetch_json(
+            'https://gitcode.com/api/v2/projects/'
+            'gh_mirrors%2Fne%2FNeoForge',
+            timeout=6,
+        )
+        repo_id = project.get('id') if isinstance(project, dict) else None
+        if not repo_id:
+            return [], ''
+        tags = []
+        for page in range(1, 9):
+            data = self._fetch_json(
+                f'https://gitcode.com/api/v2/projects/{repo_id}/'
+                f'repository/tags?page={page}&page_size=20',
+                timeout=6,
+            )
+            if not isinstance(data, dict):
+                break
+            rows = data.get('content')
+            if not isinstance(rows, list):
+                break
+            tags.extend(
+                str(row.get('name') or '')
+                for row in rows if isinstance(row, dict)
+            )
+            if page >= int(data.get('page_count') or page):
+                break
+        versions = []
+        stable = {}
+        for tag in tags:
+            text = tag[len('release/'):] if tag.startswith('release/') else tag
+            match = re.fullmatch(
+                r'(\d+(?:\.\d+){2,})(?:[-+]([A-Za-z0-9._-]+))?',
+                text,
+            )
+            if not match:
+                continue
+            value, suffix = match.groups()
+            if prefix and not value.startswith(prefix):
+                continue
+            if value not in versions:
+                versions.append(value)
+            stable[value] = not bool(
+                suffix and 'beta' in suffix.lower()
+            )
+        for value in versions:
+            self.stability['neoforge'][value] = stable.get(value, True)
+        versions.sort(key=_version_tuple, reverse=True)
+        return versions[:30], ''
+
+    def _local_neoforge_versions(self):
+        '''网络不可用时使用启动器已经下载过的 NeoForge 安装器版本。'''
+
+        version = _version_tuple(self.version_id)
+        if version == (1, 20, 1):
+            prefix = '47.'
+        elif version and version[0] >= 26:
+            prefix = f'{version[0]}.{version[1]}.'
+        elif version:
+            prefix = f'{version[1]}.{version[2]}.'
+        else:
+            prefix = ''
+        folder = Path(scl_dir()) / 'temp_install' / 'neoforge_installer'
+        versions = []
+        try:
+            paths = list(folder.glob('neoforge-installer-*.jar'))
+        except OSError:
+            paths = []
+        for path in paths:
+            text = path.stem[len('neoforge-installer-'):]
+            if text.startswith(f'{self.version_id}-'):
+                text = text[len(self.version_id) + 1:]
+            if text.endswith('-offline'):
+                text = text[:-len('-offline')]
+            if not text or (prefix and not text.startswith(prefix)):
+                continue
+            if not re.fullmatch(r'\d+(?:\.\d+){1,}(?:[-+][\w.-]+)?', text):
+                continue
+            if text not in versions:
+                versions.append(text)
+                self.stability['neoforge'][text] = 'beta' not in text.lower()
+        versions.sort(key=_version_tuple, reverse=True)
+        return versions[:30]
 
     def _get_forge(self):
         version = _version_tuple(self.version_id)
         if version and version < (1, 5, 2):
             return []
-        for base in ('https://bmclapi2.bangbang93.com', 'https://bmclapi.bangbang93.com'):
+        self.errors.pop('forge', None)
+        errors = []
+        versions = []
+        reachable = False
+        prefix = f'{self.version_id}-'
+
+        def add(value):
+            value = str(value or '').strip()
+            if value.startswith(prefix):
+                value = value[len(prefix):]
+            if value and value not in versions:
+                versions.append(value)
+                self.stability['forge'][value] = True
+
+        for base in (
+            'https://bmclapi2.bangbang93.com',
+            'https://bmclapi.bangbang93.com',
+        ):
             try:
-                data = self._fetch_json(f'{base}/forge/minecraft/{self.version_id}')
-                if isinstance(data, list):
-                    versions = []
-                    for item in data:
-                        value = item.get('version') if isinstance(item, dict) else None
-                        if value:
-                            value = str(value)
-                            versions.append(value)
-                            self.stability['forge'][value] = True
-                    if versions:
-                        return versions[:30]
+                data = self._fetch_json(
+                    f'{base}/forge/minecraft/{self.version_id}'
+                )
             except Exception as exc:
-                self.errors['forge'] = str(exc)
+                errors.append(str(exc))
                 continue
-        # 官方 promotions 只提供 latest/recommended，作为镜像不可用时的兜底
+            reachable = True
+            if isinstance(data, dict):
+                data = data.get('versions') or data.get('list') or []
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, str):
+                        add(item)
+                    elif isinstance(item, dict) and item.get('version'):
+                        add(item.get('version'))
+            if versions:
+                return versions[:30]
+
+        # BMCL 不可用时读取 Forge Maven 元数据；官方 promotions 只作为
+        # 最后兜底（它只含 latest/recommended，但仍能救回常见版本）。
+        for url in (
+            'https://maven.minecraftforge.net/net/minecraftforge/forge/'
+            'maven-metadata.xml',
+            'https://files.minecraftforge.net/maven/net/minecraftforge/forge/'
+            'maven-metadata.xml',
+            'https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/'
+            'maven-metadata.xml',
+        ):
+            try:
+                text = self._fetch_text(url)
+            except Exception as exc:
+                errors.append(str(exc))
+                continue
+            if not text:
+                continue
+            reachable = True
+            for full in re.findall(r'<version>([^<]+)</version>', text):
+                full = str(full).strip()
+                if full.startswith(prefix):
+                    add(full[len(prefix):])
+            if versions:
+                versions.sort(key=_version_tuple, reverse=True)
+                return versions[:30]
+
+        # 官方 Maven/BMCL 被网络重置时，CurseForge 的公开
+        # modloader 列表仍能给出完整 Forge 版本。
+        try:
+            cf_versions, cf_error = self._curseforge_forge_versions()
+            if not cf_error:
+                reachable = True
+            if cf_versions:
+                for value in cf_versions:
+                    add(value)
+                versions.sort(key=_version_tuple, reverse=True)
+                return versions[:30]
+            if cf_error:
+                errors.append(cf_error)
+        except Exception as exc:
+            errors.append(str(exc))
+
         try:
             data = self._fetch_json(
-                'https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json'
+                'https://files.minecraftforge.net/net/minecraftforge/forge/'
+                'promotions_slim.json'
             )
+            reachable = True
             promos = data.get('promos') if isinstance(data, dict) else {}
-            versions = []
             for key, value in (promos or {}).items():
-                if not str(key).startswith(f'{self.version_id}-') or not value:
-                    continue
-                value = str(value)
-                if value not in versions:
-                    versions.append(value)
+                if str(key).startswith(prefix) and value:
+                    add(value)
             if versions:
-                for value in versions:
-                    self.stability['forge'][value] = True
+                versions.sort(key=_version_tuple, reverse=True)
                 return versions
         except Exception as exc:
-            self.errors['forge'] = str(exc)
+            errors.append(str(exc))
+
+        if errors and not reachable:
+            self.errors['forge'] = errors[-1]
         return []
 
     def _get_neoforge(self):
         version = _version_tuple(self.version_id)
         if version and version < (1, 20):
             return []
-        try:
-            data = self._fetch_json(f'https://bmclapi2.bangbang93.com/neoforge/list/{self.version_id}')
+        self.errors.pop('neoforge', None)
+        if version == (1, 20, 1):
+            prefix = '47.'
+        elif version and version[0] >= 26:
+            prefix = f'{version[0]}.{version[1]}.'
+        elif version:
+            prefix = f'{version[1]}.{version[2]}.'
+        else:
+            prefix = ''
+        errors = []
+        versions = []
+        reachable = False
+
+        def add(value):
+            value = str(value or '').strip()
+            if not value or (prefix and not value.startswith(prefix)):
+                return
+            if value not in versions:
+                versions.append(value)
+                self.stability['neoforge'][value] = not bool(
+                    re.search(r'(?i)(alpha|beta)', value)
+                )
+
+        for base in (
+            'https://bmclapi2.bangbang93.com',
+            'https://bmclapi.bangbang93.com',
+        ):
+            try:
+                data = self._fetch_json(
+                    f'{base}/neoforge/list/{self.version_id}',
+                    timeout=5,
+                )
+            except Exception as exc:
+                errors.append(str(exc))
+                continue
+            reachable = True
+            if isinstance(data, dict):
+                data = data.get('versions') or data.get('list') or []
             if isinstance(data, list):
-                versions = []
                 for item in data:
-                    value = item.get('version') if isinstance(item, dict) else None
-                    if value:
-                        value = str(value)
-                        versions.append(value)
-                        self.stability['neoforge'][value] = True
+                    if isinstance(item, str):
+                        add(item)
+                    elif isinstance(item, dict) and item.get('version'):
+                        add(item.get('version'))
+            if versions:
+                versions.sort(key=_version_tuple, reverse=True)
+                return versions[:30]
+
+        for url in (
+            'https://maven.neoforged.net/api/maven/versions/releases/'
+            'net/neoforged/neoforge',
+            'https://maven.neoforged.net/releases/net/neoforged/neoforge/'
+            'maven-metadata.xml',
+        ):
+            try:
+                if url.endswith('.xml'):
+                    text = self._fetch_text(url, timeout=5)
+                    values = re.findall(
+                        r'<version>([^<]+)</version>', text or ''
+                    )
+                else:
+                    data = self._fetch_json(url, timeout=5)
+                    if isinstance(data, dict):
+                        values = data.get('versions') or []
+                    else:
+                        values = data if isinstance(data, list) else []
+            except Exception as exc:
+                errors.append(str(exc))
+                continue
+            reachable = True
+            for value in values or ():
+                if isinstance(value, dict):
+                    value = value.get('version') or value.get('name')
+                add(value)
+            if versions:
+                versions.sort(key=_version_tuple, reverse=True)
+                return versions[:30]
+
+        # 官方 maven 在部分网络下会超时；GitCode 的标签
+        # 能提供 26.x 这类带完整补丁号的版本。
+        try:
+            git_versions, _git_error = self._gitcode_neoforge_versions()
+            reachable = True
+            for value in git_versions:
+                add(value)
+            if versions:
+                versions.sort(key=_version_tuple, reverse=True)
                 return versions[:30]
         except Exception as exc:
-            self.errors['neoforge'] = str(exc)
+            errors.append(str(exc))
+
+        # 最后使用本地已下载的安装器版本，至少不让已有版本
+        # 因为网络波动变成“加载失败”。
+        local_versions = self._local_neoforge_versions()
+        if local_versions:
+            for value in local_versions:
+                add(value)
+            if versions:
+                versions.sort(key=_version_tuple, reverse=True)
+                self.errors.pop('neoforge', None)
+                return versions[:30]
+
+        if errors and not reachable:
+            self.errors['neoforge'] = errors[-1]
         return []
 
     def _get_optifine(self):
@@ -178,6 +477,8 @@ class LoadVersionsWorker(QThread):
         version = _version_tuple(self.version_id)
         if version and version < (1, 14):
             return []
+        self.errors.pop('fabric', None)
+        last_error = ''
         for url in (
             f'https://bmclapi2.bangbang93.com/fabric-meta/v2/versions/loader/{self.version_id}',
             f'https://openbmclapi.bangbang93.com/fabric-meta/v2/versions/loader/{self.version_id}',
@@ -207,15 +508,20 @@ class LoadVersionsWorker(QThread):
                         stable.append(value)
                 if all_versions:
                     merged = stable + [v for v in all_versions if v not in stable]
+                    self.errors.pop('fabric', None)
                     return merged[:30]
             except Exception as exc:
-                self.errors['fabric'] = str(exc)
+                last_error = str(exc)
+        if last_error:
+            self.errors['fabric'] = last_error
         return []
 
     def _get_fabric_api(self):
         version = _version_tuple(self.version_id)
         if version and version < (1, 14):
             return []
+        self.errors.pop('fabric_api', None)
+        last_error = ''
         params = {
             'game_versions': json.dumps([self.version_id]),
             'loaders': json.dumps(['fabric']),
@@ -246,9 +552,12 @@ class LoadVersionsWorker(QThread):
                     kind = str(item.get('version_type') or '').lower()
                     self.stability['fabric_api'][value] = (kind == 'release')
                 if versions:
+                    self.errors.pop('fabric_api', None)
                     return versions
             except Exception as exc:
-                self.errors['fabric_api'] = str(exc)
+                last_error = str(exc)
+        if last_error:
+            self.errors['fabric_api'] = last_error
         return []
 
     def _get_optifabric(self):
@@ -286,6 +595,8 @@ class LoadVersionsWorker(QThread):
                         break
             if done and not self._cancelled:
                 self.partial.emit({key: result[key] for key in completed})
+                if self.errors:
+                    self.partial_errors.emit(dict(self.errors))
         executor.shutdown(wait=False, cancel_futures=True)
         result['optifine_objects'] = dict(self._optifine_objects)
         result['_errors'] = dict(self.errors)
@@ -304,6 +615,7 @@ class VersionDetailPage(QWidget):
         self._selections = {'forge': None, 'neoforge': None, 'fabric': None, 'fabric_api': None, 'optifine': None, 'optifabric': None}
         self._loader_versions = {'forge': [], 'neoforge': [], 'fabric': [], 'fabric_api': [], 'optifine': [], 'optifabric': []}
         self._loaded_loader_ids = set()
+        self._timed_out_loader_keys = set()
         self._loader_errors = {}
         self._loader_cancel_buttons = {}
         self._optifabric_files = {}
@@ -316,22 +628,32 @@ class VersionDetailPage(QWidget):
         self._user_edited_top = False
         self.fabric_api_visible = False
         self._loading = True
+        self._load_generation = 0
         self._init_ui()
         self._sync_top_name()
         try:
             self.content_scroll.hide()
         except RuntimeError:
             pass
-        self.loading_overlay.start_auto('正在加载加载器版本', 92)
+        self.loading_overlay.start_auto('正在加载', 92)
         from PySide6.QtCore import QTimer
         self._loading_watchdog = QTimer(self)
         self._loading_watchdog.setSingleShot(True)
-        self._loading_watchdog.setInterval(12000)
+        self._loading_watchdog.setInterval(22000)
         self._loading_watchdog.timeout.connect(self._on_loading_watchdog)
         self._loading_watchdog.start()
+        self._load_generation += 1
+        generation = self._load_generation
         self._load_worker = LoadVersionsWorker(version_id)
-        self._load_worker.loaded.connect(self._on_versions_loaded)
-        self._load_worker.partial.connect(self._on_partial_versions_loaded)
+        self._load_worker.loaded.connect(
+            lambda data, g=generation: self._on_versions_loaded(data, g)
+        )
+        self._load_worker.partial.connect(
+            lambda data, g=generation: self._on_partial_versions_loaded(data, g)
+        )
+        self._load_worker.partial_errors.connect(
+            lambda data, g=generation: self._on_partial_errors(data, g)
+        )
         self._load_worker.start()
         _register_cleanup()
 
@@ -462,9 +784,13 @@ class VersionDetailPage(QWidget):
         name_label.setFixedWidth(110)
         name_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         row.addWidget(name_label)
-        status_label = QLabel('' if has_versions else '无可用版本')
+        status_label = ClickableLabel(
+            '' if has_versions else '无可用版本'
+        )
         status_label.setStyleSheet('color: rgba(255,255,255,0.6); font-size: 13px; background:transparent;')
-        status_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        status_label.clicked.connect(
+            (lambda lid=loader_id: self._on_loader_status_clicked(lid))
+        )
         row.addWidget(status_label, 1)
         self._loader_status_labels[loader_id] = status_label
         cancel_btn = QPushButton()
@@ -494,15 +820,16 @@ class VersionDetailPage(QWidget):
         self._loader_buttons[loader_id] = btn
         container.clicked.connect((lambda lid=loader_id: self._on_loader_card_clicked(lid)))
         outer.addLayout(row)
-        version_list = QListWidget()
-        version_list.setStyleSheet('\n            QListWidget { background:rgba(8,10,16,0.45);\n                          border:1px solid rgba(255,255,255,0.10);\n                          border-radius:6px; outline:none; }\n            QListWidget::item { padding:6px 10px; color:rgba(255,255,255,0.85);\n                                border-bottom:1px solid rgba(255,255,255,0.04); }\n            QListWidget::item:selected { background:rgba(136,221,221,0.32); color:white; border:1px solid rgba(136,221,221,0.55); border-radius:6px; margin:2px 4px; }\n            QListWidget::item:hover { background:rgba(255,255,255,0.06); }\n        ')
+        version_list = AnimatedListView()
         version_list.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         version_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         version_list.setIconSize(QSize(16, 16))
         version_list.setFixedHeight(150)
         version_list.hide()
-        version_list.itemClicked.connect((lambda item, lid=loader_id: self._on_loader_version_selected(lid, item)))
-        version_list.itemDoubleClicked.connect((lambda item, lid=loader_id: self._on_loader_version_selected(lid, item)))
+        version_list.itemClicked.connect(
+            (lambda item, lid=loader_id:
+             self._on_loader_version_selected(lid, item))
+        )
         outer.addWidget(version_list)
         self._loader_version_lists[loader_id] = version_list
         self._loader_expanded[loader_id] = False
@@ -691,6 +1018,19 @@ class VersionDetailPage(QWidget):
         if loaded >= len(needed):
             self._finish_loading()
 
+    def _on_loader_status_clicked(self, loader_id):
+        label = self._loader_status_labels.get(loader_id)
+        if label is None:
+            return
+        text = str(label.text() or '')
+        if (
+            '加载失败' in text
+            or '加载超时' in text
+            or '网络获取失败' in text
+        ):
+            label.setText('正在加载...')
+            self._retry_loader_versions()
+
     def _retry_loader_versions(self):
         old = self._load_worker
         if old is not None and old.isRunning():
@@ -706,6 +1046,7 @@ class VersionDetailPage(QWidget):
             )
         }
         self._loaded_loader_ids.clear()
+        self._timed_out_loader_keys.clear()
         self._loader_errors = {}
         self._optifine_objects = {}
         self._optifine_display = {}
@@ -715,11 +1056,20 @@ class VersionDetailPage(QWidget):
             self.content_scroll.hide()
         except RuntimeError:
             pass
-        self.loading_overlay.start_auto('正在重新加载加载器版本', 92)
+        self.loading_overlay.start_auto('正在加载', 92)
         self._loading_watchdog.start()
+        self._load_generation += 1
+        generation = self._load_generation
         worker = LoadVersionsWorker(self.version_id)
-        worker.loaded.connect(self._on_versions_loaded)
-        worker.partial.connect(self._on_partial_versions_loaded)
+        worker.loaded.connect(
+            lambda data, g=generation: self._on_versions_loaded(data, g)
+        )
+        worker.partial.connect(
+            lambda data, g=generation: self._on_partial_versions_loaded(data, g)
+        )
+        worker.partial_errors.connect(
+            lambda data, g=generation: self._on_partial_errors(data, g)
+        )
         self._load_worker = worker
         worker.start()
 
@@ -733,16 +1083,24 @@ class VersionDetailPage(QWidget):
             return
         needed = self._needed_loader_keys()
         if needed and all(not self._loader_versions.get(key) for key in needed):
-            reason = (
-                '未连接到互联网，无法获取加载器版本'
-                if not network_available()
-                else '加载器版本获取失败，请稍后重试'
+            # 超时不是“没有可用版本”：结束遮罩，让加载器行显示
+            # “加载超时，点击重试”，用户可以直接点状态文字重试。
+            timed_out = any(
+                key in self._timed_out_loader_keys for key in needed
             )
             try:
                 self.content_scroll.show()
             except RuntimeError:
                 pass
-            self.loading_overlay.fail(reason)
+            if timed_out:
+                self.loading_overlay.finish()
+            else:
+                reason = (
+                    '未连接到互联网，无法获取加载器版本'
+                    if not network_available()
+                    else '加载器版本获取失败，请稍后重试'
+                )
+                self.loading_overlay.fail(reason)
         else:
             self.loading_overlay.finish()
 
@@ -752,26 +1110,49 @@ class VersionDetailPage(QWidget):
         if not self.loading_overlay.is_loading():
             return
         self._loading = False
-        self._loaded_loader_ids.update(self._needed_loader_keys())
+        keys = self._needed_loader_keys()
+        self._loaded_loader_ids.update(keys)
+        self._timed_out_loader_keys.update(
+            key for key in keys
+            if not self._loader_versions.get(key)
+        )
         self._refresh_all_compatible_tips()
         self._update_loader_ui()
         self._finish_loading()
 
-    def _on_partial_versions_loaded(self, versions_dict):
+    def _on_partial_versions_loaded(self, versions_dict, generation=None):
+        if generation is not None and generation != self._load_generation:
+            return
         if not versions_dict:
             return
         self._loader_versions.update(versions_dict)
         self._loaded_loader_ids.update(versions_dict.keys())
+        for key, values in versions_dict.items():
+            if values:
+                self._timed_out_loader_keys.discard(key)
         self._refresh_all_compatible_tips()
         self._update_loader_ui()
         self._update_loading_progress()
 
-    def _on_versions_loaded(self, versions_dict):
+    def _on_partial_errors(self, errors, generation=None):
+        if generation is not None and generation != self._load_generation:
+            return
+        if not errors:
+            return
+        self._loader_errors.update(errors)
+        self._update_loader_ui()
+
+    def _on_versions_loaded(self, versions_dict, generation=None):
+        if generation is not None and generation != self._load_generation:
+            return
         self._loading = False
         objects = versions_dict.pop('optifine_objects', {}) or {}
         self._loader_errors = versions_dict.pop('_errors', {}) or {}
         self._loader_versions = versions_dict
         self._loaded_loader_ids.update(versions_dict.keys())
+        for key, values in versions_dict.items():
+            if values:
+                self._timed_out_loader_keys.discard(key)
         self._optifine_objects = objects
         self._optifine_display = {vid: ver.display() for vid, ver in objects.items()}
         self._refresh_all_compatible_tips()
@@ -809,7 +1190,10 @@ class VersionDetailPage(QWidget):
                     if frame is not None:
                         frame.setVisible(True)
                     logger.warning('加载器 %s 获取失败: %s', loader_id, error)
-                    label.setText('加载失败，请点击重试')
+                    label.setText('加载失败！')
+                    label.setToolTip(
+                        f'{error}\n点击重新加载所有加载器版本'
+                    )
                     label.setStyleSheet('color: #ff8a8a; font-size: 13px;')
                     btn.setText('失败')
                     btn.setEnabled(False)
@@ -817,24 +1201,36 @@ class VersionDetailPage(QWidget):
                 elif not network_available():
                     if frame is not None:
                         frame.setVisible(True)
-                    label.setText('网络获取失败，请检查网络')
+                    label.setText('加载失败！')
+                    label.setToolTip('网络不可用，点击重新加载')
                     label.setStyleSheet('color: #ff8a8a; font-size: 13px;')
                     btn.setText('失败')
                     btn.setEnabled(False)
                     btn.setStyleSheet('background:#3a3a3a;color:#888;border-radius:4px;')
-                else:
-                    # 没有匹配当前游戏版本的加载器时保留行并显示明确状态，
-                    # 不再让列表只剩一个 Fabric。
+                elif loader_id in self._timed_out_loader_keys:
                     if frame is not None:
                         frame.setVisible(True)
-                    label.setText('无可用版本')
-                    label.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 13px;')
-                    btn.setText('无')
+                    label.setText('加载超时，点击重试')
+                    label.setToolTip('加载超时，点击重新加载所有加载器版本')
+                    label.setStyleSheet('color: #ff8a8a; font-size: 13px;')
+                    btn.setText('超时')
                     btn.setEnabled(False)
                     btn.setStyleSheet('background:#3a3a3a;color:#888;border-radius:4px;')
+                else:
+                    # 没有匹配当前游戏版本的加载器直接隐藏，不显示空行。
+                    if frame is not None:
+                        frame.setVisible(False)
+                    self._set_loader_expanded(
+                        loader_id, False, animate=False
+                    )
+                    label.setText('')
+                    label.setToolTip('')
+                    btn.setText('')
+                    btn.setEnabled(False)
                 continue
             if frame is not None:
                 frame.setVisible(True)
+            label.setToolTip('')
             label.setText('可以添加')
             label.setStyleSheet('color: rgba(255,255,255,0.6); font-size: 13px;')
             btn.setText('添加')
@@ -1078,7 +1474,6 @@ class VersionDetailPage(QWidget):
                 if item.data(Qt.UserRole) == version:
                     body.setCurrentRow(row)
                     break
-            self._set_loader_expanded(loader_id, False)
         if loader_id == 'fabric':
             self._show_fabric_api()
             if self._selections['fabric_api'] is None and self._loader_versions['fabric_api']:

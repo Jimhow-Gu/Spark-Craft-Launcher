@@ -479,7 +479,7 @@ class LoadingOverlay(QWidget):
         self._progress_anim.stop()
         self.image_label.show_error(_error_pixmap(58))
         self.media.setStyleSheet('QFrame#LoadingMedia { background:transparent; border:none; }')
-        self.status_label.setText('加载失败')
+        self.status_label.setText('加载失败！')
         self.retry_btn.show()
         self.card.setFixedSize(250, 212)
         self.status_label.setStyleSheet(
@@ -514,6 +514,10 @@ class LoadingOverlay(QWidget):
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if self._mode == 'error':
+            self.retry_requested.emit()
+            event.accept()
+            return
         if self._block_input:
             event.accept()
             return

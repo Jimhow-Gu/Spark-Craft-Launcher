@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import unittest
 
-from ui.pages.news_archive import _xaml_url, parse_archive_xaml
+from ui.pages.news_archive import (
+    _archive_info_html, _xaml_url, parse_archive_xaml,
+)
 from ui.pages.news_page import parse_news_page
 
 
@@ -67,6 +69,17 @@ class NewsArchiveParserTests(unittest.TestCase):
             _xaml_url('https://example.com/Archive.xaml'),
             'https://example.com/Archive.xaml',
         )
+
+    def test_archive_info_has_type_colors_and_light_variant(self):
+        text = '正式版 / 发布候选版 / 预发布版'
+        dark = _archive_info_html(text, False)
+        light = _archive_info_html(text, True)
+        self.assertIn('#B7E4C7', dark)
+        self.assertIn('#E8C98A', dark)
+        self.assertIn('#A8C8C8', dark)
+        self.assertIn('#2E7D4F', light)
+        self.assertIn('#8A5A12', light)
+        self.assertIn('#555555', light)
 
     def test_news_history_uses_event_data_instead_of_wiki(self):
         news = '''<local:MyCard Title="历史版本更新日志">

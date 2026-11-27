@@ -98,14 +98,21 @@ def ensure_launcher_profiles(mc_dir):
 def _natural_key(text):
     return [(0, int(p)) if p.isdigit() else (1, p.lower()) for p in re.split('(\\d+)', text)]
 
-def pick_java(mc_version):
-    '''选择最接近需求版本的 Java，避免用 Java 25 跑 1.12 的 Forge 安装器。'''
+def pick_java(mc_version, loader='', loader_version='', has_optifine=False):
+    '''按 MC/加载器兼容范围选择 Java，避免用 Java 25 跑 1.12 Forge 安装器。'''
 
     try:
         from core.launch import LaunchManager
+        from core.java_requirements import java_requirement_bounds
         mgr = LaunchManager()
-        required = mgr._get_required_java_version(mc_version)
-        _ver, path = mgr._select_best_java(required)
+        low, high = java_requirement_bounds(
+            mc_version,
+            loader=loader,
+            loader_version=loader_version,
+            has_optifine=has_optifine,
+        )
+        required = max(1, int(low))
+        _ver, path = mgr._select_best_java(required, high)
         if path:
             if path.lower().endswith('javaw.exe'):
                 java_exe = path[:-len('javaw.exe')] + 'java.exe'
@@ -665,7 +672,9 @@ def _install_fabric_with_installer(mc_version, loader_version, mc_dir, custom_na
     _download_installer([f'https://maven.fabricmc.net/net/fabricmc/fabric-installer/{inst_version}/fabric-installer-{inst_version}.jar', f'{BMCLAPI}/maven/net/fabricmc/fabric-installer/{inst_version}/fabric-installer-{inst_version}.jar', f'{OPENBMCLAPI}/maven/net/fabricmc/fabric-installer/{inst_version}/fabric-installer-{inst_version}.jar'], installer, http=http, status_cb=status_cb, progress_cb=(lambda p: emit('loader_file', p * 0.9)), cancel=cancel)
     emit('loader_file', 100)
     ProgressMapper(25, 10, progress_cb)(100)
-    java_path = pick_java(mc_version)
+    java_path = pick_java(
+        mc_version, loader='fabric', loader_version=loader_version
+    )
     log_path = LOG_DIR / f'install_fabric_{mc_version}_{loader_version}_installer.log'
     before = {p.name for p in versions_dir.iterdir() if p.is_dir()} if versions_dir.exists() else set()
     _prepare_reinstall_target(versions_dir / custom_name, custom_name)
@@ -1040,7 +1049,9 @@ def install_forge(mc_version, forge_version, mc_dir, custom_name, *, method='aut
             emit('loader_install', 100)
         ProgressMapper(50, 10, progress_cb)(100)
     else:
-        java_path = pick_java(mc_version)
+        java_path = pick_java(
+            mc_version, loader='forge', loader_version=forge_version
+        )
         log_path = LOG_DIR / f'install_{mc_version}-{forge_version}.log'
         patched = _patch_installer_offline(installer)
         rc = 1
@@ -1258,7 +1269,9 @@ def install_neoforge(mc_version, neoforge_version, mc_dir, custom_name, *, metho
     if progress_cb:
         progress_cb(50)
     before = {p.name for p in versions_dir.iterdir() if p.is_dir()} if versions_dir.exists() else set()
-    java_path = pick_java(mc_version)
+    java_path = pick_java(
+        mc_version, loader='neoforge', loader_version=neoforge_version
+    )
     log_path = LOG_DIR / f'install_{neoforge_version}.log'
     patched = _patch_installer_offline(installer)
     rc = 1

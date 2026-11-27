@@ -18,11 +18,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 from urllib.parse import quote
-from PySide6.QtCore import (Qt, Signal, QThread, QTimer, QUrl, QSize, QObject, QEvent, QEasingCurve)
+from PySide6.QtCore import (Qt, Signal, QThread, QTimer, QUrl, QPoint, QSize, QObject, QEvent, QEasingCurve)
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QIcon, QPainter, QPainterPath, QPalette, QPixmap)
 from PySide6.QtNetwork import (QNetworkAccessManager, QNetworkDiskCache, QNetworkReply, QNetworkRequest)
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QHeaderView, QAbstractItemView, QProgressBar, QSizePolicy, QRadioButton, QButtonGroup, QScrollArea, QToolButton, QDialogButtonBox, QStackedWidget)
 from ui.widgets.rounded_combo import RoundedComboBox
+from ui.widgets.rounded_select import RoundedSelect, _SelectPopup
+from ui.widgets.animated_list import AnimatedListView
 from core.app_font import ui_font
 from ui.widgets.back_button import BackButton
 from ui.widgets.dark_dialog import DarkQuestionDialog
@@ -83,6 +85,8 @@ class VersionComboBox(RoundedComboBox):
             ' border-radius:4px; }'
         )
         self._arrow_btn.clicked.connect(self._toggle_popup)
+        self._custom_popup = _SelectPopup(self)
+        self._custom_popup.item_chosen.connect(self._choose_popup_row)
         self._update_arrow()
         self.lineEdit().installEventFilter(self)
         self.view().setProperty('_theme_ignore', True)
@@ -107,21 +111,77 @@ class VersionComboBox(RoundedComboBox):
         )
 
     def _toggle_popup(self):
-        if self.view().isVisible():
+        if self._custom_popup.isVisible():
+            if time.monotonic() - getattr(self, '_opened_at', 0.0) < 0.28:
+                return
             self.hidePopup()
         else:
+            # 箭头按钮的 clicked 在鼠标释放时发出，等该事件结束再展开。
+            QTimer.singleShot(0, self._open_popup_after_release)
+
+    def _open_popup_after_release(self):
+        if self.isVisible() and not self._custom_popup.isVisible():
             self.showPopup()
 
     def showPopup(self):
-        self._apply_view_style()
-        super().showPopup()
+        if not self.isVisible() or not self.isEnabled():
+            return
+        items = [
+            (self.itemText(index), index)
+            for index in range(self.count())
+        ]
+        popup = self._custom_popup
+        popup.list.setFont(self.font())
+        popup.rebuild(items, self.currentIndex())
+        size = popup.preferred_size(self.width())
+        popup.setFixedSize(size)
+        popup.layout().activate()
+        if self.currentIndex() >= 10:
+            item = popup.list.item(self.currentIndex())
+            if item is not None:
+                popup.list.scrollToItem(
+                    item, QAbstractItemView.EnsureVisible
+                )
+        anchor = self.mapToGlobal(QPoint(0, self.height() + 2))
+        top = self.mapToGlobal(QPoint(0, 0))
+        screen = QApplication.screenAt(anchor) or self.screen()
+        area = screen.availableGeometry() if screen is not None else None
+        x, y = anchor.x(), anchor.y()
+        if area is not None:
+            x = min(
+                max(x, area.left()),
+                max(area.left(), area.right() - size.width() + 1),
+            )
+            above = top.y() - size.height() - 2
+            if y + size.height() > area.bottom() and above >= area.top():
+                y = above
+            else:
+                y = min(
+                    y, max(area.top(), area.bottom() - size.height() + 1)
+                )
+        slide = -5 if y >= top.y() else 5
+        popup.prepare_open(QPoint(x, y), slide)
+        popup.show()
+        self._opened_at = time.monotonic()
         self._arrow_open = True
         self._update_arrow()
 
     def hidePopup(self):
-        super().hidePopup()
+        self._custom_popup.hide()
         self._arrow_open = False
         self._update_arrow()
+
+    def _on_popup_hidden(self):
+        self._arrow_open = False
+        self._update_arrow()
+
+    def _choose_popup_row(self, row):
+        if 0 <= row < self.count():
+            self.setCurrentIndex(row)
+            self.setEditText(self.itemText(row))
+            self.lineEdit().editingFinished.emit()
+        self._custom_popup.hide()
+        self.lineEdit().setFocus(Qt.OtherFocusReason)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -133,7 +193,7 @@ class VersionComboBox(RoundedComboBox):
 
     def eventFilter(self, obj, event):
         if obj is self.lineEdit() and event.type() == QEvent.MouseButtonPress:
-            if self.view().isVisible():
+            if self._custom_popup.isVisible():
                 self.hidePopup()
         return super().eventFilter(obj, event)
 
@@ -868,7 +928,7 @@ class CollapsibleSection(QWidget):
         self._content_layout.setSpacing(4)
         outer.addWidget(self._content)
         self._height_anim = HeightAnimation(self._content, self)
-        self._height_anim.setDuration(190)
+        self._height_anim.setDuration(160)
         self._height_anim.finished.connect(self._on_height_anim_finished)
         self._expanded = bool(expanded)
         self._toggle.toggled.connect(self._on_toggled)
@@ -903,7 +963,7 @@ class CollapsibleSection(QWidget):
             if target <= 0:
                 target = content.height()
             content.setMaximumHeight(start)
-            self._height_anim.setDuration(190)
+            self._height_anim.setDuration(160)
             self._height_anim.setEasingCurve(QEasingCurve.OutCubic)
             self._height_anim.setStartValue(start)
             self._height_anim.setEndValue(max(start, target))
@@ -915,7 +975,7 @@ class CollapsibleSection(QWidget):
                 start = max(0, content.sizeHint().height())
             content.setMaximumHeight(start)
             self._height_anim.setDuration(160)
-            self._height_anim.setEasingCurve(QEasingCurve.InCubic)
+            self._height_anim.setEasingCurve(QEasingCurve.OutCubic)
             self._height_anim.setStartValue(start)
             self._height_anim.setEndValue(0)
         self._height_anim.start()
@@ -2121,7 +2181,7 @@ class ProjectFilesDialog(QDialog):
 
 
 class ModBrowserPage(QWidget):
-    import_pack_requested = Signal(str, str)
+    import_pack_requested = Signal(str, str, str)
     download_game_requested = Signal()
     PAGE_SIZE = 20
     def __init__(self, project_type, parent=None):
@@ -2185,49 +2245,62 @@ class ModBrowserPage(QWidget):
         layout.addLayout(top)
         filters = QFrame()
         filters.setStyleSheet('QFrame { background: rgba(30,41,41,0.84); border: 1px solid rgba(255,255,255,0.18); border-radius: 8px; }')
-        grid = QGridLayout(filters)
-        grid.setContentsMargins(10, 8, 10, 8)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(6)
+        filters.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
+        filters_layout = QVBoxLayout(filters)
+        filters_layout.setContentsMargins(10, 8, 10, 8)
+        filters_layout.setSpacing(6)
+
+        # 第一行：搜索框独占，整合包页把本地安装按钮固定在右侧。
+        search_row = QHBoxLayout()
+        search_row.setContentsMargins(0, 0, 0, 0)
+        search_row.setSpacing(8)
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText('搜索名称、描述、作者...')
-        self.search_input.setMinimumHeight(32)
-        self.search_input.setStyleSheet('\n            QLineEdit {\n                background: rgba(255,255,255,0.06);\n                border: 1px solid rgba(255,255,255,0.12);\n                border-radius: 6px; color: #f0f0f0; padding: 4px 8px;\n            }\n        ')
+        self.search_input.setMinimumHeight(34)
+        self.search_input.setMinimumWidth(180)
+        self.search_input.setStyleSheet(
+            'QLineEdit { background: rgba(255,255,255,0.06);'
+            ' border: 1px solid rgba(255,255,255,0.12); border-radius: 8px;'
+            ' color: #f0f0f0; padding: 5px 10px; }'
+        )
         self.search_input.returnPressed.connect(self._trigger_search)
-        grid.addWidget(self.search_input, 0, 0, 1, 3)
-        self.source_combo = RoundedComboBox()
+        search_row.addWidget(self.search_input, 1)
+        self.source_combo = RoundedSelect()
         self.source_combo.addItems(['Modrinth', 'CurseForge'])
-        self.source_combo.setStyleSheet(self._combo_style())
+        self.source_combo.setMinimumWidth(0)
         self.source_combo.currentIndexChanged.connect(self._on_source_changed)
-        grid.addWidget(self.source_combo, 0, 3)
-        self.sort_combo = RoundedComboBox()
+        search_row.addWidget(self.source_combo, 0)
+        self.sort_combo = RoundedSelect()
         for key, label in SORTS.items():
             self.sort_combo.addItem(label, key)
-        self.sort_combo.setStyleSheet(self._combo_style())
+        self.sort_combo.setMinimumWidth(0)
         self.sort_combo.currentIndexChanged.connect(self._trigger_search)
-        grid.addWidget(self.sort_combo, 0, 4)
+        search_row.addWidget(self.sort_combo, 0)
         if self.project_type == 'modpack':
             install_btn = QPushButton('安装已有整合包')
+            install_btn.setFixedHeight(34)
             install_btn.setMinimumWidth(120)
             install_btn.setStyleSheet(self._secondary_style())
             install_btn.setToolTip('选择本地的 .mrpack 或 CurseForge 整合包 .zip')
             install_btn.clicked.connect(self._choose_local_pack)
-            grid.addWidget(install_btn, 0, 5)
+            search_row.addWidget(install_btn, 0, Qt.AlignRight)
+        filters_layout.addLayout(search_row)
+
+        # 第二行：版本/分类/名称匹配弹性撑满，搜索和重置贴右。
+        second_row = QHBoxLayout()
+        second_row.setContentsMargins(0, 0, 0, 0)
+        second_row.setSpacing(8)
         self.mc_combo = VersionComboBox()
         self.mc_combo.setEditable(True)
         self.mc_combo.setInsertPolicy(QComboBox.NoInsert)
         self.mc_combo.setMinimumWidth(190)
+        self.mc_combo.setMinimumHeight(34)
         self.mc_combo.setMaxVisibleItems(20)
         self.mc_combo.setToolTip('默认全部版本，也可以直接输入版本号')
         self.mc_combo.addItem('全部（也可自行输入）', '')
         self.mc_combo.setCurrentIndex(-1)
         self.mc_combo.lineEdit().setPlaceholderText('全部（也可自行输入）')
         self.mc_combo.view().setMinimumWidth(190)
-        self.mc_combo.view().setStyleSheet(
-            'QAbstractItemView { background: palette(base); color: palette(text);'
-            ' selection-background-color:#88DDDD; selection-color:white;'
-            ' border:1px solid palette(mid); }'
-        )
         self.mc_combo.setStyleSheet(
             self._combo_style()
             + 'QComboBox { padding-right: 30px; }'
@@ -2236,41 +2309,37 @@ class ModBrowserPage(QWidget):
         )
         self.mc_combo.currentIndexChanged.connect(self._on_filter_changed)
         self.mc_combo.lineEdit().editingFinished.connect(self._trigger_search)
-        grid.addWidget(self.mc_combo, 1, 0)
-        self.loader_combo = RoundedComboBox()
-        self.loader_combo.addItem('全部加载器', '')
-        for key, label in LOADERS.items():
-            self.loader_combo.addItem(label, key)
-        self.loader_combo.setStyleSheet(self._combo_style())
-        self.loader_combo.currentIndexChanged.connect(self._trigger_search)
-        grid.addWidget(self.loader_combo, 1, 1)
-        self.category_combo = RoundedComboBox()
+        second_row.addWidget(self.mc_combo, 3)
+        self.category_combo = RoundedSelect()
         self.category_combo.addItem('全部分类', '')
-        self.category_combo.setStyleSheet(self._combo_style())
         self.category_combo.currentIndexChanged.connect(self._trigger_search)
-        grid.addWidget(self.category_combo, 1, 2)
-        self.name_match_combo = RoundedComboBox()
+        second_row.addWidget(self.category_combo, 2)
+        self.name_match_combo = RoundedSelect()
         self.name_match_combo.addItem('名称包含', 'contains')
         self.name_match_combo.addItem('名称开头', 'startswith')
-        self.name_match_combo.setStyleSheet(self._combo_style())
         self.name_match_combo.setToolTip('仅过滤当前页结果')
         self.name_match_combo.currentIndexChanged.connect(self._render_current)
-        grid.addWidget(self.name_match_combo, 1, 3)
+        second_row.addWidget(self.name_match_combo, 2)
         search_btn = QPushButton('搜索')
+        search_btn.setFixedSize(105, 34)
         search_btn.setStyleSheet(self._primary_style())
         search_btn.clicked.connect(self._trigger_search)
-        grid.addWidget(search_btn, 1, 4)
+        second_row.addWidget(search_btn, 0)
         reset_btn = QPushButton('重置条件')
+        reset_btn.setFixedSize(115, 34)
         reset_btn.setStyleSheet(self._secondary_style())
         reset_btn.clicked.connect(self.reset_filters)
-        grid.addWidget(reset_btn, 1, 5)
+        second_row.addWidget(reset_btn, 0)
+        for combo in (
+            self.mc_combo, self.category_combo, self.name_match_combo,
+        ):
+            combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            combo.setMinimumWidth(0)
+        for index, stretch in enumerate((3, 2, 2)):
+            second_row.setStretch(index, stretch)
+        filters_layout.addLayout(second_row)
         layout.addWidget(filters)
-        if self.project_type in LOADER_RELEVANT_TYPES:
-            self.loader_combo.setEnabled(True)
-        else:
-            self.loader_combo.setEnabled(False)
-        self.results_list = QListWidget()
-        self.results_list.setStyleSheet('QListWidget { background: palette(base); border: 1px solid palette(mid); border-radius: 8px; outline: none; } QListWidget::item { border: none; padding: 3px 0; } QListWidget::item:selected { background: transparent; }')
+        self.results_list = AnimatedListView()
         self.results_list.setSpacing(4)
         self.results_list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         layout.addWidget(self.results_list, 1)
@@ -2295,13 +2364,13 @@ class ModBrowserPage(QWidget):
         self.stack.setCurrentWidget(browser)
 
     def _combo_style(self):
-        return '\n            QComboBox {\n                background: rgba(255,255,255,0.06);\n                border: 1px solid rgba(255,255,255,0.12);\n                border-radius: 6px; color: #f0f0f0; padding: 3px 8px;\n            }\n            QComboBox::drop-down { border: none; }\n            \n        '
+        return '\n            QComboBox {\n                background: rgba(255,255,255,0.06);\n                border: 1px solid rgba(255,255,255,0.12);\n                border-radius: 8px; color: #f0f0f0; padding: 5px 10px;\n            }\n            QComboBox::drop-down { border: none; }\n            \n        '
 
     def _primary_style(self):
-        return 'QPushButton { background:#90D9D9; color:#122828; border:none; border-radius:6px; padding:6px 16px; } QPushButton:hover { background:#78CACA; }'
+        return 'QPushButton { background:#90D9D9; color:#122828; border:none; border-radius:8px; padding:6px 16px; } QPushButton:hover { background:#78CACA; }'
 
     def _secondary_style(self):
-        return 'QPushButton { background:#3a3a3a; color:white; border:none; border-radius:6px; padding:6px 12px; } QPushButton:hover { background:#4a4a4a; }'
+        return 'QPushButton { background:#3a3a3a; color:white; border:none; border-radius:8px; padding:6px 12px; } QPushButton:hover { background:#4a4a4a; }'
 
     def activate(self):
         if not self._versions_loaded:
@@ -2437,7 +2506,6 @@ class ModBrowserPage(QWidget):
         self.source_combo.setCurrentIndex(0)
         self.mc_combo.setCurrentIndex(-1)
         self.mc_combo.setEditText('')
-        self.loader_combo.setCurrentIndex(0)
         self.category_combo.setCurrentIndex(0)
         self.sort_combo.setCurrentIndex(0)
         self._page = 1
@@ -2451,7 +2519,7 @@ class ModBrowserPage(QWidget):
         mc_version = self._mc_filter_value()
         if mc_version in ('全部', '全部版本', '自定义...'):
             mc_version = ''
-        loader = self.loader_combo.currentData() if self.loader_combo.isEnabled() else ''
+        loader = ''
         category = self.category_combo.currentData() or ''
         sort = self.sort_combo.currentData() or 'relevance'
         self._generation += 1
@@ -2657,6 +2725,10 @@ class ModBrowserPage(QWidget):
             return
         self.status_label.setText(f'第 {self._page} 页 · 共 {self._total} 个结果 · 来源 {self.source_combo.currentText()}')
         self.status_label.setStyleSheet('color: rgba(255,255,255,0.5); font-size: 12px;')
+        try:
+            self.results_list.fade_in()
+        except RuntimeError:
+            pass
 
     def _on_icon_ready(self, url, pix):
         for card in self._cards:
@@ -2836,7 +2908,7 @@ class ModBrowserPage(QWidget):
             QMessageBox.warning(self, '下载任务已满', f'当前同时下载任务已达到上限 {DownloadGate.max_threads()}。\n请前往「全局设置 → 下载线程数」调整后再试。')
             return
         mc_version = self._target_mc_version()
-        loader = self.loader_combo.currentData() if self.loader_combo.isEnabled() else ''
+        loader = ''
         game_dir = self._target_game_dir()
         page = ProjectFilesDialog(
             project, mc_version, loader, game_dir, self.project_type, self,
@@ -2975,6 +3047,7 @@ class ModBrowserPage(QWidget):
             'kind': kind,
             'dest': str(dest),
             'name': project.title,
+            'icon': project.icon_url or '',
             'display': display_name,
             'filename': mod_file.filename,
             'size': int(mod_file.size or 0),
@@ -3115,7 +3188,9 @@ class ModBrowserPage(QWidget):
                 self._set_download_status(f'下载完成: {path}', 'success')
         self._refresh_download_bar_visibility()
         if context['kind'] == 'modpack':
-            self.import_pack_requested.emit(path, context.get('name') or '')
+            self.import_pack_requested.emit(
+                path, '', context.get('icon') or ''
+            )
             return
         display = context.get('display') or Path(path).stem
         QTimer.singleShot(
@@ -3173,7 +3248,7 @@ class ModBrowserPage(QWidget):
     def _choose_local_pack(self):
         path, _ = QFileDialog.getOpenFileName(self, '选择整合包', '', 'Minecraft 整合包 (*.mrpack *.zip);;所有文件 (*.*)')
         if path:
-            self.import_pack_requested.emit(path, '')
+            self.import_pack_requested.emit(path, '', '')
 
     def has_active_downloads(self):
         for worker in self._workers:

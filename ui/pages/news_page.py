@@ -26,6 +26,7 @@ from core.app_font import ui_font
 from core.config import ConfigManager
 from core.paths import safe_rmtree, scl_dir
 from ui.pages.news_detail import VersionDetailPage, detail_xaml_to_html
+from ui.widgets.clickable_label import ClickableLabel
 from ui.widgets.height_animation import HeightAnimation
 from ui.widgets.rotating_chevron import RotatingChevronButton
 from ui.widgets.rounded_surface import RoundedFrame
@@ -918,9 +919,10 @@ class NewsPage(QWidget):
             ' border-radius:10px; } QLabel { background:transparent; }'
         )
         layout = QVBoxLayout(card)
-        label = QLabel(f'暂时无法获取新闻。\n{message}')
+        label = ClickableLabel(f'暂时无法获取新闻。\n{message}')
         label.setWordWrap(True)
         label.setStyleSheet('color:#f4fbfb; font-size:13px;')
+        label.clicked.connect(lambda: self.load(force=True))
         layout.addWidget(label)
         retry = QPushButton('重试')
         retry.setFixedWidth(90)

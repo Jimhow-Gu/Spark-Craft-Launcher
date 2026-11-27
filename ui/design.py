@@ -238,15 +238,7 @@ QComboBox QAbstractItemView::item {{
     min-height: 28px;
     padding: 5px 10px;
     border-radius: 6px;
-}}
-QComboBox QAbstractItemView::item:hover {{
-    background: rgba(136,221,221,0.18);
-    color: palette(text);
-}}
-QComboBox QAbstractItemView::item:selected {{
-    background: #88DDDD;
-    color: #102020;
-    border-radius: 6px;
+    background: transparent;
 }}
 QMenu {{
     background: palette(base);

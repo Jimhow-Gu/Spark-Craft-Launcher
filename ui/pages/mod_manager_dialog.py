@@ -26,6 +26,7 @@ from core.mod_scan import (
 )
 from core.mod_translations import bilingual_html, bilingual_plain, chinese_only, english_only, translation_db
 from core.paths import move_to_recycle_bin
+from ui.widgets.animated_list import AnimatedListView
 from ui.widgets.back_button import BackButton
 from ui.widgets.dark_dialog import ask_dark_question
 from ui.widgets.loading_overlay import LoadingOverlay
@@ -623,16 +624,16 @@ class ModManagerPage(QWidget):
         tab_row.addWidget(self.disabled_tab)
         tab_row.addStretch(1)
         layout.addLayout(tab_row)
-        self.list = QListWidget()
+        self.list = AnimatedListView()
         self.list.setSelectionMode(QListWidget.MultiSelection)
         self.list.setAcceptDrops(False)
         self.list.viewport().setAcceptDrops(False)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.list.setStyleSheet('\n            QListWidget { background: rgba(30,41,41,0.62);\n                          border:1px solid rgba(255,255,255,0.16); border-radius:8px; outline:none; }\n            QListWidget::item { border-bottom:1px solid rgba(255,255,255,0.06); }\n            QListWidget::item:selected { background: rgba(136,221,221,0.28); border:1px solid rgba(136,221,221,0.5); border-radius:6px; margin:2px 4px; }\n            QListWidget::item:hover { background: rgba(255,255,255,0.06); }\n        ')
         self.list.itemSelectionChanged.connect(self._on_selection_changed)
         layout.addWidget(self.list, 1)
         self.loading_overlay = LoadingOverlay(self.list.viewport())
         self.loading_overlay.attach_to(self.list.viewport())
+        self.loading_overlay.retry_requested.connect(self.refresh)
         self.status_label = QLabel('正在扫描 Mod...')
         self.status_label.setStyleSheet('color:rgba(255,255,255,0.5); font-size:12px;')
         layout.addWidget(self.status_label)
@@ -1024,6 +1025,10 @@ class ModManagerPage(QWidget):
             self.list.blockSignals(False)
             self.list.verticalScrollBar().setValue(scroll_pos)
             self._on_selection_changed()
+            try:
+                self.list.fade_in()
+            except RuntimeError:
+                pass
 
     def _selected(self):
         result = []

@@ -17,10 +17,14 @@ from ui.widgets.smooth_progress import SmoothProgressBar
 class ModpackImportPage(QWidget):
     back_requested = Signal()
     start_requested = Signal(str, str)
-    def __init__(self, info, path, default_name, parent=None, installed_versions=None):
+    def __init__(
+        self, info, path, default_name, parent=None, installed_versions=None,
+        icon_url='',
+    ):
         super().__init__(parent)
         self.info = info
         self.path = Path(path)
+        self.icon_url = str(icon_url or '').strip()
         self.installed_versions = list(installed_versions or [])
         self._running = False
         self._last_mode = 'new'

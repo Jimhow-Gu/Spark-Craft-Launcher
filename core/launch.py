@@ -412,7 +412,22 @@ class LaunchManager:
         return result
 
     def _get_required_java_version(self, minecraft_version):
-        from core.java_requirements import recommended_java_major
+        from core.java_requirements import (
+            java_requirement_bounds, recommended_java_major,
+        )
+        try:
+            context = self._get_java_context(minecraft_version)
+            low, _high = java_requirement_bounds(
+                context['base'],
+                loader=context['loader'],
+                loader_version=context['loader_version'],
+                release_time=context['release_time'],
+                has_optifine=context['has_optifine'],
+                java_major=context['java_major'],
+            )
+            return int(low)
+        except Exception:
+            pass
         mc_dir = Path(self.config.get_mc_dir())
         version_root = mc_dir / 'versions'
         try:
@@ -748,18 +763,10 @@ class LaunchManager:
         candidates.sort(key=(lambda x: (x[0], x[1], x[2])))
         return candidates[0][3], candidates[0][4]
 
-    def _get_base_mc_version(self, final_id: str) -> str:
-        '''取得用于查询 Java 要求的原版 MC 版本号。'''
+    def _get_version_chain(self, final_id: str):
+        '''读取实例及其 inheritsFrom 链，供基础版本/加载器/Java 元数据复用。'''
 
-        mc_dir = Path(self.config.get_mc_dir())
-        version_root = mc_dir / 'versions'
-        try:
-            pack = json.loads((version_root / final_id / 'pmgl_pack.json').read_text(encoding='utf-8'))
-            base = str(pack.get('mc_version') or '').strip()
-            if base:
-                return base
-        except (OSError, ValueError, TypeError):
-            pass
+        version_root = Path(self.config.get_mc_dir()) / 'versions'
         chain = []
         current = final_id
         seen = set()
@@ -767,25 +774,151 @@ class LaunchManager:
             seen.add(current)
             data = {}
             try:
-                data = json.loads((version_root / current / f'{current}.json').read_text(encoding='utf-8'))
+                data = json.loads(
+                    (version_root / current / f'{current}.json').read_text(
+                        encoding='utf-8'
+                    )
+                )
             except (OSError, ValueError, TypeError):
                 data = {}
-            chain.append((current, data))
-            parent = data.get('inheritsFrom')
+            chain.append((current, data if isinstance(data, dict) else {}))
+            parent = data.get('inheritsFrom') if isinstance(data, dict) else ''
             if not parent:
                 break
             current = parent
+        return chain
+
+    def _get_base_mc_version(self, final_id: str) -> str:
+        '''取得用于查询 Java 要求的原版 MC 版本号。'''
+
+        version_root = Path(self.config.get_mc_dir()) / 'versions'
+        try:
+            pack = json.loads(
+                (version_root / final_id / 'pmgl_pack.json').read_text(
+                    encoding='utf-8'
+                )
+            )
+            base = str(pack.get('mc_version') or '').strip()
+            if base:
+                return base
+        except (OSError, ValueError, TypeError):
+            pass
+        chain = self._get_version_chain(final_id)
         if chain:
             base = str(chain[-1][0] or '').strip()
             if re.match('^\\d+\\.\\d+', base):
                 return base
         return final_id
 
+    def _get_java_context(self, final_id: str) -> dict:
+        '''汇总 MC 基础版本、加载器、OptiFine、releaseTime 与 JSON Java 要求。'''
+
+        version_root = Path(self.config.get_mc_dir()) / 'versions'
+        version_dir = version_root / final_id
+        pack_data = {}
+        try:
+            pack_data = json.loads(
+                (version_dir / 'pmgl_pack.json').read_text(encoding='utf-8')
+            )
+            if not isinstance(pack_data, dict):
+                pack_data = {}
+        except (OSError, ValueError, TypeError):
+            pack_data = {}
+        chain = self._get_version_chain(final_id)
+        data = chain[0][1] if chain else {}
+        base = str(pack_data.get('mc_version') or '').strip()
+        if not base:
+            for name, entry in reversed(chain):
+                if re.match(r'^\d+\.\d+', str(name or '')):
+                    base = str(name)
+                    break
+        base = base or final_id
+        try:
+            from core.version import detect_version_loader
+            loader = detect_version_loader(
+                final_id, data, version_dir, pack_data=pack_data
+            )
+        except Exception:
+            loader = str(pack_data.get('loader') or '').lower()
+        loader = str(loader or '').lower()
+        loader_version = str(
+            pack_data.get('loader_version')
+            or pack_data.get('loaderVersion')
+            or ''
+        ).strip()
+
+        blob = ' '.join(
+            json.dumps(entry, ensure_ascii=False).lower()
+            for _name, entry in chain
+        )
+        if not loader_version:
+            patterns = {
+                'forge': (
+                    r'(?:minecraftforge:forge|net\.minecraftforge:forge):'
+                    r'([^:@,\s"\']+)'
+                ),
+                'neoforge': (
+                    r'(?:neoforged:neoforge|net\.neoforged:neoforge):'
+                    r'([^:@,\s"\']+)'
+                ),
+                'fabric': (
+                    r'(?:fabric-loader|net\.fabricmc:fabric-loader):'
+                    r'([^:@,\s"\']+)'
+                ),
+                'quilt': (
+                    r'(?:quilt-loader|org\.quiltmc:quilt-loader):'
+                    r'([^:@,\s"\']+)'
+                ),
+            }
+            pattern = patterns.get(loader)
+            if pattern:
+                match = re.search(pattern, blob, re.I)
+                if match:
+                    loader_version = match.group(1)
+        if loader == 'forge' and loader_version.startswith(base + '-'):
+            loader_version = loader_version[len(base) + 1:]
+        has_optifine = bool(
+            loader == 'optifine'
+            or pack_data.get('optifine')
+            or pack_data.get('has_optifine')
+            or 'optifine' in blob
+        )
+        java_major = 0
+        for _name, entry in chain:
+            try:
+                value = int(
+                    (entry.get('javaVersion') or {}).get('majorVersion') or 0
+                )
+            except (TypeError, ValueError):
+                value = 0
+            java_major = max(java_major, value)
+        release_time = ''
+        for _name, entry in chain:
+            release_time = str(entry.get('releaseTime') or '').strip()
+            if release_time:
+                break
+        return {
+            'base': base,
+            'loader': loader,
+            'loader_version': loader_version,
+            'has_optifine': has_optifine,
+            'release_time': release_time,
+            'java_major': java_major or None,
+        }
+
     def _get_java_bounds(self, final_id: str, required: int):
         '''返回 (最低主版本, 最高主版本或 None, 是否有明确上限)。'''
 
-        from core.java_requirements import java_major_bounds
-        bounds = java_major_bounds(self._get_base_mc_version(final_id))
+        from core.java_requirements import java_requirement_bounds
+        context = self._get_java_context(final_id)
+        bounds = java_requirement_bounds(
+            context['base'],
+            loader=context['loader'],
+            loader_version=context['loader_version'],
+            release_time=context['release_time'],
+            has_optifine=context['has_optifine'],
+            java_major=context['java_major'],
+        )
         if bounds:
             low, high = int(bounds[0]), bounds[1]
             if high is None:
@@ -1167,7 +1300,13 @@ class LaunchManager:
             best_ver, best_path = self._select_best_java(required, max_java if has_max else None)
             if best_path:
                 java_path = normalize_java_executable(best_path)
-                logger.info(f'版本 {final_id} 需要 Java {required}，已选择 Java {best_ver}')
+                expected = (
+                    f'Java {min_java} ~ {max_java}'
+                    if has_max else f'Java {min_java} 或更高'
+                )
+                logger.info(
+                    f'版本 {final_id} 预期 {expected}，已选择 Java {best_ver}'
+                )
             else:
                 if prompt_java:
                     from PySide6.QtWidgets import QMessageBox
@@ -1884,6 +2023,7 @@ class LaunchWorker(QThread):
     process_exited = Signal(int)
     output_received = Signal(str)
     NO_WINDOW_WARN_SECONDS = 120.0
+    GRAPHICS_WINDOW_STABLE_SECONDS = 5.0
 
     def __init__(self, command: list[str], mc_dir: str, pre_launch_command: str='', window_title: str=''):
         super().__init__()
@@ -2073,6 +2213,26 @@ class LaunchWorker(QThread):
             except Exception:
                 pass
 
+    def _emit_graphics_fatal(self, message=''):
+        '''图形后端已明确失败时只发一次 fatal，并结束仍存活的进程。'''
+
+        if self._fatal_emitted:
+            return
+        self._fatal_emitted = True
+        text = (
+            str(message or '').strip()
+            or self._graphics_error_message
+            or fatal_launch_message('glfw error 65542')
+        )
+        logger.error('图形后端初始化失败: %s', text.replace(chr(10), ' '))
+        self.launch_fatal.emit(text)
+        proc = self._process
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
     def _post_launch_window_loop(self, pid: int, proc):
         '''等待游戏窗口；恢复被隐藏/最小化的窗口，并在窗口出现后置前、居中、改标题。'''
 
@@ -2087,10 +2247,21 @@ class LaunchWorker(QThread):
         activated = False
         last_rect = None
         stable = 0
+        graphics_window_since = None
+        graphics_window_seen = False
         for _ in range(360):
             if self._stop_flag or self._watch_done.is_set():
                 return
             if proc.poll() is not None and len(_process_tree_pids(pid)) <= 1:
+                if (
+                    self._graphics_error_seen
+                    and not self._window_ready_emitted
+                    and not self._fatal_emitted
+                ):
+                    self._emit_graphics_fatal(
+                        self._graphics_error_message
+                        or fatal_launch_message('glfw error 65542')
+                    )
                 return
             elapsed = time.monotonic() - started
             hwnd = _game_window_handle(pid)
@@ -2100,21 +2271,17 @@ class LaunchWorker(QThread):
                 _reveal_hidden_game_window(pid)
                 hwnd = _game_window_handle(pid)
             if not hwnd:
-                if (
-                    self._graphics_error_seen
-                    and elapsed >= 20.0
-                    and not self._fatal_emitted
+                if self._graphics_error_seen and (
+                    graphics_window_seen or elapsed >= 20.0
                 ):
-                    self._fatal_emitted = True
-                    logger.error('图形后端初始化失败，20 秒内没有游戏窗口，终止等待')
-                    self.launch_fatal.emit(
-                        self._graphics_error_message
-                        or fatal_launch_message('glfw error 65542')
+                    self._emit_graphics_fatal(
+                        '图形后端报错后游戏窗口消失，无法继续创建 OpenGL/Vulkan 窗口。'
+                        + chr(10) + chr(10)
+                        + (
+                            self._graphics_error_message
+                            or fatal_launch_message('glfw error 65542')
+                        )
                     )
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
                     return
                 if not self._window_missing_emitted and elapsed >= self.NO_WINDOW_WARN_SECONDS:
                     self._window_missing_emitted = True
@@ -2122,6 +2289,23 @@ class LaunchWorker(QThread):
                     self.window_missing.emit()
                 time.sleep(0.5)
                 continue
+            if self._graphics_error_seen:
+                graphics_window_seen = True
+                if graphics_window_since is None:
+                    graphics_window_since = elapsed
+                    logger.warning(
+                        '检测到窗口句柄，但日志已出现图形错误；'
+                        '先观察窗口稳定性，暂不报告启动就绪'
+                    )
+                if not self._window_ready_emitted:
+                    stable_for = elapsed - graphics_window_since
+                    if stable_for < self.GRAPHICS_WINDOW_STABLE_SECONDS:
+                        time.sleep(0.5)
+                        continue
+                    logger.info(
+                        '图形错误后窗口稳定 %.1f 秒，继续启动',
+                        stable_for,
+                    )
             if not title_done and _set_window_title_for_pid(pid, self.window_title):
                 logger.info(f'已修改游戏窗口标题: {self.window_title}')
                 title_done = True
@@ -2212,10 +2396,20 @@ class LaunchWorker(QThread):
                         time.sleep(0.5)
                 self._watch_done.set()
                 reader.join(timeout=1.0)
-                if (exit_code != 0 and self._graphics_error_seen and not self._stop_flag
-                        and not self._window_ready_emitted and not self._fatal_emitted):
-                    self._fatal_emitted = True
-                    self.launch_fatal.emit(self._graphics_error_message or fatal_launch_message('glfw error 65542'))
+                graphics_failure_recent = (
+                    self._graphics_error_seen
+                    and time.monotonic() - self._graphics_error_time <= 45.0
+                )
+                if (
+                    exit_code != 0
+                    and graphics_failure_recent
+                    and not self._stop_flag
+                    and not self._fatal_emitted
+                ):
+                    self._emit_graphics_fatal(
+                        self._graphics_error_message
+                        or fatal_launch_message('glfw error 65542')
+                    )
                 with self._stop_lock:
                     if not self._exited_emitted:
                         self._exited_emitted = True

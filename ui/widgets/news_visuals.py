@@ -48,11 +48,18 @@ def pixmap_from_data(data, max_pixels=MAX_IMAGE_PIXELS):
 
 
 class NewsImageLabel(QWidget):
-    '''按完整宽度铺满新闻图；加载时显示主题占位背景、动画和文字。'''
+    '''新闻/版本图；可自适应宽高比，加载时显示主题占位背景、动画和文字。'''
 
-    def __init__(self, parent=None):
+    def __init__(
+        self, parent=None, *, adaptive_height=False, max_height=420,
+        min_height=180,
+    ):
         super().__init__(parent)
         self._source = None
+        self._adaptive_height = bool(adaptive_height)
+        self._max_height = max(180, int(max_height))
+        self._min_height = max(80, int(min_height))
+        self._syncing_height = False
         self._light = self.palette().color(QPalette.Window).lightness() > 128
         self.setFixedHeight(180)
         self.setMinimumWidth(240)
@@ -89,16 +96,51 @@ class NewsImageLabel(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._placeholder.setGeometry(self.rect())
+        self._sync_height()
+
+    def _sync_height(self):
+        if not self._adaptive_height or self._syncing_height:
+            return
+        source = self._source
+        if source is None or source.isNull() or source.width() <= 0:
+            return
+        width = self.width()
+        if width <= 1:
+            return
+        target = int(width * source.height() / source.width())
+        target = max(self._min_height, min(self._max_height, target))
+        if self.height() == target:
+            return
+        self._syncing_height = True
+        try:
+            self.setFixedHeight(target)
+            self._placeholder.setGeometry(self.rect())
+        finally:
+            self._syncing_height = False
+
+    def _reset_height(self):
+        if not self._adaptive_height:
+            return
+        if self.height() == 180:
+            return
+        self._syncing_height = True
+        try:
+            self.setFixedHeight(180)
+            self._placeholder.setGeometry(self.rect())
+        finally:
+            self._syncing_height = False
 
     def set_source(self, pixmap):
         if pixmap is None or pixmap.isNull():
             return
         self._source = pixmap
         self._placeholder.hide()
+        self._sync_height()
         self.update()
 
     def setText(self, text):
         self._source = None
+        self._reset_height()
         self._placeholder.show()
         show_icon = text in ('', '正在加载新闻图片', '正在加载新闻图片...')
         self._loading_icon.setVisible(show_icon)
@@ -112,21 +154,35 @@ class NewsImageLabel(QWidget):
         '''保持烟花动画，只替换加载提示文字。'''
 
         self._source = None
+        self._reset_height()
         self._placeholder.show()
         self._loading_icon.show()
         self._loading_text.setText(str(text))
         self.update()
 
     def paintEvent(self, event):
-        if self._source is None or self._source.isNull():
-            painter = QPainter(self)
-            painter.fillRect(self.rect(), QColor(self._placeholder_color()))
-            painter.end()
-            return
         painter = QPainter(self)
         target = self.rect()
+        if self._source is None or self._source.isNull():
+            painter.fillRect(target, QColor(self._placeholder_color()))
+            painter.end()
+            return
         source = self._source
         if source.width() <= 0 or source.height() <= 0:
+            painter.end()
+            return
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        if self._adaptive_height:
+            # 版本详情封面按完整图片显示，极端宽高比时留主题色边，
+            # 不再把 1170×500 的横版图裁成中间一条。
+            painter.fillRect(target, QColor(self._placeholder_color()))
+            scaled = source.scaled(
+                target.size(), Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+            x = (target.width() - scaled.width()) // 2
+            y = (target.height() - scaled.height()) // 2
+            painter.drawPixmap(x, y, scaled)
             painter.end()
             return
         scale = max(target.width() / source.width(), target.height() / source.height())
@@ -134,7 +190,6 @@ class NewsImageLabel(QWidget):
         crop_h = max(1, int(target.height() / scale))
         crop_x = max(0, (source.width() - crop_w) // 2)
         crop_y = max(0, (source.height() - crop_h) // 2)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
         painter.drawPixmap(
             target,
             source,

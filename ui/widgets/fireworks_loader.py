@@ -44,7 +44,7 @@ class FireworksLoader(QWidget):
             window.installEventFilter(self)
 
     def eventFilter(self, obj, event):
-        if obj is self._window and event.type() == QEvent.WindowStateChange:
+        if obj is getattr(self, '_window', None) and event.type() == QEvent.WindowStateChange:
             try:
                 minimized = obj.isMinimized()
             except (RuntimeError, AttributeError):

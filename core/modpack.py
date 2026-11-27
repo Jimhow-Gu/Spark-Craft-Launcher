@@ -35,7 +35,9 @@ from core.paths import safe_rmtree
 from core.downloading import DownloadClient, RemoteFile
 from core.installers import (InstallCancelled, ProgressMapper, create_alias, install_fabric, install_forge, install_neoforge, install_quilt, install_vanilla)
 from core.mods import CurseForgeSource, pcl_mod_mirror
-from core.net import (DownloadCancelled, DownloadError, DownloadGate)
+from core.net import (
+    DownloadCancelled, DownloadError, DownloadGate, HttpClient,
+)
 from core.version import (
     INCOMPLETE_MARKER, detect_version_loader, register_active_install,
     unregister_active_install,
@@ -299,7 +301,8 @@ def _inspect_modrinth(path, zf, entry, names):
         path=path, kind='mrpack', name=str(index.get('name') or path.stem),
         version=str(index.get('versionId') or ''), mc_version=str(deps.get('minecraft') or ''),
         loader_id=loader_id, loader_version=loader_version,
-        summary=str(index.get('summary') or ''), file_count=len(files),
+        summary=str(index.get('summary') or ''),
+        file_count=len(files) + _count_entries(names, prefixes),
         overrides=prefixes, files=files, icon_prefixes=[''] + prefixes,
     )
 
@@ -335,6 +338,7 @@ def _inspect_multimc(path, zf, entry, names):
             loader_id, loader_version = key, versions[uid]
             break
     name = path.stem
+    icon_key = ''
     instance_entry = _find_entry(names, 'instance.cfg', root_only=False)
     if instance_entry:
         try:
@@ -342,14 +346,20 @@ def _inspect_multimc(path, zf, entry, names):
             match = re.search(r'^name=(.+)$', text, re.M)
             if match:
                 name = match.group(1).strip()
+            match = re.search(r'^iconKey=(.+)$', text, re.M)
+            if match:
+                icon_key = match.group(1).strip()
         except (OSError, KeyError):
             pass
     prefixes = [root + '.minecraft/', root + 'minecraft/']
     return ModpackInfo(
         path=path, kind='multimc', name=name, version='',
         mc_version=mc_version, loader_id=loader_id, loader_version=loader_version,
-        summary='MultiMC / Prism 实例', file_count=_count_entries(names, prefixes),
-        overrides=prefixes, icon_prefixes=[root, root + '.minecraft/', root + 'minecraft/'],
+        summary='MultiMC / Prism 实例',
+        file_count=_count_entries(names, prefixes) + _count_entries(names, [root]),
+        overrides=prefixes,
+        icon_prefixes=[root, root + '.minecraft/', root + 'minecraft/'],
+        extra={'icon_key': icon_key},
     )
 
 
@@ -526,7 +536,8 @@ def _inspect_manifest_pack(path, zf, entry, names):
             path=path, kind='curseforge', name=str(manifest.get('name') or path.stem),
             version=str(manifest.get('version') or ''), mc_version=mc_version,
             loader_id=loader_id, loader_version=loader_version,
-            summary=str(manifest.get('author') or ''), file_count=len(files),
+            summary=str(manifest.get('author') or ''),
+            file_count=len(files) + _count_entries(names, prefixes),
             author=str(manifest.get('author') or ''), overrides=prefixes,
             files=files, icon_prefixes=[''] + prefixes,
         )
@@ -564,7 +575,8 @@ def _inspect_manifest_pack(path, zf, entry, names):
         version=str(manifest.get('version') or ''), mc_version=mc_version,
         loader_id=loader_id, loader_version=loader_version,
         summary=str(manifest.get('description') or manifest.get('author') or ''),
-        file_count=len(files), author=str(manifest.get('author') or ''),
+        file_count=len(files) + _count_entries(names, prefixes),
+        author=str(manifest.get('author') or ''),
         overrides=prefixes, files=files, icon_prefixes=[''] + prefixes,
         extra={'file_api': str(manifest.get('fileApi') or '')},
     )
@@ -578,12 +590,16 @@ class ModpackImportWorker(QThread):
     finished_ok = Signal(str)
     finished_error = Signal(str)
 
-    def __init__(self, path, mc_dir, pack_name='', parent=None, existing_version=''):
+    def __init__(
+        self, path, mc_dir, pack_name='', parent=None,
+        existing_version='', icon_url='',
+    ):
         super().__init__(parent)
         self.path = str(path)
         self.mc_dir = str(Path(mc_dir))
         self.pack_name = pack_name
         self.existing_version = str(existing_version or '').strip()
+        self.icon_url = str(icon_url or '').strip()
         self._created_target = not bool(self.existing_version)
         self._cancelled = False
         # 整合包内大文件（100MB+ 的模组/资源包）在慢速网络下极易超过 90 秒，
@@ -697,7 +713,10 @@ class ModpackImportWorker(QThread):
             pack_files = self._resolve_files(info, alias_dir)
             self._download_files(info, pack_files, alias_dir)
             self._extract_overrides(info, alias_dir)
+            self._verify_imported_mods(alias_dir, pack_files)
             icon_name = self._extract_pack_icon(info, alias_dir)
+            if not icon_name and self.icon_url:
+                icon_name = self._download_remote_icon(alias_dir)
             installed_ids = set()
             try:
                 from core.mod_scan import scan_mod_ids
@@ -902,7 +921,11 @@ class ModpackImportWorker(QThread):
                     mirror = f'https://mod.mcimirror.top/files/{fid // 1000}/{fid % 1000}/{quote(file_name)}'
                     if mirror not in urls:
                         urls.append(mirror)
-                rel = f'mods/{file_name}'
+                rel = str(file_name or '').replace('\\', '/')
+                if not rel.lower().startswith('mods/'):
+                    rel = f'mods/{Path(rel).name}'
+                else:
+                    rel = 'mods/' + Path(rel).name
             if not rel or not urls:
                 if item.required:
                     raise DownloadError(f'整合包文件 {rel or file_name or "未知文件"} 没有可用的下载地址')
@@ -1119,7 +1142,12 @@ class ModpackImportWorker(QThread):
                     self.progress_updated.emit(88 + int(6 * index / total))
                     self.status_updated.emit(f'正在解压覆盖文件 {index}/{total}')
 
-    _PACK_ICON_CANDIDATES = ('icon.png', 'pack.png', 'logo.png', 'loading/logo.png')
+    _PACK_ICON_CANDIDATES = (
+        'icon.png', 'icon.jpg', 'icon.jpeg', 'icon.webp',
+        'pack.png', 'pack.jpg', 'pack.jpeg',
+        'logo.png', 'logo.jpg', 'logo.jpeg',
+        'thumbnail.png', 'thumbnail.jpg', 'loading/logo.png',
+    )
     @staticmethod
     def _is_image_bytes(data):
         if not data or len(data) > MAX_ICON_BYTES:
@@ -1131,8 +1159,23 @@ class ModpackImportWorker(QThread):
             with zipfile.ZipFile(self.path) as zf:
                 actual = {name.replace('\\', '/').lower(): name for name in zf.namelist()}
                 prefixes = [p.replace('\\', '/').lower() for p in info.icon_prefixes or ['']]
+                icon_key = str(info.extra.get('icon_key') or '').strip()
+                candidates = list(self._PACK_ICON_CANDIDATES)
+                if icon_key:
+                    key = icon_key.replace('\\', '/').strip('/')
+                    extra = []
+                    if re.search(r'\.(?:png|jpe?g|webp|gif|bmp)$', key, re.I):
+                        extra.append(key)
+                    else:
+                        extra.extend(
+                            key + ext
+                            for ext in (
+                                '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'
+                            )
+                        )
+                    candidates = extra + candidates
                 for prefix in prefixes:
-                    for candidate in self._PACK_ICON_CANDIDATES:
+                    for candidate in candidates:
                         name = actual.get(prefix + candidate)
                         if not name:
                             continue
@@ -1153,3 +1196,78 @@ class ModpackImportWorker(QThread):
         except (OSError, zipfile.BadZipFile):
             return ''
         return ''
+
+    def _verify_imported_mods(self, alias_dir, records):
+        '''统计实际/应安装 Mod；required 缺失时禁止报导入完成。'''
+
+        mods_dir = Path(alias_dir) / 'mods'
+        required = []
+        for record in records or ():
+            rel = str(record.get('path') or '').replace('\\', '/')
+            if not rel.lower().startswith('mods/'):
+                continue
+            if not rel.lower().endswith(('.jar', '.litemod')):
+                continue
+            if not record.get('required', True):
+                continue
+            required.append(record)
+        missing = []
+        for record in required:
+            try:
+                dest = _safe_join(Path(alias_dir), record['path'])
+            except DownloadError:
+                missing.append(record['path'])
+                continue
+            if not dest.is_file() or dest.stat().st_size <= 0:
+                missing.append(record['path'])
+        actual_files = 0
+        if mods_dir.is_dir():
+            for path in mods_dir.rglob('*'):
+                if (
+                    path.is_file()
+                    and path.suffix.lower() in ('.jar', '.litemod')
+                ):
+                    actual_files += 1
+        self.log_message.emit(
+            f'Mod 完整性: 实际 {actual_files} 个文件，'
+            f'清单 required {len(required)} 个文件'
+        )
+        if missing:
+            sample = '、'.join(missing[:5])
+            raise DownloadError(
+                f'整合包导入不完整，缺少 {len(missing)} 个必需 Mod 文件：'
+                f'{sample}'
+            )
+
+    def _download_remote_icon(self, alias_dir):
+        '''包内没有图标时，用资源中心封面补齐；失败不阻断导入。'''
+
+        if not self.icon_url:
+            return ''
+        client = None
+        try:
+            client = HttpClient(timeout=20, retries=1)
+            response = client.get(self.icon_url)
+            response.raise_for_status()
+            data = bytes(response.content)
+            if not self._is_image_bytes(data):
+                self.log_message.emit('资源中心封面不是有效图片，已跳过')
+                return ''
+            if self.existing_version and not self._backup_existing_file(
+                alias_dir / 'icon.png'
+            ):
+                raise DownloadError('无法备份现有图标，已中止安装')
+            (alias_dir / 'icon.png').write_bytes(data)
+            self.log_message.emit('已下载资源中心整合包封面')
+            return 'icon.png'
+        except DownloadError:
+            raise
+        except Exception as exc:
+            self.log_message.emit(f'下载整合包封面失败，继续导入: {exc}')
+            return ''
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass

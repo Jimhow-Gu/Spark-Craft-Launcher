@@ -56,7 +56,7 @@ class OptiFineManager:
     def __init__(self):
         self.http = HttpClient(timeout=20)
         # 列表类请求用短超时，避免慢镜像拖慢加载页面
-        self.http_fast = HttpClient(timeout=8, retries=1)
+        self.http_fast = HttpClient(timeout=4, retries=1)
         self._cache = {}
         self._forge_cache = {}
 
@@ -70,7 +70,7 @@ class OptiFineManager:
         '''官方下载页兜底解析（BMCLAPI 暂时缺少版本时使用）。'''
 
         try:
-            resp = self.http_fast.get('https://optifine.net/downloads', headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://optifine.net/'}, timeout=10)
+            resp = self.http_fast.get('https://optifine.net/downloads', headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://optifine.net/'}, timeout=6)
             text = resp.text
         except Exception:
             return []
@@ -113,7 +113,7 @@ class OptiFineManager:
             f'{OPENBMCLAPI}/optifine/versionList',
         ):
             try:
-                data = self.http_fast.get_json(url, timeout=8)
+                data = self.http_fast.get_json(url, timeout=4)
             except Exception:
                 continue
             if not isinstance(data, list):
@@ -178,7 +178,7 @@ class OptiFineManager:
         data = None
         for url in f'{BMCLAPI}/optifine/versionList', f'{OPENBMCLAPI}/optifine/versionList':
             try:
-                data = self.http_fast.get_json(url, timeout=8)
+                data = self.http_fast.get_json(url, timeout=4)
             except Exception:
                 continue
             if isinstance(data, list):
@@ -209,7 +209,7 @@ class OptiFineManager:
         rows = []
         for url in f'{BMCLAPI}/forge/minecraft/{mc_version}', f'{OPENBMCLAPI}/forge/minecraft/{mc_version}':
             try:
-                data = self.http_fast.get_json(url, timeout=8)
+                data = self.http_fast.get_json(url, timeout=4)
             except Exception:
                 continue
             if isinstance(data, list) and data:

@@ -13,6 +13,7 @@ from PySide6.QtCore import (Qt, Signal, QTimer, QThread, QSize, QEvent)
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QFrame, QListWidget, QListWidgetItem, QGroupBox, QScrollArea, QMessageBox, QStackedWidget, QSizePolicy, QApplication)
 from PySide6.QtGui import (QFont, QColor, QPalette, QPixmap, QIcon)
 from ui.widgets.rounded_combo import RoundedComboBox
+from ui.widgets.animated_list import AnimatedListView
 from core.app_font import ui_font
 from ui.widgets.painted_icons import painted_icon, set_button_icon
 from ui.widgets.launch_progress_button import LaunchProgressButton
@@ -547,24 +548,21 @@ class HomePage(QWidget):
         self.fav_group = QGroupBox('收藏的版本列表 (0)')
         self.fav_group.setStyleSheet(self._group_style())
         fav_layout = QVBoxLayout(self.fav_group)
-        self.fav_list = QListWidget()
-        self.fav_list.setStyleSheet(self._list_style())
+        self.fav_list = AnimatedListView()
         self.fav_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         fav_layout.addWidget(self.fav_list)
         self.selector_layout.addWidget(self.fav_group)
         self.mod_group = QGroupBox('可安装Mod版本 (0)')
         self.mod_group.setStyleSheet(self._group_style())
         mod_layout = QVBoxLayout(self.mod_group)
-        self.mod_list = QListWidget()
-        self.mod_list.setStyleSheet(self._list_style())
+        self.mod_list = AnimatedListView()
         self.mod_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         mod_layout.addWidget(self.mod_list)
         self.selector_layout.addWidget(self.mod_group)
         self.vanilla_group = QGroupBox('原版 (0)')
         self.vanilla_group.setStyleSheet(self._group_style())
         vanilla_layout = QVBoxLayout(self.vanilla_group)
-        self.vanilla_list = QListWidget()
-        self.vanilla_list.setStyleSheet(self._list_style())
+        self.vanilla_list = AnimatedListView()
         self.vanilla_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         vanilla_layout.addWidget(self.vanilla_list)
         self.selector_layout.addWidget(self.vanilla_group)
@@ -876,6 +874,13 @@ class HomePage(QWidget):
         self._adjust_list_height(self.fav_list)
         self._adjust_list_height(self.mod_list)
         self._adjust_list_height(self.vanilla_list)
+        for list_widget in (
+            self.fav_list, self.mod_list, self.vanilla_list
+        ):
+            try:
+                list_widget.fade_in()
+            except RuntimeError:
+                pass
 
     def _adjust_list_height(self, list_widget):
         count = list_widget.count()

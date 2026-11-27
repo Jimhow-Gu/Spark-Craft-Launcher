@@ -134,6 +134,7 @@ class GameSettingsPage(QWidget):
     back_requested = Signal()
     version_meta_changed = Signal(str)
     global_settings_requested = Signal()
+    MOD_LOADER_KINDS = {'fabric', 'forge', 'neoforge', 'quilt'}
     def __init__(self, version_id, parent=None):
         super().__init__(parent)
         self.setObjectName('GameSettingsPage')
@@ -161,6 +162,7 @@ class GameSettingsPage(QWidget):
         self._tab_effect_widget = None
         self._installed_loader_kind = self._detect_installed_loader_kind()
         self._init_ui()
+        self._sync_mod_tab_visibility()
         self._load_settings()
         _register_cleanup()
 
@@ -232,7 +234,13 @@ class GameSettingsPage(QWidget):
         self.export_tab_layout.setSpacing(0)
         self.tabs.addTab(self.export_tab, '导出')
         self.tabs.setTabIcon(self.tabs.count() - 1, painted_icon('export', 16, '#aab4c0'))
-        self._tab_icon_names = ['grid', 'gear', 'pencil', 'components', 'export']
+        self._tab_icon_by_widget = {
+            overview_scroll: 'grid',
+            settings_scroll: 'gear',
+            self.modify_tab: 'pencil',
+            self.mod_tab: 'components',
+            self.export_tab: 'export',
+        }
         self.tabs.currentChanged.connect(self._refresh_tab_icons)
         self._refresh_tab_icons()
         self._export_tab_ready = False
@@ -551,16 +559,22 @@ class GameSettingsPage(QWidget):
             self.version_meta_changed.emit(self.version_id)
 
     def _refresh_tab_icons(self, *_args):
-        names = getattr(self, '_tab_icon_names', None)
-        if not names or not hasattr(self, 'tabs'):
+        mapping = getattr(self, '_tab_icon_by_widget', None)
+        if not mapping or not hasattr(self, 'tabs'):
             return
         light = QApplication.palette().color(QPalette.Window).lightness() > 128
-        current = self.tabs.currentIndex()
-        for index, name in enumerate(names):
-            if index >= self.tabs.count():
+        current = self.tabs.currentWidget()
+        for index in range(self.tabs.count()):
+            name = mapping.get(self.tabs.widget(index))
+            if not name:
                 continue
-            color = ON_ACCENT if index == current else (MUTED_LIGHT if light else MUTED_DARK)
-            self.tabs.setTabIcon(index, painted_icon(name, 16, color, light_safe=True))
+            color = (
+                ON_ACCENT if self.tabs.widget(index) is current
+                else (MUTED_LIGHT if light else MUTED_DARK)
+            )
+            self.tabs.setTabIcon(
+                index, painted_icon(name, 16, color, light_safe=True)
+            )
 
     def set_light(self, light):
         self._refresh_tab_icons()
@@ -1110,12 +1124,34 @@ class GameSettingsPage(QWidget):
         except Exception:
             return ''
 
+    def _sync_mod_tab_visibility(self):
+        loader = self._detect_installed_loader_kind()
+        self._installed_loader_kind = loader
+        visible = loader in self.MOD_LOADER_KINDS
+        index = self.tabs.indexOf(self.mod_tab)
+        if visible and index < 0:
+            export_index = self.tabs.indexOf(self.export_tab)
+            insert_at = (
+                export_index if export_index >= 0 else self.tabs.count()
+            )
+            self.tabs.insertTab(
+                insert_at, self.mod_tab, 'Mod管理'
+            )
+            self.tabs.setTabIcon(
+                insert_at,
+                painted_icon('components', 16, '#aab4c0'),
+            )
+        elif not visible and index >= 0:
+            if self.tabs.currentWidget() is self.mod_tab:
+                self.tabs.setCurrentWidget(self.modify_tab)
+            self.tabs.removeTab(index)
+            self._reset_mod_tab()
+        self._refresh_tab_icons()
+
     def _on_loader_changed(self, _version_id):
         self._refresh_version_header()
-        loader = self._detect_installed_loader_kind()
-        if loader != self._installed_loader_kind:
-            self._installed_loader_kind = loader
-            self._reset_mod_tab()
+        self._sync_mod_tab_visibility()
+        self._reset_mod_tab()
         if hasattr(self, 'version_meta_changed'):
             self.version_meta_changed.emit(self.version_id)
 

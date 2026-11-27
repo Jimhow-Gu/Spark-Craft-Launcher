@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from core.app_font import ui_font
 from core.paths import safe_rmtree
+from ui.widgets.animated_list import AnimatedListView
 from ui.widgets.height_animation import HeightAnimation
 from ui.widgets.rotating_chevron import RotatingChevronButton
 from core.config import ConfigManager
@@ -603,7 +604,8 @@ class VersionModifyWorker(QThread):
             self.progress.emit(progress_base + int(progress_span * 0.4))
             self.status.emit('正在运行 OptiFine 独立安装器...')
             generated_id = manager.install_standalone(
-                plan['mc_dir'], plan['base_mc'], temp_jar, pick_java(plan['base_mc']),
+                plan['mc_dir'], plan['base_mc'], temp_jar,
+                pick_java(plan['base_mc'], loader='optifine'),
                 status=self.status.emit, cancel=self._cancel_requested,
             )
             if self._cancelled:
@@ -914,6 +916,7 @@ class LoaderModifyPage(QWidget):
         self.version_dir = Path(self.mc_dir) / 'versions' / version_id
         self._versions_worker = None
         self._modify_worker = None
+        self._load_generation = 0
         self._versions = {key: [] for key in LOADER_ORDER}
         self._stability = {key: {} for key in LOADER_ORDER}
         self._loaded_keys = set()
@@ -932,6 +935,7 @@ class LoaderModifyPage(QWidget):
         self._build_ui()
         self.loading_overlay = LoadingOverlay(self)
         self.loading_overlay.attach_to(self)
+        self.loading_overlay.retry_requested.connect(self._retry_versions)
         self.loading_overlay.hidden.connect(self._on_loading_hidden)
         self._loading_watchdog = QTimer(self)
         self._loading_watchdog.setSingleShot(True)
@@ -1270,25 +1274,10 @@ class LoaderModifyPage(QWidget):
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(14, 0, 14, 12)
         body_layout.setSpacing(0)
-        version_list = QListWidget()
+        version_list = AnimatedListView()
         version_list.setFocusPolicy(Qt.NoFocus)
         version_list.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         version_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        version_list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-        version_list.setSpacing(1)
-        version_list.setStyleSheet(
-            'QListWidget { background:rgba(8,10,16,0.45);'
-            ' border:1px solid rgba(255,255,255,0.10); border-radius:7px;'
-            ' outline:none; padding:3px; }'
-            'QListWidget::item { background:transparent; border:none;'
-            ' border-radius:6px; margin:1px 2px; }'
-            'QListWidget::item:hover { background:rgba(255,255,255,0.07); }'
-            'QListWidget::item:selected { background:rgba(136,221,221,0.3); border:1px solid rgba(136,221,221,0.5); border-radius:6px; margin:2px 4px; }'
-            'QScrollBar:vertical { background:transparent; width:8px; margin:2px; }'
-            'QScrollBar::handle:vertical { background:rgba(255,255,255,0.22);'
-            ' border-radius:4px; min-height:22px; }'
-            'QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }'
-        )
         version_list.itemClicked.connect(
             (lambda item, k=key: self._select_version(k, str(item.data(Qt.UserRole) or '')))
         )
@@ -1394,7 +1383,7 @@ class LoaderModifyPage(QWidget):
                 state_style = 'color:rgba(255,255,255,0.48); font-size:12px; background:transparent;'
             elif not versions:
                 if not network_available():
-                    state_text = '网络获取失败，请检查网络'
+                    state_text = '加载失败！'
                     state_style = 'color:#ff8a8a; font-size:12px; background:transparent;'
                 else:
                     state_text = '暂无可用版本'
@@ -1551,6 +1540,11 @@ class LoaderModifyPage(QWidget):
         visible_rows = min(max(1, len(versions)), 5)
         listing.setFixedHeight(10 + 48 * visible_rows)
         listing.setVisible(bool(versions))
+        if versions:
+            try:
+                listing.fade_in()
+            except RuntimeError:
+                pass
 
     def _set_row_expanded(self, key, expanded, animate=True):
         parts = self._rows[key]
@@ -1972,6 +1966,20 @@ class LoaderModifyPage(QWidget):
         else:
             self.loading_overlay.finish()
 
+    def _retry_versions(self):
+        old = self._versions_worker
+        if old is not None and old.isRunning():
+            try:
+                old.cancel()
+            except RuntimeError:
+                pass
+        self._versions_worker = None
+        self._versions_finished = False
+        self._versions = {key: [] for key in LOADER_ORDER}
+        self._loaded_keys.clear()
+        self._stability = {key: {} for key in LOADER_ORDER}
+        self._start_versions_worker()
+
     def _start_versions_worker(self):
         if not self._base_mc:
             self._versions_finished = True
@@ -1981,17 +1989,25 @@ class LoaderModifyPage(QWidget):
             self.content_scroll.hide()
         except RuntimeError:
             pass
-        self.loading_overlay.start_auto('正在加载加载器版本', 92)
+        self.loading_overlay.start_auto('正在加载', 92)
+        self._load_generation += 1
+        generation = self._load_generation
         self._versions_worker = LoadVersionsWorker(
             self._base_mc, load_optional=True, load_optifabric=False
         )
-        self._versions_worker.partial.connect(self._on_versions_loaded)
-        self._versions_worker.loaded.connect(self._on_versions_finished)
+        self._versions_worker.partial.connect(
+            lambda data, g=generation: self._on_versions_loaded(data, g)
+        )
+        self._versions_worker.loaded.connect(
+            lambda data, g=generation: self._on_versions_finished(data, g)
+        )
         self._versions_worker.start()
         self._loading_watchdog.start()
         self.status_label.setText('')
 
-    def _on_versions_loaded(self, versions):
+    def _on_versions_loaded(self, versions, generation=None):
+        if generation is not None and generation != self._load_generation:
+            return
         payload = dict(versions or {})
         payload.pop('optifine_objects', None)
         for key in LOADER_ORDER:
@@ -2012,10 +2028,12 @@ class LoaderModifyPage(QWidget):
         self._refresh_rows()
         self._update_version_loading()
 
-    def _on_versions_finished(self, versions):
+    def _on_versions_finished(self, versions, generation=None):
+        if generation is not None and generation != self._load_generation:
+            return
         self._versions_finished = True
         self._loaded_keys.update(LOADER_ORDER)
-        self._on_versions_loaded(versions)
+        self._on_versions_loaded(versions, generation)
         self.status_label.setText('')
         self._finish_version_loading()
 

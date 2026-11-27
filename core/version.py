@@ -1150,20 +1150,22 @@ class FullInstallWorker(QThread):
         temp_dir.mkdir(exist_ok=True)
         jar_path = temp_dir / info.filename
         self._status(f'正在下载 OptiFine {info.type} {info.patch}...')
-        self._phase('loader_file', 0)
+        self._phase('optifine_file', 0)
         def optifine_download_progress(done, total):
             ratio = done / total if total else 1
             self._progress(progress_base + int(progress_span * 0.25 * ratio))
-            self._phase('loader_file', ratio * 100)
+            self._phase('optifine_file', ratio * 100)
 
         manager.download_jar(info, jar_path, progress=optifine_download_progress, cancel=(lambda: self._cancelled))
-        self._phase('loader_file', 100)
+        self._phase('optifine_file', 100)
         self._check_cancel()
-        java_path = pick_java(info.mcversion)
+        java_path = pick_java(
+            info.mcversion, loader='optifine'
+        )
         self._status('正在运行 OptiFine 安装器...')
-        self._phase('loader_install', 5)
+        self._phase('optifine_install', 5)
         generated_id = manager.install_standalone(Path(self.mc_dir), info.mcversion, jar_path, java_path, status=self._status, cancel=(lambda: self._cancelled))
-        self._phase('loader_install', 100)
+        self._phase('optifine_install', 100)
         generated_dir = Path(self.mc_dir) / 'versions' / generated_id
         target_dir = Path(self.mc_dir) / 'versions' / self.custom_name
         if self.custom_name != generated_id:
@@ -1209,13 +1211,21 @@ class FullInstallWorker(QThread):
         '''方式 B：把 OptiFine 作为 Forge 模组放入实例 mods。'''
 
         self._status(f'正在下载 OptiFine {opti.type} {opti.patch}...')
+        self._phase('optifine_file', 0)
         mods_dir = self._enable_isolation(custom_name, force=True)
         jar_path = Path(self.mc_dir) / 'versions' / custom_name / 'optifine_download.jar'
-        opti_manager.download_jar(opti, jar_path, progress=(lambda done, total: self._progress(progress_base + int(progress_span * (done / total if total else 1)))), cancel=(lambda: self._cancelled))
+        def optifine_download_progress(done, total):
+            ratio = done / total if total else 1
+            self._phase('optifine_file', ratio * 100)
+            self._progress(progress_base + int(progress_span * ratio))
+
+        opti_manager.download_jar(opti, jar_path, progress=optifine_download_progress, cancel=(lambda: self._cancelled))
+        self._phase('optifine_file', 100)
         dest = mods_dir / opti.filename
         if dest.exists():
             dest.unlink()
         shutil.move(str(jar_path), str(dest))
+        self._phase('optifine_install', 100)
         self._status(f'OptiFine 已放入 mods: {dest.name}')
 
     def _run_impl(self):
@@ -1318,9 +1328,11 @@ class FullInstallWorker(QThread):
                     optifabric = selections.get('optifabric')
                     if isinstance(optifabric, dict):
                         self._status(f'正在安装 OptiFabric {optifabric.get("version", "")}...')
+                        self._phase('optifabric', 0)
                         try:
                             from core.optifabric import download as download_optifabric
                             dest = download_optifabric(optifabric, Path(self.mc_dir) / 'versions' / custom, cancel=(lambda: self._cancelled))
+                            self._phase('optifabric', 100)
                             self._status(f'OptiFabric 已放入 mods: {dest.name}')
                         except (InstallCancelled, DownloadCancelled):
                             raise

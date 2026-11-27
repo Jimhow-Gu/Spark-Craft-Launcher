@@ -251,7 +251,15 @@ def ensure_forge_artifacts(mc_version, forge_version, mc_dir, *, minecraft_jar=N
                     variables[key] = _resolve_data_value(raw, installer, mc_dir, temp_dir)
                 except DownloadError:
                     variables[key] = ''
-            java = pick_java(mc_version)
+            forge_version = (
+                full_version[len(mc_version) + 1:]
+                if full_version.startswith(mc_version + '-')
+                else full_version
+            )
+            java = pick_java(
+                mc_version, loader='forge',
+                loader_version=forge_version,
+            )
             processors = profile.get('processors') or []
             total = max(1, len(processors))
             done = 0
