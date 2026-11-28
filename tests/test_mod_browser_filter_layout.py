@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
 
@@ -34,19 +35,19 @@ class ModBrowserFilterLayoutTests(unittest.TestCase):
         self.assertLess(source.x(), sort.x())
         self.assertGreater(search.width(), 700)
         for combo in (
-            page.source_combo, page.sort_combo,
+            page.source_combo, page.sort_combo, page.loader_combo,
             page.category_combo, page.name_match_combo,
         ):
             self.assertIsInstance(combo, RoundedSelect)
         second_y = page.mc_combo.geometry().y()
         for combo in (
-            page.category_combo, page.name_match_combo,
+            page.loader_combo, page.category_combo,
+            page.name_match_combo,
         ):
             self.assertEqual(combo.geometry().y(), second_y)
         self.assertGreater(
-            page.mc_combo.width(), page.category_combo.width()
+            page.mc_combo.width(), page.loader_combo.width()
         )
-        self.assertFalse(hasattr(page, 'loader_combo'))
         buttons = {
             button.text(): button
             for button in page.findChildren(QPushButton)
@@ -65,7 +66,8 @@ class ModBrowserFilterLayoutTests(unittest.TestCase):
         )
         self.assertGreater(page.search_input.width(), 180)
         for combo in (
-            page.mc_combo, page.category_combo, page.name_match_combo,
+            page.mc_combo, page.loader_combo,
+            page.category_combo, page.name_match_combo,
         ):
             self.assertEqual(combo.geometry().y(), second_y)
         page.close()
@@ -104,6 +106,44 @@ class ModBrowserFilterLayoutTests(unittest.TestCase):
         search = page.search_input.geometry()
         self.assertEqual(search.y(), button.geometry().y())
         self.assertGreater(button.geometry().x(), search.x() + search.width())
+        page.close()
+        page.deleteLater()
+
+
+    def test_search_passes_selected_loader_to_worker(self):
+        import ui.pages.mod_browser_page as module
+
+        captured = []
+
+        class FakeWorker(QObject):
+            done = Signal(int, object)
+            error = Signal(int, str)
+            finished = Signal()
+
+            def __init__(self, *args, **kwargs):
+                super().__init__()
+                captured.append(args)
+
+            def start(self):
+                pass
+
+            def cancel(self):
+                pass
+
+            def isRunning(self):
+                return False
+
+            def wait(self, *args, **kwargs):
+                return True
+
+        page = ModBrowserPage('mod')
+        page._load_categories = lambda: None
+        page.loader_combo.setCurrentIndex(
+            page.loader_combo.findData('neoforge')
+        )
+        with patch.object(module, 'SearchWorker', FakeWorker):
+            page.search()
+        self.assertEqual(captured[0][5], 'neoforge')
         page.close()
         page.deleteLater()
 

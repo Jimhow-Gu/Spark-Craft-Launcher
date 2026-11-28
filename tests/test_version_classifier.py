@@ -6,8 +6,9 @@ import unittest
 from pathlib import Path
 
 from core.version_classifier import (
-    FOOL_IDS, category_counts, classify_version, grouped_versions,
+    category_counts, classify_version, grouped_versions,
 )
+from core.version_lore import fool_registry
 from ui.version_meta import ICON_FILES
 
 
@@ -52,7 +53,7 @@ class VersionClassifierTests(unittest.TestCase):
             ),
             'fool',
         )
-        self.assertIn('26w14a', FOOL_IDS)
+        self.assertTrue(fool_registry.is_fool_id('26w14a'))
 
     def test_unknown_type_falls_back_to_snapshot(self):
         self.assertEqual(classify_version(v('mystery', 'unknown')), 'snapshot')

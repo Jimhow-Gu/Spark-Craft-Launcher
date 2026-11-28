@@ -2286,7 +2286,7 @@ class ModBrowserPage(QWidget):
             search_row.addWidget(install_btn, 0, Qt.AlignRight)
         filters_layout.addLayout(search_row)
 
-        # 第二行：版本/分类/名称匹配弹性撑满，搜索和重置贴右。
+        # 第二行：版本/加载器/分类/名称匹配弹性撑满，搜索和重置贴右。
         second_row = QHBoxLayout()
         second_row.setContentsMargins(0, 0, 0, 0)
         second_row.setSpacing(8)
@@ -2310,6 +2310,12 @@ class ModBrowserPage(QWidget):
         self.mc_combo.currentIndexChanged.connect(self._on_filter_changed)
         self.mc_combo.lineEdit().editingFinished.connect(self._trigger_search)
         second_row.addWidget(self.mc_combo, 3)
+        self.loader_combo = RoundedSelect()
+        self.loader_combo.addItem('全部加载器', '')
+        for key, label in LOADERS.items():
+            self.loader_combo.addItem(label, key)
+        self.loader_combo.currentIndexChanged.connect(self._trigger_search)
+        second_row.addWidget(self.loader_combo, 2)
         self.category_combo = RoundedSelect()
         self.category_combo.addItem('全部分类', '')
         self.category_combo.currentIndexChanged.connect(self._trigger_search)
@@ -2331,14 +2337,18 @@ class ModBrowserPage(QWidget):
         reset_btn.clicked.connect(self.reset_filters)
         second_row.addWidget(reset_btn, 0)
         for combo in (
-            self.mc_combo, self.category_combo, self.name_match_combo,
+            self.mc_combo, self.loader_combo,
+            self.category_combo, self.name_match_combo,
         ):
             combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             combo.setMinimumWidth(0)
-        for index, stretch in enumerate((3, 2, 2)):
+        for index, stretch in enumerate((3, 2, 2, 2)):
             second_row.setStretch(index, stretch)
         filters_layout.addLayout(second_row)
         layout.addWidget(filters)
+        self.loader_combo.setEnabled(
+            self.project_type in LOADER_RELEVANT_TYPES
+        )
         self.results_list = AnimatedListView()
         self.results_list.setSpacing(4)
         self.results_list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
@@ -2485,10 +2495,7 @@ class ModBrowserPage(QWidget):
         self.category_combo.blockSignals(True)
         self.category_combo.clear()
         self.category_combo.addItem('全部分类', '')
-        loader_keys = set(LOADERS.keys())
         for cid, name in categories:
-            if self.project_type in LOADER_RELEVANT_TYPES and cid in loader_keys:
-                continue
             self.category_combo.addItem(name, cid)
         idx = self.category_combo.findData(current) if current else -1
         if idx >= 0:
@@ -2506,6 +2513,7 @@ class ModBrowserPage(QWidget):
         self.source_combo.setCurrentIndex(0)
         self.mc_combo.setCurrentIndex(-1)
         self.mc_combo.setEditText('')
+        self.loader_combo.setCurrentIndex(0)
         self.category_combo.setCurrentIndex(0)
         self.sort_combo.setCurrentIndex(0)
         self._page = 1
@@ -2519,7 +2527,7 @@ class ModBrowserPage(QWidget):
         mc_version = self._mc_filter_value()
         if mc_version in ('全部', '全部版本', '自定义...'):
             mc_version = ''
-        loader = ''
+        loader = self.loader_combo.currentData() or ''
         category = self.category_combo.currentData() or ''
         sort = self.sort_combo.currentData() or 'relevance'
         self._generation += 1
@@ -2908,7 +2916,7 @@ class ModBrowserPage(QWidget):
             QMessageBox.warning(self, '下载任务已满', f'当前同时下载任务已达到上限 {DownloadGate.max_threads()}。\n请前往「全局设置 → 下载线程数」调整后再试。')
             return
         mc_version = self._target_mc_version()
-        loader = ''
+        loader = self.loader_combo.currentData() or ''
         game_dir = self._target_game_dir()
         page = ProjectFilesDialog(
             project, mc_version, loader, game_dir, self.project_type, self,

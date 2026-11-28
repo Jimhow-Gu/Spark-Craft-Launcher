@@ -5,6 +5,9 @@ from __future__ import annotations
 import re
 from collections import OrderedDict
 
+from core.version_lore import fool_registry
+from core.version_text import is_april_first
+
 CATEGORIES = (
     ('all', '全部'),
     ('release', '正式版'),
@@ -15,12 +18,6 @@ CATEGORIES = (
 )
 CATEGORY_LABELS = dict(CATEGORIES)
 GROUP_ORDER = ('release', 'snapshot', 'preview', 'fool', 'old')
-
-FOOL_IDS = {
-    '2.0', '15w14a', '1.rv-pre1', '3d shareware v1.34',
-    '20w14infinite', '20w14∞', '22w13oneblockatatime',
-    '23w13a_or_b', '24w14potato', '25w14craftmine', '26w14a',
-}
 
 _W_SNAPSHOT = re.compile(r'^\d{2}w\d{2}[a-z]$', re.I)
 
@@ -40,8 +37,9 @@ def classify_version(version):
     release_time = _text(
         version.get('releaseTime') or version.get('time')
     )
-    if lower in FOOL_IDS or (
-        version_type == 'snapshot' and release_time[5:10] == '04-01'
+    if (
+        fool_registry.is_fool_id(lower)
+        or is_april_first(version)
     ):
         return 'fool'
     year_match = re.match(r'^(\d{4})-', release_time)
@@ -77,6 +75,6 @@ def category_counts(versions):
 
 
 __all__ = [
-    'CATEGORIES', 'CATEGORY_LABELS', 'FOOL_IDS', 'GROUP_ORDER',
+    'CATEGORIES', 'CATEGORY_LABELS', 'GROUP_ORDER',
     'category_counts', 'classify_version', 'grouped_versions',
 ]

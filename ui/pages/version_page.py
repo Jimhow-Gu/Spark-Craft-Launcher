@@ -37,7 +37,12 @@ from core.version_classifier import (
     CATEGORIES, CATEGORY_LABELS, GROUP_ORDER, category_counts,
     classify_version, grouped_versions,
 )
+from core.version_text import (
+    format_release_time, parse_release_datetime, release_year,
+)
+from core.version_lore import fool_registry
 from ui.widgets.animated_list import AnimatedListView
+from ui.widgets.version_browser import VersionBrowserView
 from ui.widgets.clickable_label import ClickableLabel
 from core.net import HttpClient, is_network_error_text, network_available
 from core.paths import scl_dir
@@ -448,6 +453,7 @@ class VersionPage(QWidget):
         self._load_gen = 0
         self._available_filter = 'all'
         self._available_versions = []
+        self._available_icon_cache = {}
         self._modpack_worker = None
         self._modpack_dialog = None
         self._modpack_page = None
@@ -482,6 +488,8 @@ class VersionPage(QWidget):
             'resourcepack': 'resourcepack', 'shader': 'shader',
         }
         self._init_ui()
+        fool_registry.updated.connect(self._on_lore_updated)
+        fool_registry.start()
         self._refresh_game_dir_combo()
         QTimer.singleShot(50, self._load_installed_versions)
 
@@ -569,7 +577,7 @@ class VersionPage(QWidget):
         if key == 'available':
             if (
                 not self._available_versions
-                and self.available_list.count() == 0
+                and self.available_browser.is_empty()
                 and self.isVisible()
             ):
                 self._load_available_versions_async()
@@ -1272,17 +1280,15 @@ class VersionPage(QWidget):
         )
         self.available_error_label.hide()
         right.addWidget(self.available_error_label)
-        self.available_list = AnimatedListView()
-        self.available_list.setIconSize(QSize(20, 20))
-        self.available_list.setTextElideMode(Qt.ElideRight)
-        self.available_list.itemDoubleClicked.connect(
-            self._on_version_double_clicked
+        self.available_browser = VersionBrowserView()
+        self.available_browser.version_activated.connect(
+            self.show_detail_page
         )
-        right.addWidget(self.available_list, 1)
+        right.addWidget(self.available_browser, 1)
         self.available_loading = LoadingOverlay(
-            self.available_list.viewport()
+            self.available_browser.viewport()
         )
-        self.available_loading.attach_to(self.available_list.viewport())
+        self.available_loading.attach_to(self.available_browser.viewport())
         self.available_loading.retry_requested.connect(
             self._retry_available_versions
         )
@@ -1365,10 +1371,6 @@ class VersionPage(QWidget):
             return
         self._available_filter = key
         self._render_available_versions(self._available_versions)
-        try:
-            self.available_list.fade_in()
-        except RuntimeError:
-            pass
 
     def _set_available_filter(self, key):
         key = str(key or 'all')
@@ -1418,7 +1420,7 @@ class VersionPage(QWidget):
         self._load_worker = None
         self._loading = False
         if not silent:
-            self.available_list.clear()
+            self.available_browser.clear()
             self.available_loading.start('正在加载版本列表', 0)
         mirror_urls = self.config.get_version_mirrors() or ['https://launchermeta.mojang.com', 'https://bmclapi2.bangbang93.com', 'https://openbmclapi.bangbang93.com']
         source = str(
@@ -1436,69 +1438,42 @@ class VersionPage(QWidget):
         self._load_worker.loaded.connect((lambda versions, g=gen: self._on_versions_loaded(versions, g)))
         self._load_worker.start()
 
-    def _add_available_header(self, text: str):
-        item = QListWidgetItem()
-        item.setFlags(Qt.NoItemFlags)
-        item.setSizeHint(QSize(0, 40))
-        holder = QWidget()
-        holder.setStyleSheet('background:transparent;')
-        row = QHBoxLayout(holder)
-        row.setContentsMargins(4, 2, 4, 2)
-        row.setSpacing(0)
-        if '愚人节' in text:
-            color, bg, border = (
-                '#ffd27a', 'rgba(240,190,48,0.16)',
-                'rgba(240,190,48,0.30)',
-            )
-        elif '远古' in text:
-            color, bg, border = (
-                '#c9d1d9', 'rgba(180,190,200,0.14)',
-                'rgba(180,190,200,0.28)',
-            )
-        elif '快照' in text or '预览' in text:
-            color, bg, border = (
-                '#ffd28a', 'rgba(240,160,48,0.14)',
-                'rgba(240,160,48,0.28)',
-            )
-        else:
-            color, bg, border = (
-                '#9fe8e8', 'rgba(136,221,221,0.14)',
-                'rgba(136,221,221,0.24)',
-            )
-        tag = QLabel(text)
-        tag.setMinimumHeight(26)
-        tag.setStyleSheet(
-            'QLabel { color:%s; background:%s;'
-            ' border:1px solid %s; border-radius:7px;'
-            ' padding:3px 10px; font-size:12px; font-weight:700; }'
-            % (color, bg, border)
-        )
-        row.addWidget(tag)
-        row.addStretch(1)
-        self.available_list.addItem(item)
-        self.available_list.setItemWidget(item, holder)
-
-    def _add_available_version(
-        self, version: dict, tag: str = '', category: str = '',
+    def _available_row_info(
+        self, version, category,
+        latest_release_id='', latest_preview_id='',
     ):
         version_id = str(version.get('id') or '')
-        category = category or classify_version(version)
-        text = f'{version_id}    {tag}' if tag else version_id
-        item = QListWidgetItem(text)
-        item.setSizeHint(QSize(0, 38))
-        item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        item.setIcon(self._version_icon(
-            str(version.get('type') or ''), category=category
-        ))
-        item.setData(Qt.UserRole, version_id)
-        item.setData(Qt.UserRole + 2, category)
-        item.setToolTip(text)
-        if tag:
-            _font = item.font()
-            _font.setBold(True)
-            item.setFont(_font)
-            item.setToolTip(f'{text}\n{tag.strip("[]")}')
-        self.available_list.addItem(item)
+        date_text = format_release_time(version)
+        if latest_release_id and version_id == latest_release_id:
+            return f'最新正式版，发布于 {date_text}'
+        if latest_preview_id and version_id == latest_preview_id:
+            return f'最新预览版，发布于 {date_text}'
+        if category == 'fool':
+            lore = fool_registry.lore_text(version, date_text)
+            if lore:
+                return lore
+            year = release_year(version)
+            return f'{year} | 愚人节版本' if year else '愚人节版本'
+        return date_text
+
+    def _available_icon(self, version, category):
+        version_type = str(version.get('type') or '')
+        key = (version_type.lower(), str(category or '').lower())
+        icon = self._available_icon_cache.get(key)
+        if icon is None:
+            # 在线版本列表只需要类型图标；不要为每一项读取已安装版本目录，
+            # 否则展开正式版/快照版时会同步扫描上百个路径，造成卡顿。
+            icon = self._version_icon(
+                version_type, category=category
+            )
+            self._available_icon_cache[key] = icon
+        return icon
+
+    def _on_lore_updated(self):
+        if self._available_versions:
+            self._render_available_versions(
+                self._available_versions, preserve_scroll=True
+            )
 
     def _release_load_worker(self, worker):
         '''保留 QThread 引用到真正 finished，避免槽内 deleteLater 销毁运行中线程。'''
@@ -1589,13 +1564,11 @@ class VersionPage(QWidget):
         if not silent:
             self.available_loading.stop()
 
-    def _render_available_versions(self, versions):
+    def _render_available_versions(self, versions, preserve_scroll=False):
         source = list(versions or [])
         self._available_versions = source
-        self.available_list.setUpdatesEnabled(False)
-        self.available_list.clear()
         if not source:
-            self.available_list.setUpdatesEnabled(True)
+            self.available_browser.clear()
             return
 
         groups = grouped_versions(source)
@@ -1616,56 +1589,79 @@ class VersionPage(QWidget):
         latest_release = groups['release'][0] if groups['release'] else None
         preview_pool = groups['preview'] or groups['snapshot']
         latest_preview = preview_pool[0] if preview_pool else None
+        if latest_release is not None and latest_preview is not None:
+            release_date = parse_release_datetime(latest_release)
+            preview_date = parse_release_datetime(latest_preview)
+            if (
+                release_date is not None
+                and preview_date is not None
+                and preview_date <= release_date
+            ):
+                latest_preview = None
+
+        latest_items = []
+        latest_release_id = ''
+        latest_preview_id = ''
+        if latest_release is not None:
+            latest_release_id = str(latest_release.get('id') or '')
+            latest_items.append((latest_release, 'release'))
+        if latest_preview is not None:
+            latest_preview_id = str(latest_preview.get('id') or '')
+            latest_items.append(
+                (latest_preview, classify_version(latest_preview))
+            )
+
         filter_key = getattr(self, '_available_filter', 'all')
         if filter_key not in CATEGORY_LABELS:
             filter_key = 'all'
 
+        def row_info(version, category):
+            return self._available_row_info(
+                version, category, latest_release_id, latest_preview_id
+            )
+
         if filter_key == 'all':
-            if latest_release is not None or latest_preview is not None:
-                self._add_available_header('最新版本')
-                if latest_release is not None:
-                    self._add_available_version(
-                        latest_release, category='release'
-                    )
-                if latest_preview is not None:
-                    latest_category = classify_version(latest_preview)
-                    self._add_available_version(
-                        latest_preview, category=latest_category
-                    )
+            remaining = {key: list(items) for key, items in groups.items()}
+            if latest_release_id:
+                remaining['release'] = [
+                    item for item in remaining['release']
+                    if str(item.get('id') or '') != latest_release_id
+                ]
+            if latest_preview_id:
+                for key in ('preview', 'snapshot'):
+                    remaining[key] = [
+                        item for item in remaining[key]
+                        if str(item.get('id') or '') != latest_preview_id
+                    ]
+            sections = []
             for key in GROUP_ORDER:
-                items = list(groups[key])
-                if key == 'release' and latest_release is not None:
-                    rid = str(latest_release.get('id') or '')
-                    items = [
-                        item for item in items
-                        if str(item.get('id') or '') != rid
-                    ]
-                if (
-                    latest_preview is not None
-                    and key in ('preview', 'snapshot')
-                ):
-                    pid = str(latest_preview.get('id') or '')
-                    items = [
-                        item for item in items
-                        if str(item.get('id') or '') != pid
-                    ]
-                if groups[key]:
-                    self._add_available_header(CATEGORY_LABELS[key])
-                    for version in items:
-                        self._add_available_version(
-                            version, category=key
-                        )
+                items = [
+                    (version, key) for version in remaining.get(key, [])
+                ]
+                if items:
+                    sections.append((key, CATEGORY_LABELS[key], items))
+            self.available_browser.set_data(
+                latest_items=latest_items,
+                sections=sections,
+                row_info=row_info,
+                icon_provider=self._available_icon,
+                all_mode=True,
+                preserve_scroll=preserve_scroll,
+            )
         else:
-            items = list(groups[filter_key])
-            if items:
-                self._add_available_header(CATEGORY_LABELS[filter_key])
-            for version in items:
-                self._add_available_version(
-                    version, category=filter_key
-                )
-        self.available_list.setUpdatesEnabled(True)
+            flat_items = [
+                (version, filter_key)
+                for version in groups.get(filter_key, [])
+            ]
+            self.available_browser.set_data(
+                flat_items=flat_items,
+                row_info=row_info,
+                icon_provider=self._available_icon,
+                all_mode=False,
+                preserve_scroll=preserve_scroll,
+            )
         try:
-            self.available_list.fade_in()
+            self.available_browser.fade_in()
         except RuntimeError:
             pass
 
@@ -1677,12 +1673,6 @@ class VersionPage(QWidget):
         except (AttributeError, RuntimeError):
             pass
         self._load_available_versions_async()
-
-    def _on_version_double_clicked(self, item):
-        version_id = item.data(Qt.UserRole)
-        if not version_id:
-            return
-        self.show_detail_page(version_id)
 
     def show_detail_page(self, version_id):
         self._current_detail_version_id = version_id

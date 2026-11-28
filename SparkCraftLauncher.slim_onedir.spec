@@ -55,6 +55,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ("ui/imgs", "ui/imgs"),
+        ("data/fool_versions.json", "data"),
         # 仅打包实际使用的两个字重，且是 GB2312 + 界面文本子集。
         ("font/subset/HarmonyOS_Sans_SC_Black.ttf", "font"),
         ("font/subset/HarmonyOS_Sans_SC_Medium.ttf", "font"),

@@ -46,28 +46,31 @@ class VersionPageCategoryTests(unittest.TestCase):
             for label in page.findChildren(QLabel)
         ]
         self.assertIn('版本类别', labels)
-        headers = []
-        for index in range(page.available_list.count()):
-            holder = page.available_list.itemWidget(
-                page.available_list.item(index)
+        texts = page.available_browser.version_ids()
+        self.assertEqual(len(texts), 6)
+        self.assertEqual(texts[:2], ['26.2', '26.3-pre-1'])
+        self.assertIn('26.1', texts)
+        self.assertIn('24w14potato', texts)
+        self.assertIn('1.0', texts)
+        self.assertTrue(
+            page.available_browser.subtitle_at(0).startswith(
+                '最新正式版，发布于 '
             )
-            if holder is not None:
-                headers.extend(
-                    label.text() for label in holder.findChildren(QLabel)
-                )
-        self.assertIn('最新版本', headers)
-        self.assertIn('正式版', headers)
-        self.assertIn('愚人节版', headers)
-        self.assertIn('远古版', headers)
-        self.assertNotIn('正式版（2）', headers)
+        )
+        self.assertTrue(
+            page.available_browser.subtitle_at(1).startswith(
+                '最新预览版，发布于 '
+            )
+        )
 
         page._set_available_filter('fool')
         self.app.processEvents()
-        texts = [
-            page.available_list.item(index).text()
-            for index in range(page.available_list.count())
-        ]
+        texts = page.available_browser.version_ids()
         self.assertIn('24w14potato', texts)
+        potato_index = texts.index('24w14potato')
+        potato_text = page.available_browser.subtitle_at(potato_index)
+        self.assertIn('2024 |', potato_text)
+        self.assertIn('毒马铃薯', potato_text)
         page.close()
         page.deleteLater()
 
