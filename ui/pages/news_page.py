@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 import html
 import logging
+import math
+import os
 import re
 import time
 from pathlib import Path
@@ -38,6 +40,7 @@ from ui.widgets.toast import show_toast
 
 NEWS_URL = 'https://mcnews.meloong.com'
 NEWS_AUTO_REFRESH_SECONDS = 15 * 60
+REFRESH_COOLDOWN_SECONDS = 5.0
 MAX_NEWS_XAML_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 logger = logging.getLogger('NewsPage')
@@ -365,6 +368,15 @@ class NewsCard(RoundedFrame):
         self._image_requested = True
         self._page.request_image(self.image_label, self._image_urls)
 
+    def refresh_image(self):
+        '''手动刷新时重新请求图片；页面会绕过旧磁盘缓存。'''
+
+        if self.image_label is None:
+            return
+        self._image_requested = False
+        if self._expanded:
+            self._load_image()
+
     def _animate_body(self, expand):
         self._expanded = bool(expand)
         self.toggle_btn.set_expanded(self._expanded, animate=True)
@@ -472,10 +484,18 @@ class NewsPage(QWidget):
         self._image_pending = {}
         self._cards = []
         self._news_signature = ''
+        self._image_generation = 0
+        self._force_image_refresh = False
         self._refresh_manual = False
         self._last_error_reason = ''
         self._cache_prune_scheduled = False
         self._last_request_at = 0.0
+        self._last_manual_refresh_at = 0.0
+        self._refresh_cooldown_timer = QTimer(self)
+        self._refresh_cooldown_timer.setSingleShot(True)
+        self._refresh_cooldown_timer.timeout.connect(
+            self._finish_refresh_cooldown
+        )
         self._auto_refresh_timer = QTimer(self)
         self._auto_refresh_timer.setInterval(3 * 60 * 1000)
         self._auto_refresh_timer.timeout.connect(self._auto_refresh_news)
@@ -745,6 +765,7 @@ class NewsPage(QWidget):
     def shutdown(self):
         self._release_archive_pages()
         self._auto_refresh_timer.stop()
+        self._refresh_cooldown_timer.stop()
         self._stop_back_to_top_scroll()
         for detail in list(self._detail_pages.values()):
             try:
@@ -763,6 +784,37 @@ class NewsPage(QWidget):
     def _cache_path(self):
         return scl_dir() / 'cache' / 'mcnews_home.xaml'
 
+    def _refresh_cooldown_remaining(self):
+        if not self._last_manual_refresh_at:
+            return 0.0
+        return max(
+            0.0,
+            REFRESH_COOLDOWN_SECONDS
+            - (time.monotonic() - self._last_manual_refresh_at),
+        )
+
+    def _restore_refresh_button(self):
+        '''请求结束后按 5 秒冷却决定是否立即恢复刷新按钮。'''
+
+        self.refresh_btn.setText('刷新')
+        if self._reply is not None:
+            return
+        remaining = self._refresh_cooldown_remaining()
+        if remaining <= 0:
+            self.refresh_btn.setEnabled(True)
+            self._refresh_cooldown_timer.stop()
+            return
+        self.refresh_btn.setEnabled(False)
+        self._refresh_cooldown_timer.start(
+            max(1, int(remaining * 1000) + 50)
+        )
+
+    def _finish_refresh_cooldown(self):
+        if self._reply is not None:
+            return
+        self.refresh_btn.setText('刷新')
+        self.refresh_btn.setEnabled(True)
+
     def _auto_refresh_news(self):
         if self._homepage_mode == 'blank' or not self.isVisible():
             return
@@ -780,6 +832,18 @@ class NewsPage(QWidget):
                 except Exception:
                     pass
             return
+        if manual:
+            remaining = self._refresh_cooldown_remaining()
+            if remaining > 0:
+                try:
+                    show_toast(
+                        f'刷新太快，请 {math.ceil(remaining)} 秒后再试',
+                        'info', self, 2200,
+                    )
+                except Exception:
+                    pass
+                return
+            self._last_manual_refresh_at = time.monotonic()
         if (
             not force
             and self._cards
@@ -802,6 +866,11 @@ class NewsPage(QWidget):
                     logger.warning('解析缓存的新闻内容失败', exc_info=True)
         self._loaded = True
         self._refresh_manual = manual
+        self._force_image_refresh = manual
+        if manual:
+            # 手动刷新可能只需要更新同一 URL 下的图片；提升代际号可让
+            # 刷新前发出的旧图片回包失效，避免把旧图写进新缓存。
+            self._image_generation += 1
         self.refresh_btn.setEnabled(False)
         self.refresh_btn.setText('刷新中…')
         self._last_request_at = time.monotonic()
@@ -832,8 +901,7 @@ class NewsPage(QWidget):
             reply.deleteLater()
             return
         self._reply = None
-        self.refresh_btn.setEnabled(True)
-        self.refresh_btn.setText('刷新')
+        self._restore_refresh_button()
         error = ''
         text = ''
         if reply.error() != QNetworkReply.NoError:
@@ -866,9 +934,12 @@ class NewsPage(QWidget):
             if self._cards and signature == self._news_signature:
                 self._refresh_manual = False
                 if manual:
+                    # 新闻 XAML 没变不代表图片没变；手动刷新要重新拉取
+                    # 卡片图片，绕过此前缓存的旧图。
+                    self._refresh_card_images()
                     self._scroll_to_top()
                     try:
-                        show_toast('已是最新', 'info', self, 2400)
+                        show_toast('已刷新', 'info', self, 2400)
                     except Exception:
                         pass
                 return
@@ -896,6 +967,7 @@ class NewsPage(QWidget):
         self._last_error_reason = str(message or '未知错误')
         logger.warning('新闻页面加载失败: %s', self._last_error_reason)
         self._refresh_manual = False
+        self._force_image_refresh = False
         if not self._cards:
             self._show_error('加载失败，请点击重试')
         if self.isVisible():
@@ -932,6 +1004,8 @@ class NewsPage(QWidget):
         self.cards_layout.addStretch(1)
 
     def _render(self, items):
+        # 重建卡片时让旧卡片的图片请求回包失效，避免旧图覆盖新卡片。
+        self._image_generation += 1
         while self.cards_layout.count():
             item = self.cards_layout.takeAt(0)
             widget = item.widget()
@@ -953,6 +1027,10 @@ class NewsPage(QWidget):
             self.cards_layout.addWidget(HistoryCard(history, self))
         self.cards_layout.addStretch(1)
         self._cards = items
+
+    def _refresh_card_images(self):
+        for card in self.cards_container.findChildren(NewsCard):
+            card.refresh_image()
 
     def _prune_caches(self):
         '''限制新闻相关磁盘缓存，避免长期使用后无限增长。'''
@@ -986,13 +1064,13 @@ class NewsPage(QWidget):
             except Exception:
                 continue
 
-    def _image_cache_path(self, url):
+    def _image_cache_path(self, url, signature=None):
         key = hashlib.sha1(str(url).encode('utf-8')).hexdigest()
-        signature = self._news_signature or 'default'
+        signature = signature or self._news_signature or 'default'
         return scl_dir() / 'cache' / 'mcnews_images' / signature / key
 
-    def _cached_image(self, url):
-        path = self._image_cache_path(url)
+    def _cached_image(self, url, signature=None):
+        path = self._image_cache_path(url, signature)
         if not path.is_file():
             return None
         pixmap = QPixmap(str(path))
@@ -1106,32 +1184,66 @@ class NewsPage(QWidget):
                 pass
             page.deleteLater()
 
-    def request_image(self, label, urls):
+    def request_image(self, label, urls, force=False):
         urls = [u for u in urls or [] if u]
         if not urls:
             label.setText('无新闻图片')
             return
-        for url in urls:
-            cached = self._cached_image(url)
-            if cached is not None:
-                label.set_source(cached)
-                return
-        self._next_image(label, urls)
+        signature = self._news_signature or 'default'
+        generation = self._image_generation
+        force = bool(force or self._force_image_refresh)
+        if not force:
+            for url in urls:
+                cached = self._cached_image(url, signature)
+                if cached is not None:
+                    label.set_source(cached)
+                    return
+        self._next_image(
+            label, urls, signature=signature,
+            generation=generation, force=force,
+        )
 
-    def _next_image(self, label, urls):
+    def _next_image(
+        self, label, urls, *, signature='', generation=None, force=False,
+    ):
         if not urls:
             try:
+                if (
+                    isinstance(label, NewsImageLabel)
+                    and label.has_source()
+                ):
+                    # 强制刷新失败时保留旧图，不把正常画面替换成错误提示。
+                    return
                 label.setText('新闻图片加载失败')
             except RuntimeError:
                 pass
             return
+        signature = signature or self._news_signature or 'default'
+        if generation is None:
+            generation = self._image_generation
         url = urls.pop(0)
-        cached = self._cached_image(url)
-        if cached is not None:
-            label.set_source(cached)
-            return
+        if not force:
+            cached = self._cached_image(url, signature)
+            if cached is not None:
+                label.set_source(cached)
+                return
         request = QNetworkRequest(QUrl(url))
         request.setRawHeader(b'User-Agent', b'PMGL-Launcher/1.1')
+        if force:
+            # 手动刷新必须绕过 Qt/系统网络缓存，否则同一 URL 仍可能
+            # 返回刷新前的旧图。
+            request.setRawHeader(b'Cache-Control', b'no-cache')
+            request.setRawHeader(b'Pragma', b'no-cache')
+            try:
+                request.setAttribute(
+                    QNetworkRequest.CacheLoadControlAttribute,
+                    QNetworkRequest.AlwaysNetwork,
+                )
+                request.setAttribute(
+                    QNetworkRequest.CacheSaveControlAttribute, False
+                )
+            except Exception:
+                pass
         try:
             request.setTransferTimeout(8000)
         except Exception:
@@ -1142,11 +1254,22 @@ class NewsPage(QWidget):
                 reply.sslErrors.connect(lambda _errors, r=reply: r.ignoreSslErrors())
         except Exception:
             pass
-        self._image_pending[reply] = (label, urls, url)
+        self._image_pending[reply] = (
+            label, urls, url, signature, generation, force,
+        )
 
     def _on_image_finished(self, reply):
-        label, urls, url = self._image_pending.pop(reply, (None, [], ''))
+        (
+            label, urls, url, signature, generation, force,
+        ) = self._image_pending.pop(
+            reply, (None, [], '', '', -1, False)
+        )
         if label is None:
+            reply.deleteLater()
+            return
+        if generation != self._image_generation:
+            # 卡片已经重建或手动刷新已开始；旧回包不得写入当前签名
+            # 的缓存，否则会把上一张图“刷新”回来。
             reply.deleteLater()
             return
         data = b''
@@ -1164,10 +1287,12 @@ class NewsPage(QWidget):
         if not pixmap.isNull():
             try:
                 if data:
-                    cache = self._image_cache_path(url)
+                    cache = self._image_cache_path(url, signature)
                     cache.parent.mkdir(parents=True, exist_ok=True)
-                    if not cache.is_file():
-                        cache.write_bytes(data)
+                    if force or not cache.is_file():
+                        temp = cache.with_name(cache.name + '.tmp')
+                        temp.write_bytes(data)
+                        os.replace(temp, cache)
                 if isinstance(label, NewsImageLabel):
                     label.set_source(pixmap)
                 else:
@@ -1176,9 +1301,28 @@ class NewsPage(QWidget):
                     )
                     label.setText('')
                 return
+            except OSError:
+                # 缓存写失败不能阻止当前图片显示。
+                try:
+                    if isinstance(label, NewsImageLabel):
+                        label.set_source(pixmap)
+                    else:
+                        label.setPixmap(
+                            pixmap.scaled(
+                                680, 180, Qt.KeepAspectRatio,
+                                Qt.SmoothTransformation,
+                            )
+                        )
+                        label.setText('')
+                except RuntimeError:
+                    pass
+                return
             except RuntimeError:
                 return
         try:
-            self._next_image(label, urls)
+            self._next_image(
+                label, urls, signature=signature,
+                generation=generation, force=force,
+            )
         except RuntimeError:
             pass

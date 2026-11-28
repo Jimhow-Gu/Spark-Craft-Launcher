@@ -138,6 +138,9 @@ class NewsImageLabel(QWidget):
         self._sync_height()
         self.update()
 
+    def has_source(self):
+        return self._source is not None and not self._source.isNull()
+
     def setText(self, text):
         self._source = None
         self._reset_height()
