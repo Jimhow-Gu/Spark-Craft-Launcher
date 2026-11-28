@@ -2066,7 +2066,7 @@ class MainWindow(QMainWindow):
         self._quit_for_update(dialog.asset_path, version)
 
     def _on_update_downloaded(self, asset_path, version):
-        '''下载完成即自动安装，不再依赖用户点击重启按钮或弹窗保持打开。'''
+        '''下载线程已经拉起更新器；这里只更新界面，不能再次启动更新。'''
 
         asset_path = str(asset_path or '')
         if not asset_path:
@@ -2074,10 +2074,13 @@ class MainWindow(QMainWindow):
         try:
             from core.update import write_update_log
             write_update_log(
-                f'ui: download complete, auto install asset={asset_path} version={version}'
+                f'ui: download complete, external updater armed '
+                f'asset={asset_path} version={version}'
             )
         except Exception:
             pass
+        self._update_prepared = True
+        self._update_prepared_tag = str(version or '')
         dialog = self._update_dialog
         if dialog is not None:
             try:
@@ -2089,18 +2092,16 @@ class MainWindow(QMainWindow):
             show_toast('更新已下载，正在自动重启安装...', 'update', self, 4000)
         except Exception:
             pass
-        QTimer.singleShot(
-            800,
-            lambda path=asset_path, ver=str(version or ''): self._auto_install_update(path, ver),
-        )
 
     def _auto_install_update(self, asset_path, version):
+        '''兼容旧入口；下载线程已经启动更新器时直接退出，避免重复替换。'''
+
         if getattr(self, '_closing', False):
             return
         try:
             from core.update import write_update_log
             write_update_log(
-                f'ui: auto install starting asset={asset_path} version={version}'
+                f'ui: auto install requested asset={asset_path} version={version}'
             )
         except Exception:
             pass
@@ -2153,6 +2154,24 @@ class MainWindow(QMainWindow):
             pass
         if asset_path:
             try:
+                from core.update import update_install_pending, write_update_log
+                if update_install_pending(version):
+                    # 下载线程已经启动更新器。此时再复制 .exe.new 会因
+                    # helper 正在运行而 Permission denied，并在更新实际
+                    # 成功后又弹出“无法启动更新程序”。直接退出等 helper
+                    # 接管即可。
+                    write_update_log(
+                        f'ui: updater already armed version={version}; '
+                        f'skip duplicate install'
+                    )
+                    self._update_prepared = True
+                    self._update_prepared_tag = str(version)
+                    self._update_prepare_error = ''
+                    self._flush_exit_state()
+                    os._exit(0)
+            except Exception:
+                pass
+            try:
                 from core.update import apply_update_inplace, is_onedir_install
                 if not is_onedir_install() and apply_update_inplace(asset_path, version):
                     # 新进程已经创建；落盘后立即退出，避免旧进程继续占用
@@ -2163,8 +2182,18 @@ class MainWindow(QMainWindow):
                 self._update_prepare_error = str(exc)
                 self._update_prepared = False
                 try:
-                    from core.update import write_update_log
+                    from core.update import update_install_pending, write_update_log
                     write_update_log(f'ui: inplace failed, trying external updater: {exc}')
+                    if update_install_pending(version):
+                        write_update_log(
+                            'ui: updater already active after inplace lock; '
+                            'skip external fallback'
+                        )
+                        self._update_prepared = True
+                        self._update_prepared_tag = str(version)
+                        self._update_prepare_error = ''
+                        self._flush_exit_state()
+                        os._exit(0)
                 except Exception:
                     pass
             try:

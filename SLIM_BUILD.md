@@ -1,15 +1,17 @@
-# Spark Craft Launcher V1.11.4 DLL49 构建说明
+# Spark Craft Launcher V1.11.4 DLL50 构建说明
 
 ## 结论
 
-DLL49 已完成构建与冒烟测试。这一版修复版本详情加载器卡片只能点小箭头
-展开的问题：点击卡片标题、状态文字或空白区域都可以展开/收起，
-并保留 DLL48 的虚拟化版本列表与 DLL47 的版本源兜底。
+DLL50 已完成构建与冒烟测试。这一版修复背景视频反复黑帧和更新器重复启动：
+无法播放的背景视频会被持久跳过并自动切换，背景视频只播放 WMF 稳定支持的
+容器；下载完成后不再二次启动更新器，更新回执也会写入正确的启动器根目录。
 
 | 产物 | 大小 | SHA256 |
 |---|---:|---|
-| DLL49 正式 onefile | 30,026,855 字节 | `18b0146c6fe4fc2a77af8b0dc7601685da04368c3a12e0844746c6ef75576c0a` |
-| DLL49 正式 zip | 29,729,410 字节 | `f7fb6ccceb61d749c5c30fbbccfc389fe049f98c6e2f01a4f3e91f0fabc3f544` |
+| DLL50 正式 onefile | 30,030,873 字节 | `1055d6a6b5d93591e36352463c36752f017540baac1a97a72b35cf9f3f527671` |
+| DLL50 正式 zip | 29,733,396 字节 | `8c86c469eb456265e5beef484a7adb54c2e412e46646f01f927991903791213f` |
+| DLL49 onefile（历史基线） | 30,026,855 字节 | `18b0146c6fe4fc2a77af8b0dc7601685da04368c3a12e0844746c6ef75576c0a` |
+| DLL49 zip（历史基线） | 29,729,410 字节 | `f7fb6ccceb61d749c5c30fbbccfc389fe049f98c6e2f01a4f3e91f0fabc3f544` |
 | DLL48 onefile（历史基线） | 30,028,656 字节 | `8f586f430e343423349b581961116d971f6086a001f669bcd0527074bf13a091` |
 | DLL48 zip（历史基线） | 29,731,285 字节 | `5069560adcf8958ef63e3745162c5b6e5ee6f19241c72d64569a9b15c9ee43bd` |
 | DLL47 onefile（历史基线） | 30,018,886 字节 | `6bb6613b085a32ae7d1203bd04da673ed2ff2404c4f9ff1d871d714cd821e659` |
@@ -26,7 +28,8 @@ DLL49 已完成构建与冒烟测试。这一版修复版本详情加载器卡�
 | DLL40 onefile（历史基线） | 29,882,773 字节 | `89c75da5a249e5a34d31e18fb1f46630a8bd9a3097b67fff7fa13ed3188895e8` |
 | DLL39 onefile（历史基线） | 36,662,822 字节 | `289383100f2209b5d2105e1aa25d5f5e76c80ac5a0e24cf4bc2d66379f73455c` |
 
-- 构建号：`SCLREL1.11.4.R20261128.RP1.DLL49`
+- 构建号：`SCLREL1.11.4.R20261128.RP1.DLL50`
+- DLL50 起：无法播放的背景视频会持久记录并跳过，自动切换下一个背景；仅播放 `mp4/m4v/mov/wmv/avi`；修复下载完成后的重复更新器启动和回执写错目录导致的误报。
 - DLL49 起：版本详情加载器卡片整行可点击展开/收起；状态文字“可以添加”、已选版本、标题和空白区域均响应，失败/超时文字仍执行重试。
 - DLL48 起：下载页版本列表改为虚拟化平铺列表，只绘制可见行；两行展示版本号与日期/最新标签/愚人节文案；移除折叠卡和版本数量；新增在线文案 seed/cache/远端刷新。
 - DLL47 起：打包版版本列表在官方/Piston/BMCL 全部超时后回退 Modrinth 标签源，生成完整版本清单并写入缓存。
@@ -47,6 +50,15 @@ DLL49 已完成构建与冒烟测试。这一版修复版本详情加载器卡�
 - 构建入口：`python build_slim.py`（当前正式发布）；`python build_onedir.py` 仅保留内部/回滚构建
 - 安装包默认目录：`%LOCALAPPDATA%\Programs\SparkCraftLauncher`
 - 不使用 UPX，不删除静态图片解码插件。
+
+## DLL50 更新
+
+- 背景视频：新增 `SCL/cache/failed_background_videos.json`，黑帧、解码失败、3.5 秒无首帧和启动失败都会记录；下次启动直接跳过，不再反复重试同一文件。
+- 背景格式：只识别 Windows Media Foundation 稳定支持的 `.mp4`、`.m4v`、`.mov`、`.wmv`、`.avi`；`.webm`/`.mkv` 不再进入播放列表。
+- 失败恢复：跳过失败视频后自动切换下一个可用背景；同名文件被替换后自动解除记录并重新尝试。
+- 更新：下载线程已启动更新器时，界面不再二次启动；检测到同版本 pending 时直接退出等待更新器接管，避免 `.exe.new` 被占用后误弹“无法启动更新程序”。
+- 更新回执：helper 以目标 exe 的同级目录作为启动器根目录，不再把 `updated_update.json`/日志写进 `SCL/update/SCL`；成功回执会清理旧的 pending/failed。
+- 启动兜底：清理更新器异常退出留下的陈旧 pending，当前版本已等于目标版本时补写成功回执。
 
 ## DLL49 更新
 
@@ -311,7 +323,8 @@ DLL39 onefile 为 36,662,822 字节；DLL44 为 29,926,348 字节，减少
 媒体播放改走 Windows Media Foundation：
 
 - MP4/H.264/AAC、MP3、WAV、M4A 等 Windows 自带格式正常播放；
-- WebM/OGG/Opus 等格式在未安装系统解码器时可能无法播放，播放器会报错但不会崩溃；
+- 背景视频只枚举 `.mp4`、`.m4v`、`.mov`、`.wmv`、`.avi`；WebM/MKV 不再作为背景视频尝试；
+- WebM/OGG/Opus 等格式在未安装系统解码器时可能无法播放，音乐播放器会报错但不会崩溃；
 - Windows N/KN 需要安装 Media Feature Pack；未安装时背景视频/音乐初始化失败会被捕获，
   不影响启动器其他功能；
 - 必须在任何 `PySide6.QtMultimedia` 导入前设置 `QT_MEDIA_BACKEND=windows`。

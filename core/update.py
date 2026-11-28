@@ -17,7 +17,7 @@ from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 
 from core.net import DownloadCancelled, DownloadError, HttpClient, hash_file
-from core.paths import safe_rmtree, scl_dir
+from core.paths import safe_rmtree, scl_dir, set_launcher_base_dir
 from core.release_info import (
     CURRENT_VERSION, VERSION_DISPLAY, EXECUTABLE_BUILD,
 )
@@ -992,9 +992,17 @@ def _pending_update_marker(version):
 def _updated_update_marker(version):
     '''记录“复制并校验成功”，只由真实成功路径写入。'''
 
-    return _write_update_marker(
+    marker = _write_update_marker(
         _update_marker_path(UPDATED_MARKER), version, 'updated'
     )
+    # 成功回执出现后，旧的“正在安装”和失败提示都不能再保留，否则下次
+    # 启动会把已经成功的更新误报为失败。
+    for name in (INSTALLING_MARKER, FAILED_MARKER):
+        try:
+            _update_marker_path(name).unlink(missing_ok=True)
+        except OSError:
+            pass
+    return marker
 
 
 def _failed_update_marker(version, reason=''):
@@ -1028,6 +1036,78 @@ def pending_update_exists():
     '''是否已有成功的更新回执；仅用于更新后的缓存刷新。'''
 
     return _updated_update_path().is_file()
+
+
+def _read_update_marker(path):
+    try:
+        data = json.loads(Path(path).read_text(encoding='utf-8-sig'))
+    except (OSError, ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _version_key(value):
+    return str(value or '').strip().lstrip('vV')
+
+
+def update_install_pending(version='', max_age=150):
+    '''是否已有正在运行的更新器；用于阻止同一次更新被重复启动。'''
+
+    marker = _pending_update_path()
+    if not marker.is_file():
+        return False
+    data = _read_update_marker(marker)
+    if str(data.get('state') or '') != 'installing':
+        return False
+    expected = _version_key(version)
+    if expected and _version_key(data.get('version')) != expected:
+        return False
+    try:
+        age = time.time() - marker.stat().st_mtime
+    except OSError:
+        return False
+    return 0 <= age <= max(1, int(max_age))
+
+
+def reconcile_update_markers_on_startup():
+    '''清理更新器异常退出留下的 pending，并补齐成功回执。
+
+    更新 helper 从 SCL/update 下的临时 exe 启动时，旧版本可能把标记写进
+    SCL/update/SCL；新版 helper 已修正根目录。这里再按“当前版本已经等于
+    目标版本”兜底确认，避免每次启动都留下 installing 状态。
+    '''
+
+    if not getattr(sys, 'frozen', False):
+        return ''
+    marker = _pending_update_path()
+    if not marker.is_file():
+        return ''
+    failed = _update_marker_path(FAILED_MARKER)
+    data = _read_update_marker(marker)
+    version = str(data.get('version') or '')
+    try:
+        age = time.time() - marker.stat().st_mtime
+    except OSError:
+        return ''
+    # 更新器最长会等待旧进程 60 秒再替换；2 分钟内不抢它的状态。
+    if age < 120:
+        return ''
+    if failed.is_file():
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return ''
+    if version and _version_key(version) == _version_key(CURRENT_VERSION):
+        _updated_update_marker(version)
+        return version
+    # 目标版本与当前版本不一致时无法确认是成功还是回滚；只清掉陈旧
+    # pending，不再生成新的失败提示，避免每次启动都误报更新失败。
+    try:
+        marker.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return ''
 
 
 def clear_launcher_caches():
@@ -1474,6 +1554,10 @@ def run_update_helper(argv):
     except Exception as exc:
         write_update_log(f'update helper: invalid args: {exc}')
         return 1
+    # helper 通常是 SCL/update/Spark Craft Launcher.exe.new，若按
+    # sys.executable 推导会把回执/日志写进 SCL/update/SCL。目标 exe 的
+    # 同级目录才是真正的启动器根目录。
+    set_launcher_base_dir(target.parent)
     source = Path(sys.executable).resolve()
     write_update_log(
         f'update helper: source={source} target={target} version={version} '
@@ -1793,6 +1877,7 @@ __all__ = [
     'apply_update_inplace', 'cleanup_old_executable', 'clear_downloaded_update',
     'consume_updated_marker', 'downloaded_update_available',
     'pending_update_exists', 'clear_launcher_caches',
+    'reconcile_update_markers_on_startup', 'update_install_pending',
     'fetch_latest_release', 'is_newer', 'is_onedir_install', 'is_unpublished_build',
     'prepare_update', 'update_kind', 'write_downloaded_update', 'write_update_log',
     'consume_failed_update_notice', 'consume_manual_update_notice',

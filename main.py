@@ -378,6 +378,12 @@ def main():
     # 兜底：如果上次下载完更新但重启按钮没有生效，下次启动直接安装。
     # 先看轻量文件标记，正常启动不导入 requests/urllib3 更新栈。
     update_dir = scl_dir() / 'update'
+    if (update_dir / 'pending_update.json').is_file():
+        try:
+            from core.update import reconcile_update_markers_on_startup
+            reconcile_update_markers_on_startup()
+        except Exception:
+            pass
     if (update_dir / 'downloaded_update.json').is_file():
         try:
             from core.update import (

@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import core.update as update
+from core.paths import set_launcher_base_dir
 
 
 class UpdateMarkerTests(unittest.TestCase):
@@ -57,6 +60,42 @@ class UpdateMarkerTests(unittest.TestCase):
         self.assertIn('自动更新失败', notice)
         self.assertIn('copy failed', notice)
         self.assertEqual(update.consume_failed_update_notice(), '')
+
+    def test_success_clears_failed_and_pending_markers(self):
+        update._pending_update_marker('1.11.4')
+        update._failed_update_marker('1.11.4', 'copy failed')
+        update._updated_update_marker('1.11.4')
+        self.assertTrue(self._path('updated_update.json').is_file())
+        self.assertFalse(self._path('pending_update.json').exists())
+        self.assertFalse(self._path('failed_update.json').exists())
+
+    def test_pending_detection_matches_version(self):
+        update._pending_update_marker('1.11.4')
+        self.assertTrue(update.update_install_pending('1.11.4'))
+        self.assertTrue(update.update_install_pending('v1.11.4'))
+        self.assertFalse(update.update_install_pending('1.11.5'))
+        self._path('pending_update.json').unlink()
+        self.assertFalse(update.update_install_pending('1.11.4'))
+
+    def test_reconcile_old_pending_for_current_build(self):
+        update._pending_update_marker(update.CURRENT_VERSION)
+        marker = self._path('pending_update.json')
+        old = time.time() - 300
+        os.utime(marker, (old, old))
+        with patch.object(update.sys, 'frozen', True, create=True):
+            version = update.reconcile_update_markers_on_startup()
+        self.assertEqual(version, update.CURRENT_VERSION)
+        self.assertTrue(self._path('updated_update.json').is_file())
+        self.assertFalse(marker.exists())
+
+    def test_reconcile_leaves_recent_pending_alone(self):
+        update._pending_update_marker(update.CURRENT_VERSION)
+        marker = self._path('pending_update.json')
+        with patch.object(update.sys, 'frozen', True, create=True):
+            version = update.reconcile_update_markers_on_startup()
+        self.assertEqual(version, '')
+        self.assertTrue(marker.is_file())
+        self.assertFalse(self._path('updated_update.json').exists())
 
     def test_new_exe_helper_replaces_target(self):
         source = self.root / 'downloaded-new.exe'
@@ -126,6 +165,38 @@ class UpdateMarkerTests(unittest.TestCase):
         args = popen.call_args.args[0]
         self.assertIn(str(update._updated_update_path()), args)
         self.assertIn(str(update._update_marker_path('failed_update.json')), args)
+
+
+class UpdateHelperRootTests(unittest.TestCase):
+    def test_helper_writes_receipts_to_target_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            install = Path(tmp)
+            update_dir = install / 'SCL' / 'update'
+            update_dir.mkdir(parents=True)
+            source = update_dir / 'Spark Craft Launcher.exe.new'
+            source.write_bytes(b'MZ' + b'new-build')
+            target = install / 'Spark Craft Launcher.exe'
+            target.write_bytes(b'MZ' + b'old-build')
+            try:
+                set_launcher_base_dir(None)
+                with patch.object(update.sys, 'frozen', True, create=True), \
+                     patch.object(update.sys, 'executable', str(source)):
+                    code = update.run_update_helper([
+                        'launcher', '--apply-update',
+                        str(target), '1.11.4', '0', '0',
+                    ])
+            finally:
+                set_launcher_base_dir(None)
+            self.assertEqual(code, 0)
+            self.assertEqual(target.read_bytes(), source.read_bytes())
+            receipt = update_dir / 'updated_update.json'
+            self.assertTrue(receipt.is_file())
+            self.assertEqual(
+                json.loads(receipt.read_text(encoding='utf-8'))['version'],
+                '1.11.4',
+            )
+            self.assertFalse((update_dir / 'SCL').exists())
+            self.assertFalse((update_dir / 'pending_update.json').exists())
 
 
 if __name__ == '__main__':

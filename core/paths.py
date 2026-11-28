@@ -9,6 +9,16 @@ import time
 from pathlib import Path
 SCL_FOLDER_NAME = 'SCL'
 RUNTIME_FOLDERS = ('log', 'background', 'music', 'temp_install', 'skins', 'icon_cache')
+_LAUNCHER_BASE_OVERRIDE = None
+
+
+def set_launcher_base_dir(path):
+    '''更新 helper 从 SCL/update 运行时，显式指定真正的启动器根目录。'''
+
+    global _LAUNCHER_BASE_OVERRIDE
+    _LAUNCHER_BASE_OVERRIDE = (
+        Path(path).resolve() if path is not None else None
+    )
 
 
 def _is_reparse_point(path):
@@ -127,6 +137,8 @@ def safe_rmtree(path, ignore_errors=True):
 def launcher_base_dir():
     '''启动器所在目录：打包后是 exe 同级，源码运行是项目根目录。'''
 
+    if _LAUNCHER_BASE_OVERRIDE is not None:
+        return _LAUNCHER_BASE_OVERRIDE
     if getattr(sys, 'frozen', False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent.parent

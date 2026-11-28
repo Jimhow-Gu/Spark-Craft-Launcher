@@ -8,7 +8,10 @@ from pathlib import Path
 from PySide6.QtCore import (QRect, QRectF, Qt, QUrl, QTimer, Signal)
 from PySide6.QtGui import (QBrush, QColor, QImage, QLinearGradient, QPainter, QPainterPath, QPixmap)
 from PySide6.QtWidgets import (QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene, QWidget)
-from core.background import (IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, current_image, get_settings)
+from core.background import (
+    IMAGE_EXTENSIONS, VIDEO_EXTENSIONS, current_image, get_settings,
+    is_background_video_failed, mark_background_video_failed, next_image,
+)
 from ui.design import WINDOW_DARK, WINDOW_LIGHT
 
 logger = logging.getLogger('Background')
@@ -38,6 +41,7 @@ class BackgroundWidget(QWidget):
         self._video_frame_ready = False
         self._video_failed_path = ''
         self._video_failure_logged = False
+        self._video_advance_scheduled = False
         self._video_state_last = None
         self._video_fallback_timer = QTimer(self)
         self._video_fallback_timer.setSingleShot(True)
@@ -111,11 +115,14 @@ class BackgroundWidget(QWidget):
         if is_video:
             path_text = str(path)
             if path_text == self._video_failed_path:
-                # 本轮已经失败过，永久保留 fallback，不再重试媒体后端。
-                if self._source is None:
-                    self._load_video_fallback(path_text)
-                self.update()
-                return
+                # 只有文件本身没被替换时才继续跳过；用户换了同路径的新
+                # 文件后自动解除失败记录并重试。
+                if is_background_video_failed(path_text):
+                    if self._source is None:
+                        self._load_video_fallback(path_text)
+                    self.update()
+                    return
+                self._video_failed_path = ''
             if path_text != self._video_path or self._source is None:
                 self._load_video_fallback(path_text)
             if force or path_text != self._video_path or self._video_player is None:
@@ -323,23 +330,68 @@ class BackgroundWidget(QWidget):
             logger.info('背景视频启动: %s (%s)', path, self._media_backend_details())
             player.play()
         except Exception as exc:
-            self._video_failed_path = str(path)
-            logger.warning('背景视频启动失败，保留静态 fallback: %s (%s)', path, exc)
-            self._stop_video()
+            self._record_video_failure(
+                str(path), '背景视频启动失败', str(exc)
+            )
+
+    def _record_video_failure(self, path, label, details=''):
+        '''记录无法播放的视频，并自动切换到下一个可用背景。'''
+
+        path = str(path or '')
+        if not path or path == self._video_failed_path:
+            return
+        self._video_failed_path = path
+        details = details or self._video_failure_details()
+        try:
+            mark_background_video_failed(path, label)
+        except Exception:
+            pass
+        if not self._video_failure_logged:
+            self._video_failure_logged = True
+            logger.warning(
+                '%s，已记录并跳过该文件: %s (%s)',
+                label, path, details,
+            )
+        self._stop_video()
+        self.update()
+        try:
+            exists = Path(path).is_file()
+        except OSError:
+            exists = False
+        if exists:
+            self._schedule_next_background()
+
+    def _schedule_next_background(self):
+        if self._video_advance_scheduled:
+            return
+        self._video_advance_scheduled = True
+        QTimer.singleShot(80, self._advance_after_video_failure)
+
+    def _advance_after_video_failure(self):
+        self._video_advance_scheduled = False
+        try:
+            candidate = next_image()
+        except Exception:
+            candidate = None
+        if not candidate:
+            return
+        text = str(candidate)
+        if text == self._video_failed_path:
+            return
+        try:
+            if not Path(candidate).is_file():
+                return
+        except OSError:
+            return
+        if is_background_video_failed(candidate):
+            return
+        self.reload(force=True)
 
     def _on_video_error(self, *_args):
         path = self._video_path
         if not path or path == self._video_failed_path:
             return
-        self._video_failed_path = path
-        if not self._video_failure_logged:
-            self._video_failure_logged = True
-            logger.warning(
-                '背景视频解码失败，保留静态 fallback: %s (%s)',
-                path, self._video_failure_details(),
-            )
-        self._stop_video()
-        self.update()
+        self._record_video_failure(path, '背景视频解码失败')
 
     def _on_video_fallback_timeout(self):
         if self._video_frame_ready or self._video_player is None:
@@ -347,15 +399,7 @@ class BackgroundWidget(QWidget):
         path = self._video_path
         if not path:
             return
-        self._video_failed_path = path
-        if not self._video_failure_logged:
-            self._video_failure_logged = True
-            logger.warning(
-                '背景视频 3.5 秒无首帧，保留静态 fallback: %s (%s)',
-                path, self._video_failure_details(),
-            )
-        self._stop_video()
-        self.update()
+        self._record_video_failure(path, '背景视频 3.5 秒无首帧')
 
     @staticmethod
     def _is_black_image(image):
@@ -380,15 +424,7 @@ class BackgroundWidget(QWidget):
         path = self._video_path
         if not path or path == self._video_failed_path:
             return
-        self._video_failed_path = path
-        if not self._video_failure_logged:
-            self._video_failure_logged = True
-            logger.warning(
-                '背景视频持续黑帧（1.8 秒），保留静态 fallback: %s (%s)',
-                path, self._video_failure_details(),
-            )
-        self._stop_video()
-        self.update()
+        self._record_video_failure(path, '背景视频持续黑帧（1.8 秒）')
 
     def _on_video_media_status(self, status):
         try:
