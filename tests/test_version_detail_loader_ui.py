@@ -59,6 +59,24 @@ class VersionDetailLoaderUiTests(unittest.TestCase):
         page.close()
         page.deleteLater()
 
+    def test_loader_version_rows_use_readable_font(self):
+        with patch.object(detail, 'LoadVersionsWorker', _Worker):
+            page = VersionDetailPage('1.20.1')
+        page._loader_versions = {
+            'forge': ['66.1.9', '66.1.8', '66.1.5'],
+            'neoforge': [], 'fabric': [],
+            'fabric_api': [], 'optifine': [], 'optifabric': [],
+        }
+        page._loaded_loader_ids = set(page._loader_versions)
+        page._update_loader_ui()
+        body = page._loader_version_lists['forge']
+        self.assertEqual(body.count(), 3)
+        self.assertEqual(body.item(0).font().pointSize(), 12)
+        self.assertEqual(body.iconSize().width(), 18)
+        self.assertEqual(body.iconSize().height(), 18)
+        page.close()
+        page.deleteLater()
+
     def test_timed_out_loader_row_shows_retry_text(self):
         with patch.object(detail, 'LoadVersionsWorker', _Worker):
             page = VersionDetailPage('1.20.1')

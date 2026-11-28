@@ -823,7 +823,7 @@ class VersionDetailPage(QWidget):
         version_list = AnimatedListView()
         version_list.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         version_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        version_list.setIconSize(QSize(16, 16))
+        version_list.setIconSize(QSize(18, 18))
         version_list.setFixedHeight(150)
         version_list.hide()
         version_list.itemClicked.connect(
@@ -854,6 +854,8 @@ class VersionDetailPage(QWidget):
         body.clear()
         icon_path = self._loader_icon_path(loader_id)
         icon = QIcon(str(icon_path)) if icon_path.is_file() else QIcon()
+        item_font = ui_font(11)
+        item_font.setPointSize(12)
         if loader_id == 'optifabric':
             self._optifabric_files = {}
         for version in versions or []:
@@ -865,10 +867,11 @@ class VersionDetailPage(QWidget):
                 label = self._optifine_display.get(version, version) if loader_id == 'optifine' else str(version)
                 value = version
             item = QListWidgetItem(icon, label)
+            item.setFont(item_font)
             item.setData(Qt.UserRole, value)
             body.addItem(item)
         if versions:
-            target = min(190, max(52, 30 * len(versions) + 8))
+            target = min(190, max(52, 32 * len(versions) + 8))
             body._target_height = target
             if self._loader_animations.get(loader_id) is None:
                 if self._loader_expanded.get(loader_id):
