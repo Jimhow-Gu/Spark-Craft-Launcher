@@ -1030,6 +1030,10 @@ class VersionDetailPage(QWidget):
         ):
             label.setText('正在加载...')
             self._retry_loader_versions()
+            return
+        # “可以添加”、已选版本等状态文字占据了卡片大部分宽度；
+        # 点击它们也应该和点击空白处/箭头一样展开或收起。
+        self._on_loader_card_clicked(loader_id)
 
     def _retry_loader_versions(self):
         old = self._load_worker
